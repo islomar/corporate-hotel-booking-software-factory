@@ -1,0 +1,11 @@
+**/node_modules
+**/.venv
+**/dist
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/mutants
+.git
+e2e
+docs
+factory
