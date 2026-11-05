@@ -5,7 +5,7 @@ description = "Corporate hotel booking backend (FastAPI)"
 requires-python = ">=3.15"
 dependencies = [
     "fastapi>=0.162",
-    "uvicorn[standard]>=0.40",
+    "uvicorn[standard]>=0.54.0",
 ]
 
 [build-system]
