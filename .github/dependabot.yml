@@ -3,15 +3,36 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly }
+    groups:
+      actions: { patterns: ["*"] }
   - package-ecosystem: uv
     directory: /backend
     schedule: { interval: weekly }
+    groups:
+      backend: { patterns: ["*"] }
   - package-ecosystem: npm
     directory: /frontend
     schedule: { interval: weekly }
+    groups:
+      frontend: { patterns: ["*"] }
+    ignore:
+      # Node types follow the Node major in .nvmrc (24, LTS).
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: npm
     directory: /e2e
     schedule: { interval: weekly }
+    groups:
+      e2e: { patterns: ["*"] }
+    ignore:
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: docker
     directory: /
     schedule: { interval: weekly }
+    ignore:
+      # Stay on Node LTS majors; Python follows ADR-af5b.
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
+      - dependency-name: python
+        update-types: ["version-update:semver-minor"]
