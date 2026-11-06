@@ -147,8 +147,11 @@ class SupplyChainFileTest(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue(is_supply_chain_file(path))
 
-    def test_image_files_match_in_any_case(self):
+    def test_image_and_compose_files_match_in_any_case(self):
         for path in [
+            "app.Containerfile",
+            "Compose.YAML",
+            "backend/Docker-Compose.yml",
             "DOCKERFILE",
             "backend/dockerfile",
             "app.Dockerfile",

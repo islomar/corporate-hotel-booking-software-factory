@@ -69,23 +69,25 @@ SUPPLY_CHAIN_NAMES = (
     ".npmrc",
     ".yarnrc",
     ".yarnrc.yml",
-    # Compose files and runtime pins.
-    "compose.yaml",
-    "compose.yml",
-    "docker-compose.yaml",
-    "docker-compose.yml",
+    # Runtime pins.
     ".nvmrc",
     ".node-version",
     ".python-version",
 )
 
-# Image build files, matched in any case: Docker and Podman accept any name with -f,
-# and macOS and Windows file systems ignore case.
-IMAGE_NAMES = (
+# Image build and compose files, matched in any case: Docker and Podman accept any name
+# with -f, and macOS and Windows file systems ignore case. `containerfile*` is wider than
+# the Dockerfile patterns on purpose: Podman variants have no fixed suffix convention.
+ANY_CASE_NAMES = (
     "dockerfile",
     "dockerfile.*",
     "*.dockerfile",
     "containerfile*",
+    "*.containerfile",
+    "compose.yaml",
+    "compose.yml",
+    "docker-compose.yaml",
+    "docker-compose.yml",
 )
 
 
@@ -106,7 +108,7 @@ class SettingsError(Exception):
 def is_supply_chain_file(path: str) -> bool:
     name = PurePosixPath(path).name
     return any(fnmatch.fnmatchcase(name, pattern) for pattern in SUPPLY_CHAIN_NAMES) or any(
-        fnmatch.fnmatchcase(name.lower(), pattern) for pattern in IMAGE_NAMES
+        fnmatch.fnmatchcase(name.lower(), pattern) for pattern in ANY_CASE_NAMES
     )
 
 

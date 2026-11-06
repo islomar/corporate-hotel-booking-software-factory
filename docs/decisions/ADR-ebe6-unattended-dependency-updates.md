@@ -113,8 +113,9 @@ Every Dependabot PR therefore waited for the owner, auto-merge or not.
   Without `-z`, git C-quotes paths with non-ASCII characters, and a quoted `"dép/package.json"` would not match `package.json`.
 - The file list in the script is wider than the old CODEOWNERS list.
   It adds resolver settings (`uv.toml`, `pip.conf`, `pnpm-workspace.yaml`, `.pnpmfile.cjs`, `.yarnrc*`, `bunfig.toml`), other lockfiles and manifests, compose and Dockerfile variants, `.node-version`.
-- Image build files match in any case: `Dockerfile`, `Dockerfile.*`, `*.Dockerfile`, `Containerfile*`.
-  Docker and Podman build any file named with `-f`, and macOS and Windows file systems ignore case.
+- Image build and compose files match in any case: `Dockerfile`, `Dockerfile.*`, `*.Dockerfile`, `Containerfile*`, `*.Containerfile`, and `compose` and `docker-compose` with `.yaml` or `.yml`.
+  Docker and Podman accept any file name with `-f`, and macOS and Windows file systems ignore case.
+  Other names match in exact case.
 - The check passes when no supply-chain file changed, or the owner's latest deciding review approves the head commit, or the PR is Dependabot's:
   - the PR author is `dependabot[bot]`;
   - every commit has author `dependabot[bot]`, committer `web-flow` and a signature GitHub verified.
