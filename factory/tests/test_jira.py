@@ -297,6 +297,16 @@ class MinimumSignalTest(unittest.TestCase):
         )
         self.assertEqual(fake.searches()[-1], "project = CHB AND status in (3) AND key != CHB-12 ORDER BY key ASC")
 
+    def test_a_failed_count_after_the_move_is_a_notice_not_a_failure(self) -> None:
+        fake = transition_fake("In Progress")
+        fake.routes[("POST", SEARCH)] = lambda body: 500 if "status in (3)" in body["jql"] else {"issues": []}
+        code, out, _ = _run(["transition", "CHB-12", "In Review"], fake)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(out.splitlines()[0], "CHB-12 -> In Review")
+        self.assertIn("could not check the In Progress minimum", out)
+        self.assertEqual(len(fake.writes()), 1)
+
     def test_no_signal_while_in_progress_holds_its_minimum(self) -> None:
         fake = transition_fake("In Progress", {"In Progress": ["CHB-7"]})
         code, out, _ = _run(["transition", "CHB-12", "In Review"], fake)

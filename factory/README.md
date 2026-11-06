@@ -84,6 +84,7 @@ The limits come from `GET /rest/agile/1.0/board/2/configuration` on every call, 
 The count is a JQL search on the column's status ids in project CHB, without the moved ticket.
 Moves within a column, out of a column, or into a column without a max are not limited. A failed board read exits 1 and does not move the ticket.
 After a move out of In Progress that leaves it below its board min, `transition` prints `In Progress is below its minimum (0/1): idle, ask the owner for the next ticket` and exits 0.
+If that count fails, it prints a notice instead and still exits 0: the ticket has moved.
 Two agents that move tickets at the same moment can both pass the check. The owner overrides a limit in the Jira UI, with a comment.
 
 ### Hook against raw Jira writes
@@ -91,7 +92,7 @@ Two agents that move tickets at the same moment can both pass the check. The own
 `.claude/settings.json` runs `factory/hooks/deny_raw_jira_writes.py` before every Bash command of a Claude Code session started in this repository.
 It exits 2, which denies the command, for:
 
-- an `acli jira` command that does not only read. Reads are view, search, list, get and `auth status`. The hook denies any other command, known or not;
+- an `acli jira` command that does not only read. Reads are view, search, list, get and `auth status`. The hook denies any other command, known or not, and `--help` on a write subcommand;
 - `curl`, `wget` or Python calls to `*.atlassian.net` or a `/rest/api` or `/rest/agile` path that send data or use a method other than GET or HEAD.
 
 The hook is a guardrail, not a boundary: it reads the command text only. A script file that calls the API, or a URL hidden in a variable, passes.

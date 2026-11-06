@@ -488,13 +488,17 @@ def before_transition(jira: Jira, key: str, status: str, *, status_id: str) -> M
 def after_transition(jira: Jira, key: str, move: Move) -> list[str]:
     """After a move out of a column with a board minimum, say when that column is below it.
 
-    The minimum is a signal, never a block. The moved key is left out of the count because
-    Jira search can still list it in its old status for a moment.
+    The minimum is a signal, never a block: a failed count becomes a notice, not an error.
+    The moved key is left out of the count because Jira search can still list it in its old
+    status for a moment.
     """
     source = move.source
     if source is None or source == move.target or source.min is None:
         return []
-    count = len(jira.keys_in(source, excluding=key))
+    try:
+        count = len(jira.keys_in(source, excluding=key))
+    except JiraError as error:  # the move is done: report, do not fail it
+        return [f"could not check the {source.name} minimum: {error}"]
     if count >= source.min:
         return []
     notice = f"{source.name} is below its minimum ({count}/{source.min})"

@@ -6,7 +6,8 @@ required sections, CHB keys only). Agents write to Jira only with factory/bin/ji
 
 Denied:
 - `acli jira ...` unless the subcommand only reads: view, search, list*, get*, `auth status`,
-  or `list` under a workitem group (comment, attachment, link, watcher). Unknown subcommands are denied.
+  or `list` under a workitem group (comment, attachment, link, watcher). Unknown subcommands are denied,
+  and so is `--help` on a write subcommand: a flag value can look like `-h`.
 - curl, wget or Python calls to *.atlassian.net or a /rest/api or /rest/agile path that send
   data or use a method other than GET or HEAD.
 
@@ -49,14 +50,12 @@ def acli_write(command: str) -> str | None:
     """The first `acli jira` call in the command that is not a read, or None."""
     for match in ACLI.finditer(command):
         rest = SEPARATOR.split(command[match.end() :], maxsplit=1)[0]
-        words = re.findall(r"[^\s'\"]+", rest)
-        if "--help" in words or "-h" in words:
+        positional = [w for w in re.findall(r"[^\s'\"]+", rest) if not w.startswith("-")]
+        if "jira" not in positional:
             continue
-        positional = [w for w in words if not w.startswith("-")]
-        if not positional or positional[0] != "jira":
-            continue
-        if not _acli_read(positional[1:]):
-            return "acli " + " ".join(positional[:4])
+        args = positional[positional.index("jira") + 1 :]
+        if not _acli_read(args):
+            return "acli jira " + " ".join(args[:3])
     return None
 
 
