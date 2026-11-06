@@ -412,6 +412,7 @@ class DependabotUpdateTypeTest(unittest.TestCase):
         self.assertTrue(decide(evidence(commits=[actions], pr_head_ref=ref)).ok)
 
     def test_no_commits_is_a_risk_not_a_crash(self):
+        # Defensive: decide() stops at _dependabot_problems before this when commits is empty.
         self.assertEqual(pr_update_risks(evidence(commits=[])), ["no commits"])
 
 
@@ -513,17 +514,12 @@ class GitRepoTest(unittest.TestCase):
         self.assertEqual(sorted(files), ["dép/package.json", 'we"ird/Dockerfile'])
         self.assertTrue(all(is_supply_chain_file(f) for f in files))
 
-    def test_gather_reads_git_and_the_api(self):
-        head = self.commit_head(
-            {
-                "dép/package.json": "{}",
-                "backend/pyproject.toml": '[tool.uv]\nexclude-newer = "1 day"\n',
-            }
-        )
+    def gather_dependabot_pr(self, head, ref="dependabot/uv/backend/fastapi-0.121.0"):
+        """gather() for a Dependabot PR with one safe commit at head."""
         responses = {
             "/repos/o/r/pulls/7": {
                 "user": {"login": "dependabot[bot]"},
-                "head": {"sha": head, "ref": "dependabot/uv/backend/fastapi-0.121.0"},
+                "head": {"sha": head, "ref": ref},
                 "commits": 1,
             },
             "/repos/o/r/pulls/7/commits?per_page=100": [dependabot_commit(head)],
@@ -537,7 +533,16 @@ class GitRepoTest(unittest.TestCase):
                 check_supply_chain, "github_get", lambda path, token: responses[path]
             ),
         ):
-            found = gather(args, token="t")  # noqa: S106
+            return gather(args, token="t")  # noqa: S106
+
+    def test_gather_reads_git_and_the_api(self):
+        head = self.commit_head(
+            {
+                "dép/package.json": "{}",
+                "backend/pyproject.toml": '[tool.uv]\nexclude-newer = "1 day"\n',
+            }
+        )
+        found = self.gather_dependabot_pr(head)
         self.assertEqual(
             sorted(found.changed_files), ["backend/pyproject.toml", "dép/package.json"]
         )
@@ -547,6 +552,17 @@ class GitRepoTest(unittest.TestCase):
         verdict = decide(found)
         self.assertFalse(verdict.ok)
         self.assertIn("Release-age settings changed", verdict.message)
+
+    def test_a_dependabot_pr_that_touches_pnpm_yarn_or_bun_settings_needs_the_owner(self):
+        for path in ["pnpm-workspace.yaml", "e2e/.yarnrc.yml", "bunfig.toml"]:
+            with self.subTest(path=path):
+                git(self.repo, "checkout", "-q", "-B", "pr", self.base)
+                head = self.commit_head({path: f"# {path}\n"})
+                found = self.gather_dependabot_pr(head, "dependabot/npm_and_yarn/vite-8.4.0")
+                self.assertEqual(found.release_age_files, [path])
+                verdict = decide(found)
+                self.assertFalse(verdict.ok)
+                self.assertIn(f"Release-age settings changed in {path}", verdict.message)
 
 
 class FakeResponse(io.BytesIO):
