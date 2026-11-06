@@ -12,6 +12,13 @@ dependencies = [
 requires = ["uv_build>=0.13.7,<0.14.0"]
 build-backend = "uv_build"
 
+[tool.uv]
+# Resolve only files uploaded at least 7 days ago. uv.lock records the span, so
+# `uv sync --locked` stays valid as days pass. `uv sync` does not re-check upload times:
+# scripts/check-release-age.py does that in CI. To let a fresh security fix in, add
+# `exclude-newer-package = { <name> = false }` with a comment that says when to remove it.
+exclude-newer = "7 days"
+
 [tool.ruff]
 line-length = 100
 target-version = "py315"
@@ -36,5 +43,5 @@ dev = [
     "mutmut>=3.8.1",
     "pyright>=1.1.414",
     "pytest>=9.2.0",
-    "ruff>=0.17.4",
+    "ruff>=0.17.3",
 ]

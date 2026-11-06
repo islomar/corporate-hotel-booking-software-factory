@@ -1,6 +1,6 @@
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
-**Table of Contents**
+## Contents
 
 - [Corporate Hotel Booking: software factory experiment](#corporate-hotel-booking-software-factory-experiment)
   - [Quick start](#quick-start)
@@ -64,6 +64,7 @@ Locally the same paths work on <http://localhost:8000> (`make dev`) and <http://
 | `frontend/` | React + TypeScript, Vite |
 | `e2e/` | Playwright tests against the production container |
 | `factory/` | Agent workflows, orchestrator, notifier |
+| `scripts/` | Git hook and dependency checks |
 | `docs/decisions/` | Decision records |
 | `docs/specs/` | Product specs |
 | `docs/knowledge/` | Learnings |
@@ -78,3 +79,4 @@ Pushes to `main` run CI. When CI passes, the deploy workflow builds the image, d
 - Setup and factory work is tracked in Jira too. [`TODO.md`](TODO.md) lists the epics.
 - One ticket, one short-lived branch, one pull request. See `docs/decisions/ADR-0faf-short-lived-branches.md`.
 - Merged is not done. See `docs/decisions/ADR-ad3e-definition-of-done.md`.
+- Dependabot updates arrive weekly. Safe ones merge without a person once the setup in `docs/decisions/ADR-ebe6-unattended-dependency-updates.md` is complete.

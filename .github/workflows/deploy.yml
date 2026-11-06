@@ -1,14 +1,15 @@
 name: Deploy
 
 on:
-  workflow_run:
+  # zizmor flags workflow_run as dangerous. The deploy job runs only for successful CI runs
+  # of `push` events on this repository's main branch, never for pull requests or forks.
+  workflow_run: # zizmor: ignore[dangerous-triggers]
     workflows: [CI]
     types: [completed]
     branches: [main]
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
   group: deploy-production
@@ -20,9 +21,15 @@ env:
 
 jobs:
   deploy:
-    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
     environment:
       name: production
       url: ${{ steps.url.outputs.url }}
@@ -30,15 +37,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_DEPLOYER_SA }}
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
       - name: Build and push the image
+        env:
+          APP_VERSION: ${{ github.event.workflow_run.head_sha }}
         run: |
           gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
-          docker build --build-arg APP_VERSION=${{ github.event.workflow_run.head_sha }} -t "$IMAGE" .
+          docker build --build-arg "APP_VERSION=$APP_VERSION" -t "$IMAGE" .
           docker push "$IMAGE"
       - name: Deploy to Cloud Run
         run: gcloud run deploy chb --image "$IMAGE" --region "$REGION" --quiet
@@ -60,13 +70,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Browsers and their system packages ship in the image: no apt mirror on the critical path.
-    # Keep the tag equal to @playwright/test in e2e/package-lock.json.
+    # Keep the tag equal to @playwright/test in e2e/package-lock.json. Dependabot does not
+    # update `container:` images: scripts/check_playwright_image.py fails `make check` and
+    # the e2e CI job on a mismatch.
     container:
       image: mcr.microsoft.com/playwright:v1.65.0-noble@sha256:6e3fb709361521eb27161606e6da6d2674e5e89fa16516cb37d6fdd91372273d
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
       - run: npm ci
         working-directory: e2e
         timeout-minutes: 3
