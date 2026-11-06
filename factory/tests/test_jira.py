@@ -13,7 +13,17 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import jira
-from jira import CredentialError, Jira, JiraError, adf_to_text, main, read_credentials, read_secret, text_to_adf
+from jira import (
+    CredentialError,
+    Jira,
+    JiraError,
+    adf_to_text,
+    main,
+    read_credentials,
+    read_secret,
+    replace_section,
+    text_to_adf,
+)
 
 TOKEN = "fake-token-123"
 EMAIL = "agent@example.com"
@@ -21,8 +31,9 @@ CREDENTIALS = (EMAIL, TOKEN)
 
 
 class FakeResponse:
-    def __init__(self, body: bytes) -> None:
+    def __init__(self, body: bytes, status: int = 200) -> None:
         self._body = body
+        self.status = status
 
     def read(self) -> bytes:
         return self._body
@@ -49,6 +60,8 @@ class FakeJira:
         if isinstance(answer, int):
             error_body = io.BytesIO(json.dumps({"errorMessages": ["nope"], "errors": {"f": "bad"}}).encode())
             raise urllib.error.HTTPError(request.full_url, answer, "error", {}, error_body)  # type: ignore[arg-type]
+        if isinstance(answer, FakeResponse):
+            return answer
         return FakeResponse(b"" if answer is None else json.dumps(answer).encode())
 
     def writes(self) -> list[tuple[str, str, Any]]:
@@ -392,6 +405,189 @@ class AdfTest(unittest.TestCase):
         link = second["content"][1]
         self.assertEqual(link["marks"], [{"type": "link", "attrs": {"href": "https://x.y/z"}}])
         self.assertEqual(adf_to_text(doc), "a\nb\n\nsee https://x.y/z now")
+
+RANK = ("PUT", "/rest/agile/1.0/issue/rank")
+
+
+class RankTest(unittest.TestCase):
+    def test_ranks_one_issue_before_another(self) -> None:
+        fake = FakeJira({RANK: FakeResponse(b"", 204)})
+        code, out, _ = _run(["rank", "CHB-5", "--before", "CHB-9"], fake)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(fake.writes(), [(*RANK, {"issues": ["CHB-5"], "rankBeforeIssue": "CHB-9"})])
+        self.assertEqual(out.strip(), "CHB-5 ranked before CHB-9")
+
+    def test_ranks_several_issues_in_order_after_another(self) -> None:
+        fake = FakeJira({RANK: FakeResponse(b"", 204)})
+        code, _, _ = _run(["rank", "CHB-5", "CHB-3", "--after", "CHB-9"], fake)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(fake.writes(), [(*RANK, {"issues": ["CHB-5", "CHB-3"], "rankAfterIssue": "CHB-9"})])
+
+    def test_partial_failure_exits_1_with_the_issue_error(self) -> None:
+        entries = {
+            "entries": [
+                {"issueId": 1, "issueKey": "CHB-5", "status": 200},
+                {"issueId": 2, "issueKey": "CHB-3", "status": 400, "errors": ["Issue is not on the board"]},
+            ]
+        }
+        fake = FakeJira({RANK: FakeResponse(json.dumps(entries).encode(), 207)})
+        code, _, err = _run(["rank", "CHB-5", "CHB-3", "--before", "CHB-9"], fake)
+
+        self.assertEqual(code, 1)
+        self.assertIn("CHB-3: Issue is not on the board", err)
+        self.assertNotIn("CHB-5:", err)
+
+    def test_207_without_entries_still_fails(self) -> None:
+        fake = FakeJira({RANK: FakeResponse(b"", 207)})
+        code, _, err = _run(["rank", "CHB-5", "--before", "CHB-9"], fake)
+
+        self.assertEqual(code, 1)
+        self.assertIn("HTTP 207", err)
+
+    def test_refuses_non_chb_keys_before_any_request(self) -> None:
+        for argv in (
+            ["rank", "OTHER-1", "--before", "CHB-9"],
+            ["rank", "CHB-5", "--before", "OTHER-9"],
+            ["rank", "CHB-5", "CHB-1/../x", "--after", "CHB-9"],
+            ["rank", "CHB-5", "--after", "CHB-9\n"],
+        ):
+            fake = FakeJira({})
+            code, _, _ = _run(argv, fake, credentials_reader=mock.Mock(side_effect=AssertionError("read credentials")))
+            self.assertEqual(code, 1, argv)
+            self.assertEqual(fake.requests, [], argv)
+
+    def test_needs_exactly_one_anchor(self) -> None:
+        for argv in (["rank", "CHB-5"], ["rank", "CHB-5", "--before", "CHB-9", "--after", "CHB-8"], ["rank", "--before", "CHB-9"]):
+            self.assertEqual(_run(argv, FakeJira({}))[0], 2, argv)
+
+    def test_refuses_an_issue_ranked_against_itself_or_listed_twice(self) -> None:
+        for argv in (["rank", "CHB-5", "--before", "CHB-5"], ["rank", "CHB-5", "CHB-5", "--before", "CHB-9"]):
+            fake = FakeJira({})
+            self.assertEqual(_run(argv, fake)[0], 1, argv)
+            self.assertEqual(fake.requests, [], argv)
+
+    def test_refuses_more_than_50_issues(self) -> None:
+        fake = FakeJira({})
+        keys = [f"CHB-{n}" for n in range(1, 52)]
+        self.assertEqual(_run(["rank", *keys, "--before", "CHB-99"], fake)[0], 1)
+        self.assertEqual(fake.requests, [])
+
+
+HEADING = "Acceptance criteria (Validating)"
+DESCRIPTION_PATH = "/rest/api/3/issue/CHB-12?fields=description"
+
+
+def _heading(text: str, level: int = 2) -> dict[str, Any]:
+    return {"type": "heading", "attrs": {"level": level}, "content": [{"type": "text", "text": text}]}
+
+
+def _para(text: str) -> dict[str, Any]:
+    return {"type": "paragraph", "content": [{"type": "text", "text": text}]}
+
+
+def _doc(*nodes: dict[str, Any]) -> dict[str, Any]:
+    return {"type": "doc", "version": 1, "content": list(nodes)}
+
+
+class ReplaceSectionTest(unittest.TestCase):
+    def test_appends_the_section_when_absent(self) -> None:
+        before = _doc(_para("Intro."), _heading("Notes"), _para("A note."))
+        after = replace_section(before, HEADING, "AC1 pending.")
+
+        self.assertEqual(after["content"][:3], before["content"])
+        self.assertEqual(after["content"][3:], [_heading(HEADING), text_to_adf("AC1 pending.")["content"][0]])
+
+    def test_replaces_the_section_and_keeps_content_before_and_after(self) -> None:
+        intro, rest = _para("Intro."), [_heading("Later"), _para("Kept.")]
+        before = _doc(intro, _heading(HEADING), _para("Old AC."), _heading("Detail", 3), _para("Old detail."), *rest)
+        after = replace_section(before, HEADING, "New AC.")
+
+        self.assertEqual(after["content"], [intro, _heading(HEADING), _para("New AC."), *rest])
+        self.assertEqual(adf_to_text(after).count(HEADING), 1)
+        self.assertNotIn("Old", adf_to_text(after))
+
+    def test_a_higher_level_heading_ends_the_section(self) -> None:
+        before = _doc(_heading(HEADING, 3), _para("Old."), _heading("Top", 1), _para("Kept."))
+        after = replace_section(before, HEADING, "New.")
+
+        self.assertEqual(after["content"], [_heading(HEADING), _para("New."), _heading("Top", 1), _para("Kept.")])
+
+    def test_setting_the_same_section_twice_leaves_one(self) -> None:
+        once = replace_section(_doc(_para("Intro.")), HEADING, "First.")
+        twice = replace_section(once, HEADING, "Second.")
+
+        self.assertEqual(twice["content"], [_para("Intro."), _heading(HEADING), _para("Second.")])
+        self.assertEqual(replace_section(twice, HEADING, "Second."), twice)
+
+    def test_empty_or_missing_description_gets_only_the_section(self) -> None:
+        for description in (None, _doc()):
+            after = replace_section(description, HEADING, "Body.")
+            self.assertEqual(after, _doc(_heading(HEADING), _para("Body.")), description)
+
+    def test_unknown_node_types_and_attributes_are_kept_as_they_are(self) -> None:
+        panel = {"type": "panel", "attrs": {"panelType": "info"}, "content": [_para("Careful.")]}
+        before = {"type": "doc", "version": 1, "content": [panel, _heading(HEADING), _para("Old.")]}
+        after = replace_section(before, HEADING, "New.")
+
+        self.assertIs(after["content"][0], panel)
+        self.assertEqual(before["content"][2], _para("Old."), "the input is not changed")
+
+    def test_dash_lines_become_a_bullet_list(self) -> None:
+        after = replace_section(None, HEADING, "AC1. Works.\n- When: Monday\n- Where: https://x.y/z\nAfter list.")
+        _, paragraph, bullets, tail = after["content"]
+
+        self.assertEqual(paragraph, _para("AC1. Works."))
+        self.assertEqual(bullets["type"], "bulletList")
+        self.assertEqual([adf_to_text(item).strip() for item in bullets["content"]], ["When: Monday", "Where: https://x.y/z"])
+        self.assertEqual(bullets["content"][1]["content"][0]["content"][1]["marks"][0]["attrs"]["href"], "https://x.y/z")
+        self.assertEqual(tail, _para("After list."))
+        self.assertIn("- When: Monday\n- Where: https://x.y/z\n", adf_to_text(after))
+
+    def test_refuses_an_ambiguous_section_an_empty_body_or_a_bad_heading(self) -> None:
+        twice = _doc(_heading(HEADING), _para("a"), _heading(HEADING), _para("b"))
+        for description, heading, body in ((twice, HEADING, "x"), (None, HEADING, "  \n"), (None, " ", "x"), (None, "a\nb", "x")):
+            with self.assertRaises(JiraError):
+                replace_section(description, heading, body)
+
+
+class SectionCommandTest(unittest.TestCase):
+    def _section(self, fake: FakeJira, body: str = "New AC.", key: str = "CHB-12") -> tuple[int, str, str]:
+        with tempfile.NamedTemporaryFile("w") as handle:
+            handle.write(body)
+            handle.flush()
+            return _run(["section", key, "--heading", HEADING, "--body-file", handle.name], fake)
+
+    def test_writes_only_the_description_field(self) -> None:
+        current = _doc(_para("Intro."), _heading(HEADING), _para("Old."))
+        fake = FakeJira({("GET", DESCRIPTION_PATH): {"fields": {"description": current}}, ("PUT", "/rest/api/3/issue/CHB-12"): None})
+        code, out, _ = self._section(fake)
+
+        self.assertEqual(code, 0)
+        (_, path, sent), = fake.writes()
+        self.assertEqual(path, "/rest/api/3/issue/CHB-12")
+        self.assertEqual(sent, {"fields": {"description": _doc(_para("Intro."), _heading(HEADING), _para("New AC."))}})
+        self.assertIn("set", out)
+
+    def test_no_write_when_the_section_already_has_that_body(self) -> None:
+        current = _doc(_heading(HEADING), _para("New AC."))
+        fake = FakeJira({("GET", DESCRIPTION_PATH): {"fields": {"description": current}}})
+        code, out, _ = self._section(fake)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(fake.writes(), [])
+        self.assertIn("unchanged", out)
+
+    def test_empty_description_from_jira(self) -> None:
+        fake = FakeJira({("GET", DESCRIPTION_PATH): {"fields": {"description": None}}, ("PUT", "/rest/api/3/issue/CHB-12"): None})
+        self.assertEqual(self._section(fake)[0], 0)
+        self.assertEqual(fake.writes()[0][2]["fields"]["description"], _doc(_heading(HEADING), _para("New AC.")))
+
+    def test_refuses_non_chb_keys_before_any_request(self) -> None:
+        fake = FakeJira({})
+        self.assertEqual(self._section(fake, key="OTHER-12")[0], 1)
+        self.assertEqual(fake.requests, [])
 
 
 if __name__ == "__main__":
