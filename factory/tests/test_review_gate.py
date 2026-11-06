@@ -320,6 +320,16 @@ class ReviewRoundTest(unittest.TestCase):
 
         self.assertEqual(review_round(runs, "chb-factory-reviewer"), 3)
 
+    def test_skipped_and_carried_checks_are_not_rounds(self) -> None:
+        app = {"slug": "chb-factory-reviewer"}
+        runs = [
+            {"name": "review", "app": app, "external_id": "reviewed:" + "a" * 40},
+            {"name": "review", "app": app, "external_id": "skipped"},
+            {"name": "review", "app": app, "external_id": "carried:" + "a" * 40},
+        ]
+
+        self.assertEqual(review_round(runs, "chb-factory-reviewer"), 2)
+
     def test_first_round(self) -> None:
         self.assertEqual(review_round([], "chb-factory-reviewer"), 1)
         self.assertEqual(MAX_ROUNDS, 3)
@@ -393,6 +403,18 @@ class CheckRunPayloadTest(unittest.TestCase):
         self.assertEqual(ok["head_sha"], "abc")
         self.assertEqual(ok["status"], "completed")
         self.assertEqual(ok["output"]["summary"], "s")
+
+    def test_records_the_reviewed_head_in_external_id(self) -> None:
+        reviewed = evaluate(_envelope(_fixture("critical.json")), SCHEMA)
+        payload = check_run_payload(reviewed, head_sha="abc", summary="s")
+
+        self.assertEqual(payload["conclusion"], "failure")
+        self.assertEqual(payload["external_id"], "reviewed:abc")
+
+    def test_an_error_is_not_marked_as_reviewed(self) -> None:
+        for verdict in (evaluate("", SCHEMA), evaluate(_envelope(_fixture("valid.json")), SCHEMA, claude_exit_code=1)):
+            with self.subTest(verdict.reasons):
+                self.assertEqual(check_run_payload(verdict, head_sha="abc", summary="s")["external_id"], "error:abc")
 
 
 if __name__ == "__main__":

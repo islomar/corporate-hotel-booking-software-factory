@@ -27,6 +27,7 @@
 - Status: accepted (2026-11-06)
 - Date: 2026-11-06
 - Ticket: CHB-82
+- Amended by CHB-93 (decision 2) and CHB-105 (decisions 2, 3 and 7, owner decision 4)
 
 ## Context
 
@@ -60,7 +61,7 @@ What GitHub documents:
 
 | Option | Typed gate | Separate identity | Cost and secret | Verdict |
 |---|---|---|---|---|
-| Claude Code CLI in a GitHub Actions job, a review skill from `main`, a reviewer App | Yes: `--json-schema` | Yes | API tokens; Anthropic credential and App key in GitHub | ⭐ |
+| Claude Code CLI in a GitHub Actions job, a review skill from `main`, a reviewer App | Yes: `--json-schema` | Yes | Subscription token since CHB-105; Claude credential and App key in GitHub | ⭐ |
 | `anthropics/claude-code-action` running the same skill | Yes: `structured_output` | Yes, with `github_token` from a custom App | Same | ❌ more surface than needed |
 | Claude Code in the local orchestrator, posting as a reviewer App | Yes | Weak: same machine and 1Password as the author | Subscription | ❌ for the gate |
 | Claude Code Review (managed) | No: never approves or blocks; its check "doesn't conclude as a failure" | Claude GitHub App | Team or Enterprise plan | ❌ |
@@ -103,9 +104,31 @@ The first version (CHB-87) used `pull_request`, where a branch that edits `revie
 - The job uses no local `./` actions. A PR can change `factory/` on its branch, and CODEOWNERS blocks only the merge, not this run.
 - The PR head is checked out into a separate directory as data. `.git` and every symlink are removed. Nothing from it runs: no install, no build, no hooks.
 - The PR title and body come from the API into a file that Claude reads. No `run:` block expands a PR-controlled string.
-- Claude Code runs as `claude -p --bare --add-dir <skill dir> --tools "Read,Grep,Glob" --strict-mcp-config --json-schema <schema>`, with `--max-turns` and `--max-budget-usd`.
-  - `--bare` skips hooks, skills, plugins, MCP servers and CLAUDE.md discovery, so files in the PR head cannot instruct or run anything.
-  - `--tools` restricts the tool set. `--allowedTools` only pre-approves, so it is not enough.
+- Claude Code runs as `claude -p --safe-mode --restricted --tools "Read,Grep,Glob" --strict-mcp-config --json-schema <schema>`, with `--max-turns` and `--max-budget-usd`.
+  The exact command line is in `review.yml`.
+  - Until CHB-105 it ran with `--bare`. `--bare` reads only `ANTHROPIC_API_KEY` or an `apiKeyHelper`, never an OAuth token, so it cannot use the subscription token (decision 7).
+  - Each isolation `--bare` gave is replaced explicitly, most of them twice:
+
+    | PR-controlled input | Blocked by |
+    |---|---|
+    | `CLAUDE.md`, `CLAUDE.local.md`, `.claude/CLAUDE.md`, `AGENTS.md`, `.claude/rules/`, at the root of `head/` or nested | `--safe-mode`, `--restricted`, `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` |
+    | Hooks in `.claude/settings.json` | `--safe-mode`, `--restricted`, `disableAllHooks` in `--settings` |
+    | Skills and agents in `.claude/` | `--safe-mode`, `--restricted`, and no `Skill` or `Agent` tool in `--tools` |
+    | `.mcp.json` | `--strict-mcp-config`, `--safe-mode` |
+    | Auto memory | `--safe-mode`, `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, `autoMemoryEnabled: false` |
+    | User settings, plugins, keychain or credentials files | Empty `HOME` and `CLAUDE_CONFIG_DIR` in the job; `--restricted` loads only `--settings` and managed settings |
+    | The owner's claude.ai connectors (Gmail, Drive, others), reachable with a subscription token | `--strict-mcp-config`, `ENABLE_CLAUDEAI_MCP_SERVERS=false`, `disableClaudeAiConnectors` |
+    | Background traffic | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` |
+
+  - Tested on 2026-11-06 with the pinned CLI (2.1.311) and canary files in `head/`.
+    A `CLAUDE.md`, `CLAUDE.local.md`, `.claude/CLAUDE.md`, `AGENTS.md`, rules, skills and agents each told the model to print a token,
+    and a `.claude/settings.json` held hooks that touch marker files.
+    Without the new flags (the old command minus `--bare`), 8 canary tokens reached the session after the model read `head/sub/code.py` and `head/sub2/code.py`.
+    With the working directory at `head/`, all six hooks fired.
+    With them, no token reached the model and no hook fired, also with the working directory at `head/` and after the model read files next to the nested canaries.
+    `--safe-mode` alone and `--restricted` alone each blocked every canary.
+    `CLAUDE_CODE_DISABLE_CLAUDE_MDS` alone left skills and hooks active, and `disableAllHooks` alone left every instruction file active.
+  - `--tools` restricts the tool set. `--allowedTools` only pre-approves, so it is not enough. `--tools` does not remove MCP tools; the MCP switches above do.
   - The model has no shell, no network tool and no GitHub tool.
 - The reviewer App token is minted in a later step, after Claude exits. The Claude process never sees it or a GitHub token.
 - The `review` check run goes on the PR head SHA, so it shows on the PR. The Actions jobs of `review.yml` attach to `main`'s commit, not to the PR.
@@ -116,7 +139,20 @@ The first version (CHB-87) used `pull_request`, where a branch that edits `revie
 - The schema extends CHB-62: `{scores: {codeQuality, security, businessAlignment, tests, architecture}, findings: [{id, severity, dimension, file, line, summary, suggestedFix}], acEvidenceChecked: [acId]}`.
 - A tested script (`factory/`) validates the output and recomputes Merge Safety from the scores and findings. It never trusts a total from the model.
 - Rule (CHB-40): fail if Merge Safety is below 8.5 or any finding is critical. A critical finding caps its dimension at 7.
-- The script posts one check run named `review` with the reviewer App token, on the PR head SHA. Conclusion is `success` or `failure`, never `neutral` or `skipped`.
+- The script posts one check run named `review` with the reviewer App token, on the PR head SHA. Conclusion of a model review is `success` or `failure`.
+- Before any model call, `factory/review/plan.py` (CHB-105, unit-tested, run from `main`) decides from the changed paths, the diff size and the App's earlier check runs.
+  PR title, body and labels never count.
+  - Docs only: every file changed since the merge base is on the docs allowlist. The check is `neutral` with the title "Skipped: docs-only change", and no model runs.
+    The allowlist is Markdown and images (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`) under `docs/`, and `README.md` files.
+    Never docs: `CLAUDE.md`, `CLAUDE.local.md` and `AGENTS.md` at any depth, any dot directory,
+    `factory/`, `infra/`, `scripts/`, `.github/`, `.claude/`, `docs/decisions/`, `docs/process/`, `docs/knowledge/`, `Makefile`, lockfiles and manifests.
+  - Carry forward: the files changed between the last commit the App reviewed and the new head are all docs.
+    The check repeats that verdict (`success` or `failure`) and its summary on the new head, and no model runs.
+    The last reviewed commit comes from the `external_id` of the App's own check runs (`reviewed:<sha>`), never from a check of another app.
+    If that commit is not an ancestor of the head, the model reviews.
+    A run without a valid model review (Claude error, usage limit, schema violation) gets `error:<sha>` and is never carried: the next push gets a new review.
+  - Skipped and carried checks have `external_id` `skipped` and `carried:<sha>`. They do not count as review rounds.
+  - GitHub treats `neutral` as success for a required check. Once `review` is required, a docs-only PR passes it with no model review. The governance exclusions above are what keep that safe.
 - Fail closed: schema error, timeout, budget cap, refusal or missing output give `failure`.
 - Findings go to the check summary and inline review comments as plain text. Mentions are escaped and length is capped.
 - The ruleset requires `review` with `integration_id` set to the reviewer App. A job named `review` in any workflow cannot satisfy it.
@@ -160,12 +196,18 @@ Without `--no-renames`, a file moved out of `factory/` shows only its new path. 
 
 ### 7. Model and cost
 
-- Model: `claude-opus-5-5` ($4 input, $20 output per million tokens). Try `claude-sonnet-5-5` ($2, $10) once the eval set exists (CHB-53, CHB-64).
-- Credential: an API key in its own Console workspace with a spend limit, as a repository secret. `--max-budget-usd` caps each run.
-- Later: workload identity federation through GitHub OIDC, so no long-lived Anthropic secret exists.
+- Model, chosen by `plan.py` from paths and diff size only:
+  - `claude-opus-5-5` when a changed path is harness, supply chain or governance (decision 3), when the diff has more than 400 added plus deleted lines, or when it changes a binary file outside `docs/`.
+  - `claude-sonnet-5-5` otherwise.
+- Credential (CHB-105): the owner's Claude subscription token from `claude setup-token`, as the environment secret `CLAUDE_CODE_OAUTH_TOKEN` of `reviewer`.
+  The API key (CHB-89) ran on prepaid credits; 20 shadow runs cost USD 0.04 to 0.43 each.
+  - The token shares the subscription's usage limits with the owner's interactive work and the local agent. A review that hits a limit fails, so its check is `failure`.
+  - The token is valid for one year. Renewing it means running `claude setup-token` again and replacing the secret.
+  - It reaches the claude.ai connectors of the owner's account. Decision 2 switches them off for the review.
+- `--max-budget-usd 1` stops a runaway run. On a subscription the CLI still computes `total_cost_usd`, and a test with a cap of USD 0.001 ended with `error_max_budget_usd`.
+- Docs-only PRs and docs-only pushes cost no model call (decision 3).
+- Later: workload identity federation through GitHub OIDC, so no long-lived secret exists.
   `claude-code-action` documents it. The CLI docs checked here do not, so it stays unverified for the CLI.
-- Not a subscription OAuth token. It is tied to the owner's subscription and shares its limits with interactive work and the local agent.
-- Cost per PR is measured in shadow mode, not estimated here.
 
 ### 8. Staged rollout
 
@@ -205,6 +247,7 @@ Taken on 2026-11-06:
 2. Remove `workflows: write` from `chb-factory-agent` after testing that Dependabot Actions bumps still merge. This amends ADR-d7b7.
 3. CODEOWNERS covers the harness and supply-chain paths in the risk table (CHB-29), before any reviewer approval counts.
 4. An Anthropic API key in its own Console workspace with a spend limit. Workload identity federation later, once verified for the CLI.
+   Replaced by CHB-105: the owner's subscription token, with docs-only skips and the model chosen per PR (decision 7).
 5. The stage thresholds in the rollout table, revisited with shadow-mode data.
 6. The reviewer does not run on Dependabot PRs. Their release-age, provenance and CI checks gate them. The ruleset must not block their auto-merge.
 
@@ -214,13 +257,16 @@ Taken on 2026-11-06:
 - Every PR needs a `review` check from the reviewer App once it is required. Fork PRs and runs without secrets block until the owner acts.
 - Workflow changes by the agent need the owner's hands or a PR the owner pushes.
 - The rubric, schema and skill live on `main` and change only through owner-reviewed PRs.
-- Review spend becomes a CI cost, tracked with CHB-56 and CHB-65.
+- Review spend comes out of the owner's subscription limits (CHB-105), tracked with CHB-56 and CHB-65.
+- Once `review` is required, docs-only PRs pass it with a `neutral` check and no model review.
 - The review needs no Actions event policy: it uses `pull_request` and `workflow_run`, not `pull_request_target`.
 - A change to `review.yml` takes effect only after merge. Its own PR is reviewed by the version on `main`.
 - A PR whose branch conflicts with `main` gets no review: GitHub runs no `pull_request` workflow without a merge commit.
 
 ## Unverified
 
+- That the job authenticates with `CLAUDE_CODE_OAUTH_TOKEN` in an empty `HOME`.
+  Local tests used the owner's logged-in session; a run with an empty `HOME` and no token failed closed (`loggedIn: false`, exit 1). AC7 of CHB-105 checks it after merge.
 - Whether an App's `APPROVE` review counts toward `required_approving_review_count`. GitHub docs do not say. A community answer says it does. Test it before stage 2.
 - Which OIDC claims an Anthropic federation rule can match beyond the repository subject prefix, and whether the bare CLI accepts federation.
 - Whether an App token without `workflows` permission can merge a PR that changes workflow files, as Dependabot GitHub Actions bumps do.
@@ -231,7 +277,10 @@ Taken on 2026-11-06:
 - Claude Code GitHub Actions: <https://code.claude.com/docs/en/github-actions>
 - claude-code-action inputs and outputs: <https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md>
 - claude-code-action security: <https://github.com/anthropics/claude-code-action/blob/main/docs/security.md>
-- Claude Code CLI flags (`--bare`, `--tools`, `--json-schema`, `--max-budget-usd`): <https://code.claude.com/docs/en/cli-reference>
+- Claude Code CLI flags (`--bare`, `--safe-mode`, `--restricted`, `--tools`, `--json-schema`, `--max-budget-usd`): <https://code.claude.com/docs/en/cli-reference>
+- Claude Code environment variables (`CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CODE_DISABLE_CLAUDE_MDS`, `ENABLE_CLAUDEAI_MCP_SERVERS`): <https://code.claude.com/docs/en/env-vars>
+- Claude Code authentication, `claude setup-token`: <https://code.claude.com/docs/en/authentication>
+- Claude Code settings (`disableAllHooks`, `disableClaudeAiConnectors`, `autoMemoryEnabled`): <https://code.claude.com/docs/en/settings-reference>
 - Claude Code Review: <https://code.claude.com/docs/en/code-review>
 - Claude model pricing: <https://claude.com/platform/api>
 - About code owners: <https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners>

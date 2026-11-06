@@ -44,6 +44,11 @@ CRITICAL_CAP = Fraction(7)
 THRESHOLD = Fraction(17, 2)
 MAX_ROUNDS = 3
 CHECK_NAME = "review"
+# external_id of the reviewer App's check runs (CHB-105). Only model reviews count as rounds.
+REVIEWED = "reviewed:"  # + the reviewed head SHA, only when the model output was a valid review
+ERROR = "error:"  # + the head SHA: no valid review (claude failed, usage limit, schema error)
+CARRIED = "carried:"  # + the SHA whose verdict was carried forward (factory/review/plan.py)
+SKIPPED = "skipped"  # docs-only PR, no model review (factory/review/plan.py)
 SUMMARY_LIMIT = 60000  # GitHub caps a check run summary at 65535 characters.
 
 ANNOTATIONS = {"$schema", "title", "description", "$defs"}
@@ -298,9 +303,15 @@ def risk_class(paths: Sequence[str]) -> str:
 
 
 def review_round(prior_runs: Iterable[Mapping[str, object]], app_slug: str) -> int:
-    """This run's round: earlier `review` check runs by the reviewer App, plus one."""
+    """This run's round: earlier model reviews by the reviewer App, plus one.
+
+    Skipped and carried-forward checks are not reviews, so they do not count.
+    """
     def own(run: object) -> bool:
         if not isinstance(run, Mapping) or run.get("name") != CHECK_NAME:
+            return False
+        external_id = run.get("external_id")
+        if isinstance(external_id, str) and (external_id == SKIPPED or external_id.startswith(CARRIED)):
             return False
         app = run.get("app")
         return isinstance(app, Mapping) and app.get("slug") == app_slug
@@ -358,6 +369,7 @@ def check_run_payload(verdict: Verdict, head_sha: str, summary: str) -> dict[str
         "head_sha": head_sha,
         "status": "completed",
         "conclusion": "success" if verdict.passed else "failure",
+        "external_id": (REVIEWED if verdict.merge_safety is not None else ERROR) + head_sha,
         "output": {"title": title, "summary": summary},
     }
 
