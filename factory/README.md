@@ -26,7 +26,7 @@ factory/bin/as-agent gh pr create --fill
 ## Automated PR review (shadow mode)
 
 `.github/workflows/review.yml` scores every same-repository PR into `main` with Claude Code and posts a check run named `review` as the App `chb-factory-reviewer` on the PR head commit.
-The `main` ruleset does not require the check yet. Design: ADR-ea8c (PR #16). Tickets: CHB-87, CHB-93.
+The `main` ruleset does not require the check yet. Design: ADR-ea8c (PR #16). Tickets: CHB-87, CHB-93, CHB-105.
 
 How it starts:
 
@@ -35,6 +35,15 @@ How it starts:
 3. Its `resolve` job takes the head SHA from the event and finds the PR through the API.
    `review/resolve_pr.py` checks it: open, not draft, into `main`, from this repository, not Dependabot, head equal to that SHA.
 4. Its `score-pr` job runs in the `reviewer` environment, reads the PR head as data and never runs it.
+5. `review/plan.py` decides from paths and diff size, never from PR text:
+   - every changed file is docs: a `neutral` check, no Claude call;
+   - only docs changed since the last commit the App reviewed: that verdict is posted again on the new head, no Claude call;
+   - otherwise Claude reviews: Opus for harness, supply-chain or governance paths, more than 400 changed lines or a binary file outside `docs/`; Sonnet for the rest.
+
+Claude authenticates with the owner's subscription token (`claude setup-token`), not an API key.
+`--bare` cannot read that token, so the job isolates Claude with `--safe-mode`, `--restricted`, an empty `HOME` and environment switches instead.
+A `CLAUDE.md`, `AGENTS.md`, rule, skill, hook or `.mcp.json` in the PR head never loads. ADR-ea8c decision 2 lists each switch and the canary test behind it.
+`--max-budget-usd 1` stops a runaway run.
 
 A change to `review.yml` takes effect only after merge: the PR that changes it is reviewed by the copy on `main`.
 
@@ -44,6 +53,7 @@ A change to `review.yml` takes effect only after merge: the PR that changes it i
 | `review/schema.json` | Output shape: five dimensions, each with a score and findings, plus a summary. |
 | `review/gate.py` | Validates the output, recomputes the scores, decides, and builds the check run. |
 | `review/resolve_pr.py` | Picks the PR to review from API data: open, not draft, into `main`, same repository, not Dependabot, head equal to the run's SHA. |
+| `review/plan.py` | Skip, carry forward or review, and which model. Holds the docs allowlist. |
 
 The gate ignores every score the model claims. Each dimension starts at 10 and loses 3 per critical finding, 2 per improvement and 0.5 per cleanup.
 A critical finding caps its dimension at 7. Merge Safety is the weighted mean: code quality 30, security 25, business alignment 15, tests 15, architecture 15.
@@ -51,8 +61,9 @@ The check passes when Merge Safety is at least 8.5 and no finding is critical.
 Malformed JSON, a schema violation, an extra field, an error result or a non-zero exit of `claude` fail the check.
 
 The summary also shows the risk class from `git diff --no-renames --name-only base...head` and the round number from earlier `review` runs of the App.
+Skipped and carried checks do not count as rounds. A failed run without a valid review (Claude error, usage limit) is never carried forward.
 
-The workflow needs three secrets in the `reviewer` environment, which admits `main` only: `ANTHROPIC_API_KEY_REVIEW` (CHB-89), `REVIEWER_APP_CLIENT_ID` and `REVIEWER_APP_PRIVATE_KEY` (CHB-85).
+The workflow needs three secrets in the `reviewer` environment, which admits `main` only: `CLAUDE_CODE_OAUTH_TOKEN` (CHB-105), `REVIEWER_APP_CLIENT_ID` and `REVIEWER_APP_PRIVATE_KEY` (CHB-85).
 Do not store them as repository secrets: a branch can add a `pull_request` workflow that reads repository secrets.
 Without them the job prints a notice and posts nothing.
 
