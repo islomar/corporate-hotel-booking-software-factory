@@ -74,7 +74,7 @@ Locally the same paths work on <http://localhost:8000> (`make dev`) and <http://
 
 Pushes to `main` run CI. When CI passes, the deploy workflow builds the image, deploys it to Cloud Run, checks that `/api/health` reports the new commit, and runs Playwright against the live URL.
 
-- Product tasks live in Jira, space `CHB`.
-- Setup and factory work is tracked in [`TODO.md`](TODO.md).
+- Tasks live in Jira, space `CHB`.
+- Setup and factory work is tracked in Jira too. [`TODO.md`](TODO.md) lists the epics.
 - One ticket, one short-lived branch, one pull request. See `docs/decisions/ADR-0faf-short-lived-branches.md`.
 - Merged is not done. See `docs/decisions/ADR-ad3e-definition-of-done.md`.

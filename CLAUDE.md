@@ -11,7 +11,7 @@
 # Agent instructions
 
 Read `README.md` for layout and commands. Decisions are in `docs/decisions/`.
-Pending setup and factory work is in `TODO.md`. Track it there, never in files outside this repository.
+All work is tracked in Jira space `CHB` (see `TODO.md`). Never track work in files outside this repository or Jira.
 
 ## Rules
 
