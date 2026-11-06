@@ -5,6 +5,11 @@ description = "Corporate hotel booking backend (FastAPI)"
 requires-python = ">=3.15"
 dependencies = [
     "fastapi>=0.162",
+    "google-auth>=2.62.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.45.2",
+    "opentelemetry-instrumentation-fastapi>=0.66b2",
+    "opentelemetry-sdk>=1.45.2",
+    "requests>=2.34.2",
     "uvicorn[standard]>=0.54.0",
 ]
 

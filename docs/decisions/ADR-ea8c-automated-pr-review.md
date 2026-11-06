@@ -110,7 +110,7 @@ Without `--no-renames`, a file moved out of `factory/` shows only its new path. 
 | Class | Paths | Approver |
 |---|---|---|
 | Harness | `.github/`, `.claude/`, `factory/`, `infra/`, `scripts/`, `Makefile`, `CLAUDE.md`, `docs/decisions/`, `docs/knowledge/`, the review skill and schema | Owner, always (CODEOWNERS) |
-| Supply chain | Manifests and lockfiles, `.npmrc`, `pyproject.toml`, `Dockerfile`, `compose.yaml` | Owner, always (CODEOWNERS) |
+| Supply chain | Manifests and lockfiles, `.npmrc`, `pyproject.toml`, `Dockerfile`, `compose.yaml` | Owner, through the required `supply-chain` check; Dependabot-only PRs pass it. `.npmrc` stays in CODEOWNERS. See ADR-ebe6 (CHB-90). |
 | Dependency | Dependabot PRs | ADR-ebe6 rules |
 | Docs | `docs/specs/`, `docs/postmortems/`, `docs/sessions/`, `README.md` | Reviewer App, from stage 2 |
 | Tests only | `**/tests/**`, `e2e/**` | Owner. A weakened test passes CI by construction. |
