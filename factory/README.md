@@ -26,8 +26,8 @@ factory/bin/as-agent gh pr create --fill
 
 ## Acting in Jira as the agent
 
-`factory/bin/jira` calls the Jira REST API of `islomar.atlassian.net` as the Atlassian account "Claude (CHB agent)" (<islomar+claude@gmail.com>), CHB-107.
-The API token is read from the 1Password item `chb-jira-claude.api-token` (field `credential`) on every call.
+`factory/bin/jira` calls the Jira REST API of `islomar.atlassian.net` as the Claude account ("Claude (CHB agent)"), CHB-107.
+Its email and API token are read from the 1Password item `chb-jira-claude.api-token` (fields `username` and `credential`) on every call.
 It stays inside the Python process: never printed, written to a file or passed to another command.
 The owner's `acli` login is global state and is not touched.
 

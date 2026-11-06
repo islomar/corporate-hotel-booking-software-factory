@@ -13,9 +13,11 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import jira
-from jira import CredentialError, Jira, JiraError, adf_to_text, main, read_token, text_to_adf
+from jira import CredentialError, Jira, JiraError, adf_to_text, main, read_credentials, read_secret, text_to_adf
 
 TOKEN = "fake-token-123"
+EMAIL = "agent@example.com"
+CREDENTIALS = (EMAIL, TOKEN)
 
 
 class FakeResponse:
@@ -53,10 +55,10 @@ class FakeJira:
         return [(m, p, b) for m, p, b, _ in self.requests if m != "GET"]
 
 
-def _run(argv: list[str], fake: FakeJira, token_reader: Any = lambda: TOKEN) -> tuple[int, str, str]:
+def _run(argv: list[str], fake: FakeJira, credentials_reader: Any = lambda: CREDENTIALS) -> tuple[int, str, str]:
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-        code = main(argv, token_reader=token_reader, opener_factory=lambda: fake)
+        code = main(argv, credentials_reader=credentials_reader, opener_factory=lambda: fake)
     return code, out.getvalue(), err.getvalue()
 
 
@@ -71,10 +73,10 @@ TRANSITIONS = {
 class AuthTest(unittest.TestCase):
     def test_basic_auth_with_the_agent_email_and_token(self) -> None:
         fake = FakeJira({("GET", "/rest/api/3/myself"): {"accountId": "a1"}})
-        Jira(TOKEN, fake).myself()
+        Jira(EMAIL, TOKEN, fake).myself()
 
         headers = fake.requests[0][3]
-        expected = base64.b64encode(f"{jira.EMAIL}:{TOKEN}".encode()).decode()
+        expected = base64.b64encode(f"{EMAIL}:{TOKEN}".encode()).decode()
         self.assertEqual(headers["Authorization"], f"Basic {expected}")
 
 
@@ -221,7 +223,7 @@ class SearchTest(unittest.TestCase):
 
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            code = main(["search", "project = CHB"], token_reader=lambda: TOKEN, opener_factory=lambda: opener)
+            code = main(["search", "project = CHB"], credentials_reader=lambda: CREDENTIALS, opener_factory=lambda: opener)
 
         self.assertEqual(code, 0)
         self.assertEqual([line.split("\t")[0] for line in out.getvalue().splitlines()], ["CHB-1", "CHB-2"])
@@ -230,11 +232,11 @@ class SearchTest(unittest.TestCase):
 
 class FailureTest(unittest.TestCase):
     def test_locked_1password_exits_3_and_tells_the_agent_to_stop(self) -> None:
-        def locked() -> str:
+        def locked() -> tuple[str, str]:
             raise CredentialError("op exited 1 without a token (is 1Password locked?)")
 
         fake = FakeJira({})
-        code, _, err = _run(["view", "CHB-1"], fake, token_reader=locked)
+        code, _, err = _run(["view", "CHB-1"], fake, credentials_reader=locked)
 
         self.assertEqual(code, 3)
         self.assertIn("STOP", err)
@@ -246,9 +248,35 @@ class FailureTest(unittest.TestCase):
 
         self.assertEqual(code, 1)
         self.assertIn("HTTP 403 nope; f: bad", err)
-        encoded = base64.b64encode(f"{jira.EMAIL}:{TOKEN}".encode()).decode()
+        encoded = base64.b64encode(f"{EMAIL}:{TOKEN}".encode()).decode()
         for secret in (TOKEN, encoded):
             self.assertNotIn(secret, out + err)
+
+
+class ReadCredentialsTest(unittest.TestCase):
+    def test_email_and_token_come_from_the_same_1password_item(self) -> None:
+        commands: list[list[str]] = []
+
+        def reader(command: list[str]) -> str:
+            commands.append(command)
+            return "agent@example.com" if "label=username" in command else "tok"
+
+        self.assertEqual(read_credentials(reader), ("agent@example.com", "tok"))
+        username, token = commands
+        self.assertEqual(username, ["op", "item", "get", "chb-jira-claude.api-token", "--fields", "label=username"])
+        self.assertEqual(token[:5], username[:5])
+        self.assertIn("label=credential", token)
+
+    def test_a_failed_username_read_stops_before_the_token(self) -> None:
+        commands: list[list[str]] = []
+
+        def reader(command: list[str]) -> str:
+            commands.append(command)
+            raise CredentialError("locked")
+
+        with self.assertRaises(CredentialError):
+            read_credentials(reader)
+        self.assertEqual(len(commands), 1)
 
 
 class ViewTest(unittest.TestCase):
@@ -280,12 +308,12 @@ class NetworkTest(unittest.TestCase):
         def opener(request: Any) -> FakeResponse:
             raise TimeoutError("timed out")
 
-        code = main(["assign", "CHB-1", "--account-id", "x"], token_reader=lambda: TOKEN, opener_factory=lambda: opener)
+        code = main(["assign", "CHB-1", "--account-id", "x"], credentials_reader=lambda: CREDENTIALS, opener_factory=lambda: opener)
         self.assertEqual(code, 1)
 
     def test_non_json_response_is_a_jira_failure(self) -> None:
         code = main(
-            ["view", "CHB-1"], token_reader=lambda: TOKEN, opener_factory=lambda: lambda r: FakeResponse(b"<html>")
+            ["view", "CHB-1"], credentials_reader=lambda: CREDENTIALS, opener_factory=lambda: lambda r: FakeResponse(b"<html>")
         )
         self.assertEqual(code, 1)
 
@@ -296,12 +324,16 @@ class NetworkTest(unittest.TestCase):
 
 class ReadTokenTest(unittest.TestCase):
     def test_returns_the_stripped_output(self) -> None:
-        self.assertEqual(read_token(["echo", "tok"]), "tok")
+        self.assertEqual(read_secret(["echo", "tok"]), "tok")
 
     def test_failing_or_empty_command_is_a_credential_error(self) -> None:
         for command in (["false"], ["true"], ["/nonexistent/op"]):
             with self.assertRaises(CredentialError):
-                read_token(command)
+                read_secret(command)
+
+    def test_empty_field_is_named_in_the_error(self) -> None:
+        with self.assertRaisesRegex(CredentialError, "field label=username is empty"):
+            read_secret(["true", "--fields", "label=username"])
 
 
 class AdfTest(unittest.TestCase):

@@ -9,7 +9,8 @@ Usage:
   factory/bin/jira comment CHB-12 --body-file FILE      (FILE "-" reads stdin)
   factory/bin/jira assign CHB-12 --me | --account-id ID
 
-The API token is read from 1Password on every call and stays in this process: it is
+The account email and API token are read from the 1Password item chb-jira-claude.api-token
+(fields username and credential) on every call. The token stays in this process: it is
 never printed, logged, written to a file or passed to another process.
 
 The account is a CHB project Administrator (Jira Free has no Member role), so this
@@ -40,8 +41,9 @@ from typing import Any
 
 SITE = "https://islomar.atlassian.net"
 PROJECT = "CHB"
-EMAIL = "islomar+claude@gmail.com"
-TOKEN_COMMAND = ["op", "item", "get", "chb-jira-claude.api-token", "--fields", "label=credential", "--reveal"]
+ITEM = "chb-jira-claude.api-token"
+USERNAME_COMMAND = ["op", "item", "get", ITEM, "--fields", "label=username"]
+TOKEN_COMMAND = ["op", "item", "get", ITEM, "--fields", "label=credential", "--reveal"]
 KEY_PATTERN = re.compile(rf"^{PROJECT}-[1-9][0-9]*$")
 URL_PATTERN = re.compile(r"https?://[^\s<>()]*[^\s<>().,;:!?'\"]")
 SEARCH_FIELDS = ["summary", "status", "assignee", "issuetype", "parent"]
@@ -63,17 +65,24 @@ class CredentialError(Exception):
     """The token could not be read. Exit code 3: the agent stops."""
 
 
-def read_token(command: list[str] = TOKEN_COMMAND, timeout: int = 60) -> str:
+def read_secret(command: list[str], timeout: int = 60) -> str:
     try:
         result = subprocess.run(  # noqa: S603 - fixed command
             command, stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout, check=False
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         raise CredentialError(f"could not run {command[0]}: {type(error).__name__}") from None
-    token = result.stdout.decode().strip()
-    if result.returncode != 0 or not token:
-        raise CredentialError(f"{command[0]} exited {result.returncode} without a token (is 1Password locked?)")
-    return token
+    value = result.stdout.decode().strip()
+    if result.returncode != 0:
+        raise CredentialError(f"{command[0]} exited {result.returncode} (is 1Password locked?)")
+    if not value:
+        raise CredentialError(f"1Password field {command[-1] if command[-1] != '--reveal' else command[-2]} is empty")
+    return value
+
+
+def read_credentials(reader: Callable[[list[str]], str] = read_secret) -> tuple[str, str]:
+    """Email and API token of the agent account, both from the 1Password item, on every call."""
+    return reader(USERNAME_COMMAND), reader(TOKEN_COMMAND)
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -141,7 +150,7 @@ def check_key(key: str) -> str:
 
 
 class Jira:
-    def __init__(self, token: str, opener: Opener, email: str = EMAIL, site: str = SITE) -> None:
+    def __init__(self, email: str, token: str, opener: Opener, site: str = SITE) -> None:
         credentials = base64.b64encode(f"{email}:{token}".encode()).decode()
         self._auth = f"Basic {credentials}"
         self._opener = opener
@@ -341,7 +350,7 @@ def run(args: argparse.Namespace, jira: Jira) -> None:
 
 def main(
     argv: list[str],
-    token_reader: Callable[[], str] = read_token,
+    credentials_reader: Callable[[], tuple[str, str]] = read_credentials,
     opener_factory: Callable[[], Opener] = default_opener,
 ) -> int:
     try:
@@ -352,7 +361,7 @@ def main(
         for key in (getattr(args, "key", None), getattr(args, "parent", None)):
             if key is not None:
                 check_key(key)  # before 1Password and before reading any file
-        jira = Jira(token_reader(), opener_factory())
+        jira = Jira(*credentials_reader(), opener_factory())
         run(args, jira)
     except CredentialError as error:
         print(f"jira: no Jira credential: {error}. STOP: do not use another Jira login. Report to the owner.", file=sys.stderr)

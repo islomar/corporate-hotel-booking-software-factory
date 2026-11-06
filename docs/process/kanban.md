@@ -97,7 +97,7 @@ Meaning: the ticket will not be done. This is a valid outcome.
 ## Assignee
 
 The person or agent doing the work is the assignee.
-Agent work is assigned to the Atlassian account "Claude (CHB agent)" (<islomar+claude@gmail.com>).
+Agent work is assigned to the Claude account ("Claude (CHB agent)").
 
 Agents make every Jira write (create, transition, comment, assign) through `factory/bin/jira`, so Jira history shows the Claude account as the author.
 `acli` is logged in as the owner and is for the owner only.
