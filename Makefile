@@ -1,6 +1,5 @@
 .DEFAULT_GOAL := help
 SHELL := /bin/bash
-APP_URL ?= http://localhost:8080
 
 .PHONY: help setup check-npm dev down up check check-backend check-frontend check-deps test e2e format mutate infra-plan infra-apply
 
@@ -42,8 +41,10 @@ check-deps:
 
 test: check ## Alias for check
 
-e2e: ## Run Playwright against APP_URL (default: the container from `make up`)
-	cd e2e && APP_URL=$(APP_URL) npx playwright test
+# Installs what is missing and starts the production container when nothing answers on
+# :8080. With APP_URL set it tests that URL and starts nothing. See scripts/run_e2e.py.
+e2e: ## Run Playwright (starts the production container if needed; APP_URL=<url> tests a running app)
+	@python3 -I scripts/run_e2e.py
 
 format: ## Format all code
 	cd backend && uv run --locked ruff format . && uv run --locked ruff check --fix .
