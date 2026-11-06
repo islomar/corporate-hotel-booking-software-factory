@@ -9,10 +9,15 @@ locals {
     "artifactregistry.googleapis.com",
     "billingbudgets.googleapis.com",
     "cloudresourcemanager.googleapis.com",
+    "cloudtrace.googleapis.com",
     "iam.googleapis.com",
     "iamcredentials.googleapis.com",
+    "logging.googleapis.com",
+    "monitoring.googleapis.com",
     "run.googleapis.com",
     "sts.googleapis.com",
+    # Google's OTLP endpoint for traces and metrics (CHB-15). Already enabled on 2026-11-06.
+    "telemetry.googleapis.com",
   ])
 }
 

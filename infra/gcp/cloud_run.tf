@@ -25,6 +25,16 @@ resource "google_cloud_run_v2_service" "chb" {
     containers {
       image = "${var.region}-docker.pkg.dev/${var.project_id}/chb/app:bootstrap"
 
+      # Telemetry goes to Google's OTLP endpoint with the runtime identity (ADR-c17d, CHB-15).
+      env {
+        name  = "OTEL_EXPORTER_OTLP_ENDPOINT"
+        value = "https://telemetry.googleapis.com"
+      }
+      env {
+        name  = "GOOGLE_CLOUD_PROJECT"
+        value = var.project_id
+      }
+
       ports {
         name           = "http1"
         container_port = 8080

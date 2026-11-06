@@ -8,6 +8,11 @@ services:
     environment:
       UV_PROJECT_ENVIRONMENT: /venv
       UV_LINK_MODE: copy
+      # Telemetry to the lgtm container (ADR-c17d). Unset it to turn telemetry off.
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://lgtm:4318
+      OTEL_LOGS_EXPORTER: otlp
+      # Local only: export metrics after at most 5 s instead of 60 s.
+      OTEL_METRIC_EXPORT_INTERVAL: "5000"
     volumes:
       - ./backend:/app/backend
       - backend-venv:/venv
@@ -31,6 +36,14 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+
+  # Grafana with Loki, Tempo and Prometheus behind one OTLP endpoint: http://localhost:3000.
+  # Data lives in the container: `make down` discards it.
+  # Started without a health dependency: the backend drops telemetry until it is up.
+  # 0.39.0, not 0.40.0: 0.40.0 is younger than the 7-day release-age rule (2026-11-06).
+  lgtm:
+    image: grafana/otel-lgtm:0.39.0@sha256:4c8056c9c05fcb3c8fd93800e85334bfd79b4d0271b47a54a121a64af41fe1fe
+    ports: ["3000:3000"]
 
   app:
     profiles: ["prod"]

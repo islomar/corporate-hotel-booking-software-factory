@@ -1,11 +1,16 @@
 """FastAPI application: the JSON API under /api and, in production, the built frontend."""
 
 import os
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+
+from chb.logs import configure_logging
+from chb.telemetry import Telemetry, project_id_from_env, telemetry_from_env
 
 
 class Health(BaseModel):
@@ -13,8 +18,16 @@ class Health(BaseModel):
     version: str
 
 
-def create_app(static_dir: Path | None = None) -> FastAPI:
+def create_app(static_dir: Path | None = None, telemetry: Telemetry | None = None) -> FastAPI:
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
+        yield
+        # Cloud Run gives CPU during shutdown: export what is left.
+        if telemetry is not None:
+            telemetry.shutdown()
+
     app = FastAPI(
+        lifespan=lifespan,
         title="Corporate Hotel Booking",
         summary="Book hotel rooms for company employees under company booking policies.",
         docs_url="/api/docs",
@@ -29,6 +42,9 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
     if static_dir is not None and static_dir.is_dir():
         app.mount("/", StaticFiles(directory=static_dir, html=True), name="frontend")
 
+    if telemetry is not None:
+        telemetry.instrument(app)
+
     return app
 
 
@@ -37,4 +53,11 @@ def _static_dir_from_env() -> Path | None:
     return Path(value) if value else None
 
 
-app = create_app(_static_dir_from_env())
+def _app_from_env() -> FastAPI:
+    telemetry = telemetry_from_env(os.environ, version=os.environ.get("APP_VERSION", "dev"))
+    log_handler = telemetry.log_handler() if telemetry is not None else None
+    configure_logging(project_id_from_env(), [log_handler] if log_handler else [])
+    return create_app(_static_dir_from_env(), telemetry)
+
+
+app = _app_from_env()
