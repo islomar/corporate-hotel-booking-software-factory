@@ -67,13 +67,13 @@ Meaning: the change is merged and deployed, but nobody has yet confirmed that it
 
 - Enter: the PR is merged and, where it applies, deployed or applied.
   For Terraform changes, the owner has run `make infra-apply`.
-- Enter: in the same step, the worker adds a ticket comment headed "Acceptance criteria (Validating)".
-  A reader without context must see what is still missing. For each criterion not yet checked live, the comment states:
+- Enter: in the same step, the worker writes a section headed "Acceptance criteria (Validating)" in the ticket description, not in a comment.
+  A reader without context must see what is still missing. For each criterion not yet checked live, the section states:
   - What must happen, in the live system.
   - When: an absolute date and time, or the event that triggers it (for example "the next Dependabot run, Monday 2026-11-09 05:00 UTC").
   - Where to check: the exact URL or command.
   - Pass condition: what the check must show.
-  - Who checks: the agent or the owner. If the owner must act, the comment has numbered steps, as for Needs human.
+  - Who checks: the agent or the owner. If the owner must act, the section has numbered steps, as for Needs human.
   - If it fails: what happens next, and by when the ticket goes back to In Progress.
 - Leave to Done: each acceptance criterion is checked in the live system, and the evidence is written as a ticket comment.
   Evidence is concrete: the smoke test of the deploy, a `gcloud` or `gh api` read of the real setting, a screenshot, a log line, a metric.
