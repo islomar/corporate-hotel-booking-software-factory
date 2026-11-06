@@ -2,8 +2,8 @@
 #
 # A same-repository branch can add a `pull_request` workflow, and that branch copy runs with
 # repository secrets. Environment secrets limited to main never reach it: a `pull_request` job
-# runs on refs/pull/N/merge. `pull_request_target` and `workflow_run` jobs run on the default
-# branch, so review.yml and deploy.yml are admitted.
+# runs on refs/pull/N/merge. `workflow_run` jobs run on the default branch, so review.yml and
+# deploy.yml are admitted.
 #
 # Secret values never go into Terraform. The owner sets environment secrets by hand.
 

@@ -1,19 +1,27 @@
-# Automated PR review in shadow mode (ADR-ea8c, CHB-87).
+# Automated PR review in shadow mode (ADR-ea8c, CHB-87, CHB-93).
 #
 # Claude Code scores the PR against the CHB-40 rubric. factory/review/gate.py validates the
 # output, recomputes Merge Safety and decides. The reviewer App posts the verdict as a check
-# run named `review`. The `main` ruleset does not require it yet (stage 1, shadow).
+# run named `review` on the PR head commit. The `main` ruleset does not require it yet (stage 1, shadow).
 #
-# Why pull_request_target: on `pull_request`, a same-repository branch runs its own copy of
-# this file with the repository secrets, so a branch that edits it could read the reviewer keys.
-# On `pull_request_target`, GitHub always takes this file from the default branch (main).
+# Why workflow_run: review-trigger.yml runs on `pull_request` with no permissions and no secrets.
+# When it completes, this workflow runs. GitHub takes a workflow_run workflow from the default
+# branch (main), and its GITHUB_SHA and GITHUB_REF are main's. A branch that edits this file
+# changes nothing until the edit is merged. CHB-93 replaced `pull_request_target`, which GitHub
+# blocks on public repositories from 2026-12-02.
 #
 # Trust boundaries (GitHub Security Lab, "Preventing pwn requests"):
+# - Any branch can add a workflow named "Review trigger", so the triggering run proves nothing.
+#   The `resolve` job reads the head SHA from the workflow_run payload (set by GitHub), finds the
+#   PR through the API, and requires (factory/review/resolve_pr.py): an open, non-draft PR into
+#   main, from this repository, not by Dependabot, whose current head is that SHA.
+#   No artifact or PR text is read here.
+# - The `score-pr` job enters the `reviewer` environment only after `resolve` passed.
 # - The workspace is main at the commit this file came from. The gate, schema and prompt come
 #   from there, never from the PR.
 # - The PR head is data: checked out into a separate directory, never installed, built, sourced
 #   or run. No step restores or saves a cache. No `run:` block expands a PR-controlled string.
-# - Claude runs with --bare and read-only tools, and never sees the reviewer App key.
+# - Claude runs with --bare and read-only tools, and never sees the reviewer App key or a GitHub token.
 #   The Anthropic key is only in the env of the Claude step. The App token is minted after Claude exits.
 #
 # The three secrets live in the `reviewer` environment (main only). Until they exist there, the job
@@ -21,46 +29,104 @@
 name: Review
 
 on:
-  # zizmor flags pull_request_target as dangerous. This workflow checks out the PR head only as
-  # data, runs nothing from it, uses no cache, keeps no credentials in git config, and skips
-  # forks, Dependabot and drafts. See the trust boundaries above.
-  pull_request_target: # zizmor: ignore[dangerous-triggers]
-    types: [opened, synchronize, reopened, ready_for_review]
-    # Only PRs into main: the gate must come from main, and the diff base must be a main commit.
-    branches: [main]
+  # zizmor flags workflow_run as dangerous. This workflow runs only for `pull_request` runs of
+  # this repository, validates the PR through the API, checks out the PR head only as data,
+  # runs nothing from it, uses no cache and keeps no credentials in git config.
+  # See the trust boundaries above.
+  workflow_run: # zizmor: ignore[dangerous-triggers]
+    workflows: [Review trigger]
+    types: [completed]
 
 permissions: {}
 
+# head_branch is PR-controlled text. It is used only as a concurrency key, never in a shell.
 concurrency:
-  group: review-${{ github.event.pull_request.number }}
+  group: review-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: true
 
 jobs:
-  # Not named `review`: Actions posts a check under the job name, which would shadow the App's check.
-  score-pr:
-    name: score-pr
-    # Same-repository branches into main only: fork PRs never reach the secrets.
+  # No secrets, no environment. Decides which PR and which commits are reviewed.
+  resolve:
+    name: resolve
+    # Cheap filters on fields GitHub sets. The API checks below are the real control.
+    # Fork PRs never reach the secrets: a fork PR gets no review, and the owner reviews it.
     # Dependabot PRs follow ADR-ebe6.
     if: >-
-      github.event.pull_request.user.login != 'dependabot[bot]' &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.base.ref == 'main' &&
-      !github.event.pull_request.draft
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.repository.full_name == github.repository &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.actor.login != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      number: ${{ steps.pr.outputs.number }}
+      head-sha: ${{ steps.pr.outputs.head-sha }}
+      base-sha: ${{ steps.pr.outputs.base-sha }}
+    steps:
+      # github.sha is the main commit this workflow file came from. Only resolve_pr.py runs from it.
+      - name: Check out main (resolve script)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - id: pr
+        name: Find and validate the PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if ! [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::workflow_run.head_sha is not a commit SHA."; exit 1
+          fi
+          # The payload lists the PRs whose head is this SHA. It can be empty; then ask the API.
+          numbers=$(jq -r '.workflow_run.pull_requests[]?.number' "$GITHUB_EVENT_PATH")
+          if [ -z "$numbers" ]; then
+            numbers=$(gh api "repos/$REPO/commits/$HEAD_SHA/pulls" --jq '.[].number')
+          fi
+          files=()
+          for n in $(printf '%s\n' "$numbers" | sort -n -u); do
+            [[ "$n" =~ ^[0-9]+$ ]] || continue
+            gh api "repos/$REPO/pulls/$n" > "$RUNNER_TEMP/pr-$n.json"
+            files+=("$RUNNER_TEMP/pr-$n.json")
+          done
+          # Tested in factory/tests/test_resolve_pr.py. Prints number= and base-sha= lines, or nothing.
+          python3 -I factory/review/resolve_pr.py --repo "$REPO" --head-sha "$HEAD_SHA" "${files[@]}" > "$RUNNER_TEMP/resolved"
+          if [ ! -s "$RUNNER_TEMP/resolved" ]; then
+            echo "::notice::No open, non-draft PR into main from this repository has head $HEAD_SHA. No review."
+            exit 0
+          fi
+          cat "$RUNNER_TEMP/resolved" >> "$GITHUB_OUTPUT"
+          echo "head-sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/resolved"
+
+  # Not named `review`: a job check named `review` could be confused with the App's check.
+  score-pr:
+    name: score-pr
+    needs: resolve
+    if: needs.resolve.outputs.number != ''
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # The reviewer secrets live in this environment, limited to the main branch, not in repository
     # secrets: any branch can add a `pull_request` workflow, and its copy would get repository secrets.
-    # This job runs on main's ref under pull_request_target, so the environment admits it.
+    # Environment branch rules match GITHUB_REF, which is main under workflow_run, so the environment admits this job.
     environment: reviewer
     permissions:
       contents: read
+      pull-requests: read
     env:
       HAS_SECRETS: >-
         ${{ secrets.ANTHROPIC_API_KEY_REVIEW != '' &&
         secrets.REVIEWER_APP_CLIENT_ID != '' &&
         secrets.REVIEWER_APP_PRIVATE_KEY != '' }}
-      BASE_SHA: ${{ github.event.pull_request.base.sha }}
-      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_NUMBER: ${{ needs.resolve.outputs.number }}
+      BASE_SHA: ${{ needs.resolve.outputs.base-sha }}
+      HEAD_SHA: ${{ needs.resolve.outputs.head-sha }}
       # Claude Code native binary from npm, pinned by version and SHA-256 of the tarball.
       CLAUDE_VERSION: 2.1.311
       CLAUDE_SHA256: 4353c611f9a33063c5525348a15f1212bdc0085e4a7a81b8370b790003df1b56
@@ -82,13 +148,16 @@ jobs:
         if: env.HAS_SECRETS == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ needs.resolve.outputs.head-sha }}
           path: pr-head
           fetch-depth: 0 # the diff needs the merge base
           persist-credentials: false
 
       - name: Prepare the review directory
         if: env.HAS_SECRETS == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
           dir="$RUNNER_TEMP/review"
           mkdir -p "$dir"
@@ -96,7 +165,7 @@ jobs:
           git -C "$dir/head" diff --no-renames "$BASE_SHA...$HEAD_SHA" > "$dir/pr.diff"
           git -C "$dir/head" diff -z --no-renames --name-only "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed-files.z"
           tr '\0' '\n' < "$RUNNER_TEMP/changed-files.z" > "$dir/changed-files.txt"
-          jq '{title: .pull_request.title, body: .pull_request.body}' "$GITHUB_EVENT_PATH" > "$dir/pr.json"
+          gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '{title: .title, body: .body}' > "$dir/pr.json"
           rm -rf "$dir/head/.git"
           # A symlink in the PR could point at runner files, such as /proc/self/environ.
           find "$dir/head" -type l -delete
@@ -158,7 +227,6 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           runs="$RUNNER_TEMP/prior-runs.json"
           for sha in $(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/commits" --jq '.[].sha'); do
