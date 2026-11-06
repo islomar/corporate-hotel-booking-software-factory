@@ -13,8 +13,9 @@
 # Trust boundaries (GitHub Security Lab, "Preventing pwn requests"):
 # - Any branch can add a workflow named "Review trigger", so the triggering run proves nothing.
 #   The `resolve` job reads the head SHA from the workflow_run payload (set by GitHub), finds the
-#   PR through the API, and requires: an open, non-draft PR into main, from this repository,
-#   not by Dependabot, whose current head is that SHA. No artifact or PR text is read here.
+#   PR through the API, and requires (factory/review/resolve_pr.py): an open, non-draft PR into
+#   main, from this repository, not by Dependabot, whose current head is that SHA.
+#   No artifact or PR text is read here.
 # - The `score-pr` job enters the `reviewer` environment only after `resolve` passed.
 # - The workspace is main at the commit this file came from. The gate, schema and prompt come
 #   from there, never from the PR.
@@ -66,6 +67,13 @@ jobs:
       head-sha: ${{ steps.pr.outputs.head-sha }}
       base-sha: ${{ steps.pr.outputs.base-sha }}
     steps:
+      # github.sha is the main commit this workflow file came from. Only resolve_pr.py runs from it.
+      - name: Check out main (resolve script)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
       - id: pr
         name: Find and validate the PR
         env:
@@ -81,33 +89,21 @@ jobs:
           if [ -z "$numbers" ]; then
             numbers=$(gh api "repos/$REPO/commits/$HEAD_SHA/pulls" --jq '.[].number')
           fi
-          found=""
+          files=()
           for n in $(printf '%s\n' "$numbers" | sort -n -u); do
             [[ "$n" =~ ^[0-9]+$ ]] || continue
-            pr="$RUNNER_TEMP/pr-$n.json"
-            gh api "repos/$REPO/pulls/$n" > "$pr"
-            if jq -e --arg repo "$REPO" --arg sha "$HEAD_SHA" '
-                .state == "open" and (.draft | not) and
-                .base.ref == "main" and .base.repo.full_name == $repo and
-                .head.repo.full_name == $repo and .head.sha == $sha and
-                .user.login != "dependabot[bot]"' "$pr" > /dev/null; then
-              found="$n"; break
-            fi
+            gh api "repos/$REPO/pulls/$n" > "$RUNNER_TEMP/pr-$n.json"
+            files+=("$RUNNER_TEMP/pr-$n.json")
           done
-          if [ -z "$found" ]; then
+          # Tested in factory/tests/test_resolve_pr.py. Prints number= and base-sha= lines, or nothing.
+          python3 -I factory/review/resolve_pr.py --repo "$REPO" --head-sha "$HEAD_SHA" "${files[@]}" > "$RUNNER_TEMP/resolved"
+          if [ ! -s "$RUNNER_TEMP/resolved" ]; then
             echo "::notice::No open, non-draft PR into main from this repository has head $HEAD_SHA. No review."
             exit 0
           fi
-          base_sha=$(jq -r '.base.sha' "$RUNNER_TEMP/pr-$found.json")
-          if ! [[ "$base_sha" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::PR base SHA is not a commit SHA."; exit 1
-          fi
-          {
-            echo "number=$found"
-            echo "head-sha=$HEAD_SHA"
-            echo "base-sha=$base_sha"
-          } >> "$GITHUB_OUTPUT"
-          echo "Reviewing PR #$found at $HEAD_SHA (base $base_sha)."
+          cat "$RUNNER_TEMP/resolved" >> "$GITHUB_OUTPUT"
+          echo "head-sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/resolved"
 
   # Not named `review`: a job check named `review` could be confused with the App's check.
   score-pr:

@@ -32,7 +32,8 @@ How it starts:
 
 1. `.github/workflows/review-trigger.yml` runs on `pull_request`. It has no permissions and no secrets, and only echoes a line.
 2. When it completes, `review.yml` runs on `workflow_run`. GitHub takes it from `main`, so the workflow, gate, schema and prompt always come from `main`.
-3. Its `resolve` job takes the head SHA from the event, finds the PR through the API and checks it: open, not draft, into `main`, from this repository, not Dependabot, head equal to that SHA.
+3. Its `resolve` job takes the head SHA from the event and finds the PR through the API.
+   `review/resolve_pr.py` checks it: open, not draft, into `main`, from this repository, not Dependabot, head equal to that SHA.
 4. Its `score-pr` job runs in the `reviewer` environment, reads the PR head as data and never runs it.
 
 A change to `review.yml` takes effect only after merge: the PR that changes it is reviewed by the copy on `main`.
@@ -42,6 +43,7 @@ A change to `review.yml` takes effect only after merge: the PR that changes it i
 | `review/prompt.md` | Review instructions. PR text and code are untrusted data. |
 | `review/schema.json` | Output shape: five dimensions, each with a score and findings, plus a summary. |
 | `review/gate.py` | Validates the output, recomputes the scores, decides, and builds the check run. |
+| `review/resolve_pr.py` | Picks the PR to review from API data: open, not draft, into `main`, same repository, not Dependabot, head equal to the run's SHA. |
 
 The gate ignores every score the model claims. Each dimension starts at 10 and loses 3 per critical finding, 2 per improvement and 0.5 per cleanup.
 A critical finding caps its dimension at 7. Merge Safety is the weighted mean: code quality 30, security 25, business alignment 15, tests 15, architecture 15.

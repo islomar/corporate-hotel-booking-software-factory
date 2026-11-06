@@ -54,7 +54,7 @@ What GitHub documents:
 - On `pull_request_target`, the workflow file and `GITHUB_SHA` come from the default branch, and environment rules evaluate against it (since 2025-12-08).
 - From 2026-12-02 GitHub blocks `pull_request_target` on public repositories unless an Actions event policy allows it. This personal repository has no event policies (checked 2026-11-06, CHB-93).
 - On `workflow_run`, the workflow file comes from the default branch, and `GITHUB_SHA` and `GITHUB_REF` are the default branch's. The triggered workflow gets secrets even if the triggering one did not.
-- An environment's deployment branch rule "is matched against the `GITHUB_REF` of the workflow run". So a `workflow_run` job matches `main`.
+- An environment's deployment branch rule "is matched against the `GITHUB_REF` of the workflow run". A `workflow_run` job therefore matches `main`.
 
 ## Options
 
@@ -88,8 +88,10 @@ The first version (CHB-87) used `pull_request`, where a branch that edits `revie
   - `resolve`: no environment, no secrets, `contents: read` and `pull-requests: read`.
     It requires a `pull_request` run of this repository that succeeded, from a branch of this repository, not by Dependabot.
     The head SHA comes from `workflow_run.head_sha`, which GitHub sets. The PR number comes from `workflow_run.pull_requests`, or, when that list is empty, from the API (`commits/{sha}/pulls`).
-    The job reads the PR from the API and requires: open, not draft, base `main` of this repository, head from this repository, head SHA equal to the run's SHA, author not Dependabot.
+    The job reads the PR from the API. `factory/review/resolve_pr.py` (unit-tested, run from `main`) requires:
+    open, not draft, base `main` of this repository, head from this repository, head SHA equal to the run's SHA, author not Dependabot.
     It checks the formats (number digits only, SHAs 40 hex) before it writes its outputs. No artifact or PR text crosses into the next job.
+    When several open PRs share the head SHA, the lowest number is reviewed. The check run attaches to the SHA, so all of them show it.
   - `score-pr`: runs only when `resolve` found a PR. It holds the reviewer secrets.
 - Any branch can add a workflow named "Review trigger", or change the real one. That only starts `review.yml`, which then reviews a real PR head commit or does nothing.
 - The reviewer secrets are environment secrets of `reviewer`, which admits the `main` branch only (`infra/github/environments.tf`).
