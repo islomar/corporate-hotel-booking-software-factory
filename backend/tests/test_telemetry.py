@@ -2,14 +2,24 @@ import asyncio
 import io
 import json
 import logging
+import math
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
+from dataclasses import dataclass, field
 
 import httpx2
 import pytest
 from fastapi.testclient import TestClient
-from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+from opentelemetry.sdk.metrics.export import (
+    InMemoryMetricReader,
+    MetricExporter,
+    MetricExportResult,
+    MetricsData,
+    PeriodicExportingMetricReader,
+)
+from opentelemetry.sdk.trace import ReadableSpan
+from opentelemetry.sdk.trace.export import SpanExportResult
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from chb.app import app_from_env, create_app
@@ -197,6 +207,22 @@ def test_google_endpoints_use_application_default_credentials() -> None:
     assert not uses_google_auth("https://evilgoogleapis.com")
 
 
+@pytest.fixture
+def restore_logging() -> Iterator[None]:
+    names = ["", "uvicorn", "uvicorn.error", "uvicorn.access"]
+    saved = [
+        (logging.getLogger(n), logging.getLogger(n).handlers[:], logging.getLogger(n).propagate)
+        for n in names
+    ]
+    level = logging.getLogger().level
+    yield
+    for logger, handlers, propagate in saved:
+        logger.handlers = handlers
+        logger.propagate = propagate
+    logging.getLogger().setLevel(level)
+
+
+@pytest.mark.usefixtures("restore_logging")
 def test_app_serves_when_telemetry_setup_fails(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -216,14 +242,15 @@ def test_app_serves_when_telemetry_setup_fails(
     assert "no Application Default Credentials" in warnings[0]["message"]
 
 
+@dataclass
 class BlockingTelemetry(Telemetry):
     """A flush that hangs, like an export to an endpoint that does not answer."""
 
-    flushes = 0
-    release = threading.Event()
+    flushes: int = 0
+    release: threading.Event = field(default_factory=threading.Event)
 
     def flush(self) -> None:
-        type(self).flushes += 1
+        self.flushes += 1
         self.release.wait(5)
 
 
@@ -251,7 +278,7 @@ def test_hanging_endpoint_delays_a_response_by_at_most_the_timeout(
         try:
             return [await timed_get(), await timed_get()]
         finally:
-            BlockingTelemetry.release.set()
+            telemetry.release.set()
 
     (first_status, first_seconds), (second_status, second_seconds) = asyncio.run(two_requests())
 
@@ -259,7 +286,7 @@ def test_hanging_endpoint_delays_a_response_by_at_most_the_timeout(
     assert 0.2 <= first_seconds < 1
     # The breaker is open: the second response does not wait for a flush.
     assert second_seconds < 0.1
-    assert BlockingTelemetry.flushes == 1
+    assert telemetry.flushes == 1
 
 
 def test_slow_flush_opens_the_breaker_until_it_expires(
@@ -287,3 +314,54 @@ def test_slow_flush_opens_the_breaker_until_it_expires(
         client.get("/api/openapi.json")
 
     assert flushes == [0.0, 31.0]
+
+
+class FailingExporter(InMemorySpanExporter):
+    """An endpoint that answers fast with an error, like a 403 before IAM propagates."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        self.calls += 1
+        return SpanExportResult.FAILURE
+
+
+def test_fast_export_failure_opens_the_breaker(metrics: InMemoryMetricReader) -> None:
+    exporter = FailingExporter()
+    telemetry = Telemetry.create(span_exporter=exporter, metric_reader=metrics, version="dev")
+    client = TestClient(create_app(telemetry=telemetry))
+
+    for _ in range(3):
+        assert client.get("/api/openapi.json").status_code == 200
+
+    assert exporter.calls == 1
+
+
+def test_shutdown_exports_metrics_not_yet_exported(spans: InMemorySpanExporter) -> None:
+    exported: list[MetricsData] = []
+
+    class RecordingExporter(MetricExporter):
+        def __init__(self) -> None:
+            super().__init__()
+
+        def export(
+            self, metrics_data: MetricsData, timeout_millis: float = 10_000, **kwargs: object
+        ) -> MetricExportResult:
+            exported.append(metrics_data)
+            return MetricExportResult.SUCCESS
+
+        def force_flush(self, timeout_millis: float = 10_000) -> bool:
+            return True
+
+        def shutdown(self, timeout_millis: float = 30_000, **kwargs: object) -> None:
+            pass
+
+    reader = PeriodicExportingMetricReader(RecordingExporter(), export_interval_millis=math.inf)
+    telemetry = Telemetry.create(span_exporter=spans, metric_reader=reader, version="dev")
+    telemetry.meter_provider.get_meter("t").create_counter("bookings").add(1)
+
+    telemetry.shutdown()
+
+    assert len(exported) == 1

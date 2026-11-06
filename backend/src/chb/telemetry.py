@@ -36,8 +36,8 @@ from opentelemetry.sdk._logs.export import BatchLogRecordProcessor, LogRecordExp
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import MetricReader, PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter, SpanExportResult
 from opentelemetry.sdk.trace.sampling import (
     ALWAYS_ON,
     Decision,
@@ -93,11 +93,40 @@ class DropHealthChecks(Sampler):
         return "DropHealthChecks"
 
 
+class ExportFailedError(Exception):
+    pass
+
+
+class FailureTrackingSpanExporter(SpanExporter):
+    """Remembers failed exports. `force_flush` reports success even when the export failed."""
+
+    def __init__(self, exporter: SpanExporter) -> None:
+        self._exporter = exporter
+        self._failed = False
+
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        result = self._exporter.export(spans)
+        if result is not SpanExportResult.SUCCESS:
+            self._failed = True
+        return result
+
+    def take_failure(self) -> bool:
+        failed, self._failed = self._failed, False
+        return failed
+
+    def shutdown(self) -> None:
+        self._exporter.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30_000) -> bool:
+        return self._exporter.force_flush(timeout_millis)
+
+
 @dataclass
 class Telemetry:
     tracer_provider: TracerProvider
     meter_provider: MeterProvider
     logger_provider: LoggerProvider | None = None
+    span_exports: FailureTrackingSpanExporter | None = None
     metric_interval_seconds: float = DEFAULT_METRIC_INTERVAL_SECONDS
     flush_timeout_seconds: float = FLUSH_TIMEOUT_SECONDS
     slow_flush_seconds: float = SLOW_FLUSH_SECONDS
@@ -126,7 +155,8 @@ class Telemetry:
             attributes["gcp.project_id"] = project_id
         resource = Resource.create(attributes)
         tracer_provider = TracerProvider(resource=resource, sampler=ParentBased(DropHealthChecks()))
-        tracer_provider.add_span_processor(BatchSpanProcessor(span_exporter))
+        span_exports = FailureTrackingSpanExporter(span_exporter)
+        tracer_provider.add_span_processor(BatchSpanProcessor(span_exports))
         logger_provider = None
         if log_exporter is not None:
             logger_provider = LoggerProvider(resource=resource)
@@ -135,6 +165,7 @@ class Telemetry:
             tracer_provider=tracer_provider,
             meter_provider=MeterProvider(resource=resource, metric_readers=[metric_reader]),
             logger_provider=logger_provider,
+            span_exports=span_exports,
             metric_interval_seconds=metric_interval_seconds,
         )
 
@@ -163,6 +194,8 @@ class Telemetry:
         """Blocking export. The SDK ignores the timeout argument: callers bound the wait."""
         timeout_millis = int(self.flush_timeout_seconds * 1000)
         self.tracer_provider.force_flush(timeout_millis)
+        if self.span_exports is not None and self.span_exports.take_failure():
+            raise ExportFailedError("span export failed")
         if self.logger_provider is not None:
             self.logger_provider.force_flush(timeout_millis)
         now = self.clock()
@@ -171,6 +204,8 @@ class Telemetry:
             self.meter_provider.force_flush(timeout_millis)
 
     def shutdown(self) -> None:
+        # The metric reader has no timer thread, so its shutdown would not collect: flush first.
+        self.meter_provider.force_flush()
         self.tracer_provider.shutdown()
         self.meter_provider.shutdown()
         if self.logger_provider is not None:
