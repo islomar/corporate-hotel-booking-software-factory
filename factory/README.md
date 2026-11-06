@@ -51,6 +51,9 @@ It replaces the section up to the next heading of the same or a higher level, or
 The new section is a level-2 heading and the body. In the body, lines that start with a dash and a space become a bullet list.
 It sends every other part of the description back unchanged. It refuses a description with two such headings.
 It reads, then writes: it overwrites an edit that someone else makes between the two requests.
+A bad heading, an empty body, a duplicate key or more than 50 issues exit 2 before the wrapper reads 1Password.
+
+`view` shows a bullet list as lines that start with a dash.
 
 Exit codes: 0 done, 1 Jira refused or failed, 2 usage error, 3 no credential (1Password locked or `op` failed). On 3 the agent stops and reports.
 

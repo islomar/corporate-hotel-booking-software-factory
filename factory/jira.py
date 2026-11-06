@@ -25,7 +25,7 @@ Exit codes:
   0  done
   1  Jira refused or failed (HTTP error, unknown status, parent is not an epic,
      an issue that could not be ranked)
-  2  usage error
+  2  usage error (also a bad section heading, an empty body, a duplicate rank key)
   3  no credential: 1Password is locked or `op` failed. The agent stops and reports.
 """
 
@@ -196,11 +196,7 @@ def replace_section(description: dict[str, Any] | None, heading: str, body: str)
     heading of the same or a higher level, or at the end. It is replaced by a level-2 heading and
     the body. Without such a heading the section is appended. Other nodes are kept as they are.
     """
-    heading = heading.strip()
-    if not heading or "\n" in heading:
-        raise JiraError("heading must be one non-empty line")
-    if not body.strip():
-        raise JiraError("section body is empty")
+    heading = check_section_input(heading, body)
     doc = description if isinstance(description, dict) and description.get("type") == "doc" else None
     content: list[Any] = list(doc.get("content", [])) if doc else []
     new = [
@@ -223,6 +219,24 @@ def replace_section(description: dict[str, Any] | None, heading: str, body: str)
     result = dict(doc) if doc else {"type": "doc", "version": 1}
     result["content"] = content
     return result
+
+
+def check_section_input(heading: str, body: str) -> str:
+    """Refuse a bad heading or an empty body (UsageError, exit 2). Return the stripped heading."""
+    heading = heading.strip()
+    if not heading or "\n" in heading:
+        raise UsageError("heading must be one non-empty line")
+    if not body.strip():
+        raise UsageError("section body is empty")
+    return heading
+
+
+def check_rank_input(keys: list[str], anchor: str) -> None:
+    """Refuse a rank request that makes no sense (UsageError, exit 2). Keys are checked apart."""
+    if not keys or len(keys) > RANK_LIMIT:
+        raise UsageError(f"rank takes 1 to {RANK_LIMIT} issues, got {len(keys)}")
+    if len(set(keys)) != len(keys) or anchor in keys:
+        raise UsageError("each issue may appear once, and not as its own anchor")
 
 
 def _is_heading(node: Any) -> bool:
@@ -330,22 +344,23 @@ class Jira:
     def rank(self, keys: list[str], *, before: str | None = None, after: str | None = None) -> None:
         """Move the issues, in the given order, just before or just after another issue."""
         if (before is None) == (after is None):
-            raise JiraError("rank needs exactly one of before or after")
+            raise UsageError("rank needs exactly one of before or after")
         anchor = check_key(before or after or "")
         for key in keys:
             check_key(key)
-        if not keys or len(keys) > RANK_LIMIT:
-            raise JiraError(f"rank takes 1 to {RANK_LIMIT} issues, got {len(keys)}")
-        if len(set(keys)) != len(keys) or anchor in keys:
-            raise JiraError("each issue may appear once, and not as its own anchor")
+        check_rank_input(keys, anchor)
         side = "rankBeforeIssue" if before else "rankAfterIssue"
         path = "/rest/agile/1.0/issue/rank"
         status, raw = self.send("PUT", path, {"issues": keys, side: anchor})
+        if status in (200, 204) and not raw.strip():
+            return
         data = _json_object("PUT", path, raw, empty_ok=True)
-        failed = [e for e in data.get("entries", []) if e.get("errors") or e.get("status", 200) >= 300]
-        if status == 207 or failed:
-            details = "; ".join(f"{e.get('issueKey', e.get('issueId', '?'))}: {', '.join(map(str, e.get('errors', [])))}" for e in failed)
-            raise JiraError(f"rank partly failed (HTTP {status}): {details or 'no details'}")
+        entries = data.get("entries")
+        entries = [e for e in entries if isinstance(e, dict)] if isinstance(entries, list) else []
+        failed = [e for e in entries if e.get("errors") or e.get("status") not in (None, 200, 204)]
+        if status not in (200, 204) or failed:
+            details = "; ".join(f"{e.get('issueKey', e.get('issueId', '?'))}: {_errors(e.get('errors'))}" for e in failed)
+            raise JiraError(f"rank failed for some issues (HTTP {status}): {details or 'no details'}")
 
     def set_section(self, key: str, heading: str, body: str) -> bool:
         """Set one section of the description. Return False when it already had that content."""
@@ -356,6 +371,10 @@ class Jira:
             return False
         self.request("PUT", f"/rest/api/3/issue/{key}", {"fields": {"description": updated}}, empty_ok=True)
         return True
+
+
+def _errors(errors: Any) -> str:
+    return ", ".join(map(str, errors)) if isinstance(errors, list) else str(errors or "")
 
 
 def _json_object(method: str, path: str, raw: bytes, *, empty_ok: bool) -> dict[str, Any]:
@@ -494,7 +513,7 @@ def run(args: argparse.Namespace, jira: Jira) -> None:
         jira.rank(args.keys, before=args.before, after=args.after)
         print(f"{' '.join(args.keys)} ranked {'before ' + args.before if args.before else 'after ' + args.after}")
     elif args.command == "section":
-        changed = jira.set_section(args.key, args.heading, _read_text(args.body_file))
+        changed = jira.set_section(args.key, args.heading, args.body)
         print(f"{args.key} section {args.heading!r} {'set' if changed else 'unchanged'}")
 
 
@@ -512,6 +531,11 @@ def main(
         for key in keys:
             if key is not None:
                 check_key(key)  # before 1Password and before reading any file
+        if args.command == "rank":
+            check_rank_input(args.keys, args.before or args.after)
+        if args.command == "section":
+            args.body = _read_text(args.body_file)
+            check_section_input(args.heading, args.body)
         jira = Jira(*credentials_reader(), opener_factory())
         run(args, jira)
     except CredentialError as error:

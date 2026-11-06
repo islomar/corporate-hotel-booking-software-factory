@@ -17,6 +17,7 @@ from jira import (
     CredentialError,
     Jira,
     JiraError,
+    UsageError,
     adf_to_text,
     main,
     read_credentials,
@@ -462,17 +463,24 @@ class RankTest(unittest.TestCase):
         for argv in (["rank", "CHB-5"], ["rank", "CHB-5", "--before", "CHB-9", "--after", "CHB-8"], ["rank", "--before", "CHB-9"]):
             self.assertEqual(_run(argv, FakeJira({}))[0], 2, argv)
 
-    def test_refuses_an_issue_ranked_against_itself_or_listed_twice(self) -> None:
-        for argv in (["rank", "CHB-5", "--before", "CHB-5"], ["rank", "CHB-5", "CHB-5", "--before", "CHB-9"]):
+    def test_refuses_an_issue_ranked_against_itself_listed_twice_or_more_than_50_as_usage_errors(self) -> None:
+        too_many = [f"CHB-{n}" for n in range(1, 52)]
+        for argv in (
+            ["rank", "CHB-5", "--before", "CHB-5"],
+            ["rank", "CHB-5", "CHB-5", "--before", "CHB-9"],
+            ["rank", *too_many, "--before", "CHB-99"],
+        ):
             fake = FakeJira({})
-            self.assertEqual(_run(argv, fake)[0], 1, argv)
-            self.assertEqual(fake.requests, [], argv)
+            code, _, _ = _run(argv, fake, credentials_reader=mock.Mock(side_effect=AssertionError("read credentials")))
+            self.assertEqual(code, 2, argv[:4])
+            self.assertEqual(fake.requests, [], argv[:4])
 
-    def test_refuses_more_than_50_issues(self) -> None:
-        fake = FakeJira({})
-        keys = [f"CHB-{n}" for n in range(1, 52)]
-        self.assertEqual(_run(["rank", *keys, "--before", "CHB-99"], fake)[0], 1)
-        self.assertEqual(fake.requests, [])
+    def test_unexpected_207_body_shape_still_fails_cleanly(self) -> None:
+        for body in (b'{"entries": "x"}', b'{"entries": [1, {"issueKey": "CHB-5", "errors": "bad"}]}'):
+            fake = FakeJira({RANK: FakeResponse(body, 207)})
+            code, _, err = _run(["rank", "CHB-5", "--before", "CHB-9"], fake)
+            self.assertEqual(code, 1, body)
+            self.assertNotIn("unexpected response", err, body)
 
 
 HEADING = "Acceptance criteria (Validating)"
@@ -547,9 +555,11 @@ class ReplaceSectionTest(unittest.TestCase):
 
     def test_refuses_an_ambiguous_section_an_empty_body_or_a_bad_heading(self) -> None:
         twice = _doc(_heading(HEADING), _para("a"), _heading(HEADING), _para("b"))
-        for description, heading, body in ((twice, HEADING, "x"), (None, HEADING, "  \n"), (None, " ", "x"), (None, "a\nb", "x")):
-            with self.assertRaises(JiraError):
-                replace_section(description, heading, body)
+        with self.assertRaises(JiraError):
+            replace_section(twice, HEADING, "x")
+        for heading, body in ((HEADING, "  \n"), (" ", "x"), ("a\nb", "x")):
+            with self.assertRaises(UsageError):
+                replace_section(None, heading, body)
 
 
 class SectionCommandTest(unittest.TestCase):
@@ -588,6 +598,25 @@ class SectionCommandTest(unittest.TestCase):
         fake = FakeJira({})
         self.assertEqual(self._section(fake, key="OTHER-12")[0], 1)
         self.assertEqual(fake.requests, [])
+
+    def test_empty_body_is_a_usage_error_before_credentials_or_requests(self) -> None:
+        fake = FakeJira({})
+        with tempfile.NamedTemporaryFile("w") as handle:
+            argv = ["section", "CHB-12", "--heading", HEADING, "--body-file", handle.name]
+            code, _, err = _run(argv, fake, credentials_reader=mock.Mock(side_effect=AssertionError("read credentials")))
+
+        self.assertEqual(code, 2)
+        self.assertIn("body is empty", err)
+        self.assertEqual(fake.requests, [])
+
+    def test_two_matching_headings_exit_1_without_a_write(self) -> None:
+        current = _doc(_heading(HEADING), _para("a"), _heading(HEADING), _para("b"))
+        fake = FakeJira({("GET", DESCRIPTION_PATH): {"fields": {"description": current}}})
+        code, _, err = self._section(fake)
+
+        self.assertEqual(code, 1)
+        self.assertIn("2 sections", err)
+        self.assertEqual(fake.writes(), [])
 
 
 if __name__ == "__main__":
