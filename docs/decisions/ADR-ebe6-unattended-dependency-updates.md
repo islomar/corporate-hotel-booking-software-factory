@@ -10,6 +10,7 @@
     - [Supply chain checks in CI](#supply-chain-checks-in-ci)
     - [Lockfile-only installs](#lockfile-only-installs)
     - [Auto-merge (`.github/workflows/dependabot-auto-merge.yml`)](#auto-merge-githubworkflowsdependabot-auto-mergeyml)
+    - [Supply-chain check instead of code-owner review (CHB-90)](#supply-chain-check-instead-of-code-owner-review-chb-90)
   - [Consequences](#consequences)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -88,9 +89,9 @@ These run as steps of the `backend`, `frontend` and `e2e` jobs, so auto-merge wa
   - Safe: patch and minor updates from 1.0 up, and GitHub Actions commit bumps without a version.
   - Needs a human: majors, minors of 0.x versions, Playwright, and updates without a known type.
 - Safe PRs get auto-merge (squash) and an approval from a GitHub App token.
-- The workflow enables auto-merge only when the `main` ruleset requires `backend`, `frontend` and `e2e`.
+- The workflow enables auto-merge only when the `main` ruleset requires `backend`, `frontend`, `e2e` and `supply-chain`.
   Without required checks, auto-merge would merge before CI.
-- Labels: `dependencies:auto-merge`, `dependencies:needs-human`, `dependencies:safe` (safe, but a person merges).
+- Labels: `dependencies:auto-merge`, `dependencies:needs-human`, `dependencies:safe` (safe, but auto-merge is off: a person merges).
 
 Auto-merge needs the App token.
 Events created with `GITHUB_TOKEN` start no new workflow runs, except `workflow_dispatch` and `repository_dispatch`.
@@ -99,6 +100,41 @@ GitHub App tokens do not have this limit.
 Runs triggered by Dependabot see only Dependabot secrets, so the App credentials go there.
 Until the App exists, safe PRs get `dependencies:safe` and a person merges them.
 
+### Supply-chain check instead of code-owner review (CHB-90)
+
+CODEOWNERS made the owner the code owner of every manifest and lockfile.
+The `main` ruleset requires code-owner review, and a GitHub App cannot be a code owner.
+So every Dependabot PR waited for the owner, auto-merge or not.
+
+- Manifests, lockfiles, `Dockerfile`, `compose.yaml`, `.nvmrc` and `.python-version` leave CODEOWNERS.
+  `.npmrc` stays: it holds the release-age window and its exemptions.
+- A required check `supply-chain` (`.github/workflows/supply-chain.yml`, `scripts/check_supply_chain.py`) takes the code owner's place for these files.
+- Changed files come from `git diff --no-renames --name-only base...head`.
+  The file list in the script is wider than the old CODEOWNERS list. It adds other lockfiles, `requirements*.txt`, compose and Dockerfile variants, `.node-version`.
+- The check passes when no supply-chain file changed, or the owner's latest deciding review approves the head commit, or the PR is Dependabot's:
+  - the PR author is `dependabot[bot]`;
+  - every commit has author `dependabot[bot]`, committer `web-flow` and a signature GitHub verified.
+    GitHub records Dependabot commits this way (PRs #1 to #4). The committer is `web-flow`, not `dependabot[bot]`.
+  - the API lists every commit of the PR (`pulls/{n}/commits` stops at 250).
+- A change to release-age settings needs the owner even from Dependabot: `min-release-age*` keys in any `.npmrc`, `exclude-newer*` keys under `[tool.uv]` in any `pyproject.toml`.
+  The script compares parsed settings, so a dependency floor bump in `pyproject.toml` does not count.
+- Data comes from git and the GitHub API. PR title, body and labels are never read.
+- Triggers: `pull_request` and `pull_request_review` (`submitted`, `dismissed`), so an owner approval re-runs it.
+  Both report a check run named `supply-chain` on the head commit. A per-PR concurrency group cancels the older run.
+- The workflow and the script run from the PR's merge commit. Their integrity rests on CODEOWNERS: both have their own owner lines.
+
+Consequences:
+
+- A person who pushes to a Dependabot branch, or clicks "Update branch", adds a commit that is not Dependabot's. The PR then needs the owner.
+  To refresh a Dependabot PR, comment `@dependabot rebase`.
+- GitHub Actions bumps change `.github/workflows/`, which stays in CODEOWNERS. They keep needing the owner.
+  Next step, after CHB-86 removes `workflows: write` from the agent App: move `/.github/workflows/` out of CODEOWNERS and add it to the script's supply-chain set.
+  Without that second part, Actions pins lose all protection.
+- Unverified: that GitHub uses the latest `supply-chain` check run when the two events both report one. Test it on the first owner-approved supply-chain PR: the merge box must turn green after the approval.
+- Unverified: whether an actor with contents write can create a commit through the API that GitHub records with author `dependabot[bot]`, committer `web-flow` and a verified signature.
+  The PR-author condition stays as a second fence.
+- Owner-authored PRs cannot pass through owner approval, because GitHub blocks self-approval. The ruleset's required approval blocks them anyway.
+
 ## Consequences
 
 - Fewer PRs: one per group and week, plus majors and 0.x updates.
@@ -106,7 +142,10 @@ Until the App exists, safe PRs get `dependencies:safe` and a person merges them.
 - Adding `exclude-newer` re-locked the backend to versions at least 7 days old. Nine packages moved back one release, and the ruff floor moved from 0.17.4 to 0.17.3.
 - A security fix younger than 7 days fails the release-age check until a person adds an exemption.
   Dependabot cooldown does not delay security updates.
-- Unattended merge starts only when three things exist: the GitHub App with its Dependabot secrets, the `main` ruleset with required checks, and the `allow auto-merge` repository setting.
-  If the ruleset requires an approval, the App approval must count, or the ruleset needs a rule for Dependabot PRs.
+- Unattended merge starts only when these exist:
+  the GitHub App with its Dependabot secrets, the `main` ruleset requiring `backend`, `frontend`, `e2e` and `supply-chain`, and the `allow auto-merge` setting.
+  The ruleset requires 1 approval. The App approval must count (CHB-88).
+  A user report says an App approval with contents read shows as "approved with read-only permissions" and does not count.
+  The auto-merge token has contents write.
 - When an update breaks something, the fix includes a test that catches the break. See `docs/knowledge/dependency-update-breaks-get-a-test.md`.
 - Findings from the setup: `docs/knowledge/release-age-applies-at-lock-time.md`.

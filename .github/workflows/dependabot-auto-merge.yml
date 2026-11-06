@@ -7,7 +7,8 @@
 # update type. Those PRs get the `dependencies:needs-human` label.
 #
 # Auto-merge waits only for the required checks of the `main` ruleset. This workflow
-# enables it only when that ruleset requires `backend`, `frontend` and `e2e`.
+# enables it only when that ruleset requires `backend`, `frontend`, `e2e` and
+# `supply-chain`. Supply-chain files have no code owner: `supply-chain` replaces it.
 #
 # The merge must not use GITHUB_TOKEN: events created with it start no workflow runs, so
 # CI on `main` and the deploy would never run. Auto-merge is enabled with a GitHub App
@@ -84,7 +85,7 @@ jobs:
         run: |
           required=$(gh api "repos/$REPO/rules/branches/main" \
             --jq '[.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context] | unique | join(" ")')
-          for check in backend frontend e2e; do
+          for check in backend frontend e2e supply-chain; do
             if ! grep -qw "$check" <<<"$required"; then
               echo "::warning::main does not require the '$check' check. Auto-merge stays off."
               echo "ready=false" >> "$GITHUB_OUTPUT"
