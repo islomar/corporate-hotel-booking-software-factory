@@ -17,7 +17,7 @@
 
 Jira workflow: To Do, In Progress, In Review, Validating, Done, Discarded.
 
-- Merged is not done. After merge, a ticket moves to Validating.
+- Merged is not done. After merge, a ticket moves to Validating. `docs/process/kanban.md` defines every status and its rules.
 - A ticket is Done when its acceptance criteria are checked in the deployed system.
 - Discarded is a valid outcome. Record why.
 - Every ticket states its "why" as a hypothesis.
