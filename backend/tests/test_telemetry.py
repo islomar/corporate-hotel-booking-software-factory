@@ -553,7 +553,12 @@ def test_failing_metric_export_does_not_stop_trace_flushing(spans: InMemorySpanE
     assert len(spans.get_finished_spans()) == 2
 
 
-def test_shutdown_skips_metrics_written_moments_ago(spans: InMemorySpanExporter) -> None:
+@pytest.mark.parametrize(
+    ("shutdown_at", "expected"), [(3.0, [0.0]), (10.0, [0.0, 10.0])], ids=["3 s", "10 s"]
+)
+def test_shutdown_flushes_metrics_unless_written_moments_ago(
+    spans: InMemorySpanExporter, shutdown_at: float, expected: list[float]
+) -> None:
     # Cloud Monitoring rejects a second point within 5 s on one time series (400
     # FAILED_PRECONDITION "written more frequently than the maximum sampling period").
     now = [0.0]
@@ -567,8 +572,8 @@ def test_shutdown_skips_metrics_written_moments_ago(spans: InMemorySpanExporter)
     telemetry = Telemetry.create(span_exporter=spans, metric_reader=CountingReader(), version="dev")
     telemetry.clock = lambda: now[0]
     telemetry.flush()
-    now[0] = 3.0
+    now[0] = shutdown_at
 
     telemetry.shutdown()
 
-    assert exports == [0.0]
+    assert exports == expected

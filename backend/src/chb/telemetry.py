@@ -15,8 +15,10 @@ Cloud Monitoring rejects points written too often to one time series.
 Telemetry fails open: a slow or unreachable endpoint delays a response by at most
 `flush_timeout_seconds`, and after such a flush the middleware stops flushing for
 `breaker_seconds`. Spans then wait in the batch queue (dropped past 2048).
-Only the span and log export decides the breaker. A failed or slow metric export is logged by
-the SDK and retried at the next interval: it never stops trace flushing.
+Only the span and log export decides the breaker. A failed metric export is logged by the SDK
+and retried at the next interval. Metrics still export on the response path, because Cloud Run
+gives no CPU after the response: a slow metric export delays one response per interval, and
+together with a slow span export it can reach `flush_timeout_seconds` and open the breaker.
 One thread runs flushes, one at a time. Concurrent responses share the next pending flush,
 so a hanging endpoint never piles up threads.
 """
@@ -390,14 +392,15 @@ def telemetry_from_env(env: Mapping[str, str], version: str) -> Telemetry | None
         OTLPSpanExporter,
     )
 
-    session = _google_session() if uses_google_auth(endpoint) else None
+    google = uses_google_auth(endpoint)
+    session = _google_session() if google else None
     interval_millis = float(env.get("OTEL_METRIC_EXPORT_INTERVAL", "60000"))
     # No timer thread: FlushTelemetry and shutdown export metrics (see the module docstring).
     timeout = EXPORT_TIMEOUT_SECONDS
     platform_attributes = cloud_run_attributes(env)
     metric_reader = None
     metrics_off_reason = None
-    if session is not None and "cloud.region" not in platform_attributes:
+    if google and "cloud.region" not in platform_attributes:
         metrics_off_reason = (
             "Metrics are off: GOOGLE_CLOUD_REGION is not set, and telemetry.googleapis.com "
             "rejects metrics without a location"
