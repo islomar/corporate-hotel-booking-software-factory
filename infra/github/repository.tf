@@ -39,8 +39,6 @@ resource "github_repository" "this" {
   squash_merge_commit_title   = "PR_TITLE"
   squash_merge_commit_message = "PR_BODY"
 
-  vulnerability_alerts = true
-
   security_and_analysis {
     secret_scanning {
       status = "enabled"
@@ -52,6 +50,23 @@ resource "github_repository" "this" {
 
   archive_on_destroy = true
 
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+# Dependabot alerts. Removing the deprecated vulnerability_alerts field from
+# github_repository leaves the setting alone: that field is Optional+Computed.
+import {
+  to = github_repository_vulnerability_alerts.this
+  id = local.repository
+}
+
+resource "github_repository_vulnerability_alerts" "this" {
+  repository = github_repository.this.name
+  enabled    = true
+
+  # Destroying this resource disables the alerts on GitHub.
   lifecycle {
     prevent_destroy = true
   }
