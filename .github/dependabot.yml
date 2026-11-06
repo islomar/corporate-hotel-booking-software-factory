@@ -1,38 +1,130 @@
+# Dependency updates. Design and reasons: docs/decisions/ADR-ebe6-unattended-dependency-updates.md
+#
+# Rules for this file:
+# - Every block runs weekly on Monday 06:00 Europe/Madrid, with at most 5 open PRs.
+# - Cooldown is 7 days (14 for majors). It matches `min-release-age` in `.npmrc` and
+#   `exclude-newer` in `backend/pyproject.toml`. Never set it below 7: Dependabot's own
+#   lock run would then fail to resolve the version it proposes.
+# - A dependency joins the first group that matches it. Coupled groups come first.
+# - Groups take minor and patch updates. Majors get their own PR, or a `-major` group
+#   when packages must move together.
+# - Every `ignore` rule says why and when to revisit it.
+# - Auto-merge rules live in .github/workflows/dependabot-auto-merge.yml.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
-    schedule: { interval: weekly }
+    schedule: { interval: weekly, day: monday, time: "06:00", timezone: Europe/Madrid }
+    open-pull-requests-limit: 5
+    # GitHub Actions supports only `default-days`.
+    cooldown: { default-days: 7 }
     groups:
-      actions: { patterns: ["*"] }
+      actions:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
   - package-ecosystem: uv
     directory: /backend
-    schedule: { interval: weekly }
+    schedule: { interval: weekly, day: monday, time: "06:00", timezone: Europe/Madrid }
+    open-pull-requests-limit: 5
+    versioning-strategy: increase
+    cooldown: { default-days: 7, semver-major-days: 14 }
+    # uv does not support `groups.dependency-type`: groups use name patterns.
+    # ruff and uvicorn are 0.x and stay out of groups: a 0.x minor can break the
+    # contract, so it needs a human and must not block a group.
     groups:
-      backend: { patterns: ["*"] }
+      fastapi:
+        patterns: [fastapi, starlette, pydantic, pydantic-core]
+        update-types: [minor, patch]
+      fastapi-major:
+        patterns: [fastapi, starlette, pydantic, pydantic-core]
+        update-types: [major]
+      backend-dev:
+        patterns: [httpx2, mutmut, pyright, pytest*]
+        update-types: [minor, patch]
+
   - package-ecosystem: npm
     directory: /frontend
-    schedule: { interval: weekly }
+    schedule: { interval: weekly, day: monday, time: "06:00", timezone: Europe/Madrid }
+    open-pull-requests-limit: 5
+    versioning-strategy: increase
+    cooldown: { default-days: 7, semver-major-days: 14 }
     groups:
-      frontend: { patterns: ["*"] }
+      react:
+        patterns: [react, react-dom, "@types/react", "@types/react-dom"]
+        update-types: [minor, patch]
+      react-major:
+        patterns: [react, react-dom, "@types/react", "@types/react-dom"]
+        update-types: [major]
+      vite:
+        patterns: [vite, "@vitejs/*"]
+        update-types: [minor, patch]
+      vite-major:
+        patterns: [vite, "@vitejs/*"]
+        update-types: [major]
+      vitest:
+        patterns: [vitest, "@vitest/*", jsdom, "@testing-library/*"]
+        update-types: [minor, patch]
+      frontend-dev:
+        dependency-type: development
+        update-types: [minor, patch]
+      frontend-prod:
+        dependency-type: production
+        update-types: [minor, patch]
     ignore:
-      # Node types follow the Node major in .nvmrc (24, LTS).
+      # Why: @types/node follows the Node major in .nvmrc (24).
+      # Revisit: Node 26 is LTS since 2026-10-28. Remove this rule in the change that
+      # moves .nvmrc, the Dockerfile and compose.yaml to Node 26.
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
+
   - package-ecosystem: npm
     directory: /e2e
-    schedule: { interval: weekly }
+    schedule: { interval: weekly, day: monday, time: "06:00", timezone: Europe/Madrid }
+    open-pull-requests-limit: 5
+    versioning-strategy: increase
+    cooldown: { default-days: 7, semver-major-days: 14 }
     groups:
-      e2e: { patterns: ["*"] }
+      # Always needs a human: the Playwright image in .github/workflows/deploy.yml must
+      # move in the same PR. `make check` and the e2e job fail until it does.
+      playwright:
+        patterns: ["@playwright/test", playwright, playwright-core]
+      e2e:
+        patterns: ["*"]
+        update-types: [minor, patch]
     ignore:
+      # Why: @types/node follows the Node major in .nvmrc (24). e2e already uses 26.
+      # Revisit: Node 26 is LTS since 2026-10-28. Remove this rule in the change that
+      # moves .nvmrc, the Dockerfile and compose.yaml to Node 26.
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
+
   - package-ecosystem: docker
     directory: /
-    schedule: { interval: weekly }
+    schedule: { interval: weekly, day: monday, time: "06:00", timezone: Europe/Madrid }
+    open-pull-requests-limit: 5
+    # Docker supports only `default-days`.
+    cooldown: { default-days: 7 }
     ignore:
-      # Stay on Node LTS majors; Python follows ADR-af5b.
+      # Why: production runs a Node LTS major only.
+      # Revisit: Node 26 is LTS since 2026-10-28. Remove this rule in the change that
+      # moves .nvmrc, the Dockerfile and compose.yaml to Node 26.
       - dependency-name: node
         update-types: ["version-update:semver-major"]
+      # Why: the Python minor is a stack decision (ADR-af5b), not a routine bump.
+      # Revisit: when Python 3.16.0 is out (planned for October 2027), with a record
+      # that supersedes ADR-af5b.
       - dependency-name: python
         update-types: ["version-update:semver-minor"]
+
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule: { interval: weekly, day: monday, time: "06:00", timezone: Europe/Madrid }
+    open-pull-requests-limit: 5
+    # Docker Compose supports only `default-days`.
+    cooldown: { default-days: 7 }
+    ignore:
+      # Why: local development runs the same Node LTS major as production.
+      # Revisit: with the `node` rule of the docker block above.
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]

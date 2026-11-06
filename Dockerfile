@@ -15,9 +15,9 @@ ENV UV_COMPILE_BYTECODE=1 \
     PATH="/app/backend/.venv/bin:$PATH"
 WORKDIR /app/backend
 COPY backend/pyproject.toml backend/uv.lock ./
-RUN uv sync --frozen --no-dev --no-install-project
+RUN uv sync --locked --no-dev --no-install-project
 COPY backend/src ./src
-RUN uv sync --frozen --no-dev
+RUN uv sync --locked --no-dev
 COPY --from=frontend /app/frontend/dist /app/static
 
 ARG APP_VERSION=dev

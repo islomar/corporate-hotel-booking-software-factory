@@ -1,0 +1,147 @@
+# Unattended merge for safe Dependabot updates.
+# Design: docs/decisions/ADR-ebe6-unattended-dependency-updates.md
+#
+# Safe: patch and minor updates of versions >= 1.0, and GitHub Actions commit bumps.
+# Needs a human: majors, minors of 0.x versions (they can break the contract),
+# @playwright/test (the deploy image must move in the same PR), anything without a known
+# update type. Those PRs get the `dependencies:needs-human` label.
+#
+# Auto-merge waits only for the required checks of the `main` ruleset. This workflow
+# enables it only when that ruleset requires `backend`, `frontend` and `e2e`.
+#
+# The merge must not use GITHUB_TOKEN: events created with it start no workflow runs, so
+# CI on `main` and the deploy would never run. Auto-merge is enabled with a GitHub App
+# token instead. Until the App exists, safe PRs get `dependencies:safe` and a human merges.
+name: Dependabot auto-merge
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions: {}
+
+concurrency:
+  group: dependabot-auto-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  triage:
+    # fetch-metadata also verifies that every commit on the branch comes from Dependabot.
+    # After a push by a person it fails and the job stops: that person owns the merge.
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.repository == 'islomar/corporate-hotel-booking-software-factory'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read # fetch-metadata reads the PR commits
+      pull-requests: write # labels
+    env:
+      PR_URL: ${{ github.event.pull_request.html_url }}
+      # Dependabot-triggered runs only see Dependabot secrets, not Actions secrets.
+      HAS_APP: ${{ secrets.AUTOMERGE_APP_PRIVATE_KEY != '' }}
+    steps:
+      - id: metadata
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+
+      - id: decide
+        name: Classify the update
+        env:
+          DEPENDENCIES: ${{ steps.metadata.outputs.updated-dependencies-json }}
+        run: |
+          if [ -z "$DEPENDENCIES" ]; then DEPENDENCIES='[]'; fi
+          reasons=$(jq -r '
+            def major: (.prevVersion // "" | sub("^[^0-9]*"; "") | split(".")[0]);
+            if length == 0 then "no dependency metadata" else .[] |
+              if (.dependencyName | test("playwright")) then
+                "\(.dependencyName): the Playwright image in deploy.yml must move in the same PR"
+              elif .updateType == "version-update:semver-major" then
+                "\(.dependencyName): major update \(.prevVersion) to \(.newVersion)"
+              elif .updateType == "version-update:semver-minor" and major == "0" then
+                "\(.dependencyName): 0.x minor update \(.prevVersion) to \(.newVersion)"
+              elif .updateType == "version-update:semver-minor" or .updateType == "version-update:semver-patch" then
+                empty
+              elif (.updateType // "") == "" and .packageEcosystem == "github_actions" then
+                empty
+              else
+                "\(.dependencyName): unknown update type \(.updateType // "none")"
+              end
+            end' <<<"$DEPENDENCIES")
+          if [ -n "$reasons" ]; then
+            echo "safe=false" >> "$GITHUB_OUTPUT"
+            { echo "### Needs a human"; echo; sed 's/^/- /' <<<"$reasons"; } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "safe=true" >> "$GITHUB_OUTPUT"
+            echo "### Safe update" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - id: ruleset
+        name: Check that the main ruleset requires CI
+        if: steps.decide.outputs.safe == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          required=$(gh api "repos/$REPO/rules/branches/main" \
+            --jq '[.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context] | unique | join(" ")')
+          for check in backend frontend e2e; do
+            if ! grep -qw "$check" <<<"$required"; then
+              echo "::warning::main does not require the '$check' check. Auto-merge stays off."
+              echo "ready=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      # GITHUB APP SLOT. Missing today: the App and two Dependabot secrets.
+      # Create a GitHub App with Contents and Pull requests read and write, install it on
+      # this repository only, and store AUTOMERGE_APP_CLIENT_ID and
+      # AUTOMERGE_APP_PRIVATE_KEY as Dependabot secrets (not Actions secrets).
+      - id: app-token
+        if: steps.ruleset.outputs.ready == 'true' && env.HAS_APP == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ secrets.AUTOMERGE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AUTOMERGE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Approve and enable auto-merge (squash)
+        if: steps.app-token.outputs.token != ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          gh pr review --approve "$PR_URL"
+          gh pr merge --auto --squash "$PR_URL"
+          gh pr edit "$PR_URL" --add-label "dependencies:auto-merge" || echo "::warning::label missing in the repository"
+
+      - name: Turn auto-merge off for an unsafe update
+        if: steps.decide.outputs.safe == 'false' && env.HAS_APP == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        id: app-token-off
+        with:
+          client-id: ${{ secrets.AUTOMERGE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AUTOMERGE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - if: steps.app-token-off.outputs.token != ''
+        env:
+          GH_TOKEN: ${{ steps.app-token-off.outputs.token }}
+        run: gh pr merge --disable-auto "$PR_URL" || true
+
+      - name: Label for a human
+        if: steps.decide.outputs.safe == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr edit "$PR_URL" --remove-label "dependencies:auto-merge" || true
+          gh pr edit "$PR_URL" --add-label "dependencies:needs-human" || echo "::warning::label missing in the repository"
+
+      - name: Label a safe update that waits for a human merge
+        if: steps.decide.outputs.safe == 'true' && steps.app-token.outputs.token == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "::notice::Safe update. Auto-merge needs the GitHub App and the main ruleset; merge by hand."
+          gh pr edit "$PR_URL" --add-label "dependencies:safe" || echo "::warning::label missing in the repository"
