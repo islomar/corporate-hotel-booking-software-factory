@@ -4,7 +4,7 @@
 Dependabot bumps @playwright/test in e2e/package-lock.json but not the Playwright images
 that the e2e job of ci.yml and the smoke job of deploy.yml run in. A browser build that
 differs from the test runner breaks those jobs, so this check stops the mismatch in the
-pull request instead.
+pull request instead. Both workflows must pin the same image digest.
 """
 
 from __future__ import annotations
@@ -41,15 +41,22 @@ def errors(locked: str, name: str, text: str) -> list[str]:
     return found
 
 
-def main() -> int:
-    locked = json.loads(LOCKFILE.read_text())["packages"]["node_modules/@playwright/test"][
+def main(lockfile: Path = LOCKFILE, workflows: tuple[Path, ...] = WORKFLOWS) -> int:
+    locked = json.loads(lockfile.read_text())["packages"]["node_modules/@playwright/test"][
         "version"
     ]
-    found = [
-        error
-        for workflow in WORKFLOWS
-        for error in errors(locked, str(workflow.relative_to(ROOT)), workflow.read_text())
-    ]
+    found = []
+    pinned = set()
+    for workflow in workflows:
+        name = str(workflow.relative_to(ROOT) if workflow.is_relative_to(ROOT) else workflow)
+        text = workflow.read_text()
+        found += errors(locked, name, text)
+        pinned |= {image[0] for image in IMAGE.finditer(text) if image["digest"]}
+    if len(pinned) > 1:
+        found.append(
+            "::error::the workflows pin different Playwright images, use one: "
+            + ", ".join(sorted(pinned))
+        )
     for error in found:
         print(error)
     if not found:
