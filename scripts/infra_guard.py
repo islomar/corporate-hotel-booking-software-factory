@@ -182,7 +182,8 @@ def plan(runner: Runner, env: dict[str, str], plans: Path = PLANS) -> None:
         terraform(runner, directory, "plan", "-input=false", f"-out={tfplan}")
         summary = summaries[directory] = show(runner, directory, tfplan)
         record.write_text(json.dumps({"commit": commit, "plan_sha256": sha256(tfplan), **summary.__dict__}, indent=2))
-    print(f"\nPlans for commit {commit[:12]}, saved in {plans}/:")
+    shown = plans.relative_to(ROOT) if plans.is_relative_to(ROOT) else plans
+    print(f"\nPlans for commit {commit[:12]}, saved in {shown}/ (apply them only with make infra-apply):")
     for directory, summary in summaries.items():
         print(f"  {directory}: {summary.counts()}")
     check_destroys(summaries, allowed(env.get("ALLOW_DESTROY")))
@@ -228,6 +229,7 @@ def main(argv: list[str], runner: Runner = run, env: dict[str, str] | None = Non
     try:
         commands[argv[0]](runner, dict(os.environ) if env is None else env)
     except Refused as refusal:
+        sys.stdout.flush()
         print(red(f"infra guard refused ({argv[0]}):\n{refusal}"), file=sys.stderr)
         return 1
     return 0

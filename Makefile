@@ -67,5 +67,5 @@ infra-plan: ## Terraform plans for GCP and GitHub, saved in infra/.plans/ (from 
 
 infra-apply: ## Apply the plans saved by infra-plan, only if made from the current main
 	@python3 -I scripts/infra_guard.py git
-	export $(TF_ENV) GITHUB_TOKEN=$$(gh auth token) && test -n "$$TF_VAR_billing_account" && \
+	export $(TF_ENV) GITHUB_TOKEN=$$(gh auth token) && \
 	python3 -I scripts/infra_guard.py apply
