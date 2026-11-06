@@ -24,6 +24,7 @@
 
 - Production: <https://chb-1027266991110.europe-west1.run.app>
 - API reference (OpenAPI): <https://chb-1027266991110.europe-west1.run.app/api/docs>
+- Work tracking (Jira board `CHB`, sign-in required): <https://islomar.atlassian.net/jira/software/projects/CHB/boards/2>
 
 A web app built from the Codurance kata [Corporate Hotel Booking](https://www.codurance.com/katas/corporate-hotel-booking), developed through an AI-agent software factory.
 
@@ -155,7 +156,7 @@ The sampled flag in an incoming `traceparent` header is ignored; its trace ID is
 
 Pushes to `main` run CI. When CI passes, the deploy workflow builds the image, deploys it to Cloud Run, checks that `/api/health` reports the new commit, and runs Playwright against the live URL.
 
-- Tasks live in Jira, space `CHB`.
+- Tasks live in Jira, space `CHB`: [board](https://islomar.atlassian.net/jira/software/projects/CHB/boards/2). [`docs/process/kanban.md`](docs/process/kanban.md) defines each status.
 - Setup and factory work is tracked in Jira too. [`TODO.md`](TODO.md) lists the epics.
 - One ticket, one short-lived branch, one pull request. See `docs/decisions/ADR-0faf-short-lived-branches.md`.
 - Merged is not done. See `docs/decisions/ADR-ad3e-definition-of-done.md`.
