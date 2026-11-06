@@ -47,7 +47,7 @@ Meaning: accepted work that nobody has started.
 
 Meaning: someone (the agent or the owner) is changing code, infrastructure or documents for this ticket.
 
-- Enter: the worker assigns the ticket to themselves and creates the branch `CHB-<n>-<slug>` from `main`.
+- Enter: the worker assigns the ticket to themselves (an agent runs `factory/bin/jira assign CHB-<n> --me`) and creates the branch `CHB-<n>-<slug>` from `main`.
 - Leave to In Review: a pull request is open, `make check` passed locally, and the PR body states what merging changes in plain words.
 - Leave to Needs human: the worker is blocked by a question or a decision only the owner can make.
 - WIP limit: 3, the most agents that run in parallel. Not enforced on the board yet.
@@ -96,4 +96,10 @@ Meaning: the ticket will not be done. This is a valid outcome.
 
 ## Assignee
 
-The person or agent doing the work is the assignee. Agent work is assigned to the Claude account once it exists.
+The person or agent doing the work is the assignee.
+Agent work is assigned to the Atlassian account "Claude (CHB agent)" (<islomar+claude@gmail.com>).
+
+Agents make every Jira write (create, transition, comment, assign) through `factory/bin/jira`, so Jira history shows the Claude account as the author.
+`acli` is logged in as the owner and is for the owner only.
+When `factory/bin/jira` fails, the agent stops and reports. It never falls back to `acli`.
+See `factory/README.md`.

@@ -9,7 +9,7 @@
 # To do
 
 All work, including setup and factory work, is tracked in Jira, space `CHB`: <https://islomar.atlassian.net/jira/software/projects/CHB/boards>.
-Agents use `acli jira workitem search --jql "project = CHB AND statusCategory != Done"`.
+Agents use `factory/bin/jira search "project = CHB AND statusCategory != Done"`.
 
 Epics:
 

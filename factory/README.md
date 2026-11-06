@@ -4,6 +4,7 @@
 
 - [Factory](#factory)
   - [Acting as the agent](#acting-as-the-agent)
+  - [Acting in Jira as the agent](#acting-in-jira-as-the-agent)
   - [Automated PR review (shadow mode)](#automated-pr-review-shadow-mode)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -22,6 +23,39 @@ The private key is read from 1Password at run time.
 factory/bin/as-agent git push -u origin CHB-71-agent-token
 factory/bin/as-agent gh pr create --fill
 ```
+
+## Acting in Jira as the agent
+
+`factory/bin/jira` calls the Jira REST API of `islomar.atlassian.net` as the Atlassian account "Claude (CHB agent)" (<islomar+claude@gmail.com>), CHB-107.
+The API token is read from the 1Password item `chb-jira-claude.api-token` (field `credential`) on every call.
+It stays inside the Python process: never printed, written to a file or passed to another command.
+The owner's `acli` login is global state and is not touched.
+
+```sh
+factory/bin/jira view CHB-12
+factory/bin/jira search 'project = CHB AND status = "In Review"'
+factory/bin/jira create --parent CHB-27 --summary "Short title" --description-file description.txt
+factory/bin/jira transition CHB-12 "In Review"
+factory/bin/jira comment CHB-12 --body-file comment.txt   # "-" reads stdin
+factory/bin/jira assign CHB-12 --me
+```
+
+Text files are plain text. Blank lines separate paragraphs and URLs become links.
+
+Exit codes: 0 done, 1 Jira refused or failed, 2 usage error, 3 no credential (1Password locked or `op` failed). On 3 the agent stops and reports.
+
+The account is a CHB project Administrator, not a Member: Jira Free has no Member role.
+It can delete issues and change project and board settings through the REST API.
+The wrapper is the guardrail:
+
+- it accepts only `CHB-<n>` keys and creates only Tasks under a CHB Epic;
+- it has no delete, no project, board, workflow or permission write, and no raw request command;
+- it refuses HTTP redirects, so the token is never sent to another host.
+
+Do not add a generic request command or a delete command.
+The token itself still has the account's full rights. Anyone who runs `op item get` on it bypasses the wrapper.
+
+`before_transition` in `jira.py` runs before every transition. CHB-108 adds the WIP-limit check there.
 
 ## Automated PR review (shadow mode)
 
