@@ -15,6 +15,7 @@ Terraform manages the infrastructure. See ADR-aae8.
 | Folder | Scope | Credentials | State |
 |---|---|---|---|
 | `gcp/` | Google Cloud: APIs, registry, service accounts, Workload Identity, budget, Cloud Run | your gcloud login (configuration `chb`) | `gs://chb-factory-a92932-tfstate/gcp` |
+| `github/` | Repository settings, Actions variables, the `main` ruleset | your `gh auth token` (admin) | `gs://chb-factory-a92932-tfstate/github` |
 
 The state bucket was created by hand (CHB-10) and is imported into `gcp/`.
 
@@ -23,8 +24,8 @@ The state bucket was created by hand (CHB-10) and is imported into `gcp/`.
 Requirements: [tfenv](https://github.com/tfutils/tfenv) (reads `.terraform-version`), gcloud with the `chb` configuration.
 
 ```sh
-make infra-plan    # writes infra/gcp/gcp.tfplan
-make infra-apply   # applies exactly that plan
+make infra-plan    # writes infra/gcp/gcp.tfplan and infra/github/github.tfplan
+make infra-apply   # applies exactly those plans
 ```
 
 Until CI applies (CHB-13), the owner applies locally.

@@ -129,7 +129,7 @@ updates:
       - dependency-name: node
         update-types: ["version-update:semver-major"]
   - package-ecosystem: terraform
-    directory: /infra/gcp
+    directories: [/infra/gcp, /infra/github]
     schedule: { interval: weekly, day: monday, time: "06:00", timezone: Europe/Madrid }
     open-pull-requests-limit: 5
     # Terraform supports only `default-days`.
