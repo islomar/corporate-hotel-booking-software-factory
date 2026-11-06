@@ -43,7 +43,7 @@ PROJECT = "CHB"
 EMAIL = "islomar+claude@gmail.com"
 TOKEN_COMMAND = ["op", "item", "get", "chb-jira-claude.api-token", "--fields", "label=credential", "--reveal"]
 KEY_PATTERN = re.compile(rf"^{PROJECT}-[1-9][0-9]*$")
-URL_PATTERN = re.compile(r"https?://[^\s<>()]+")
+URL_PATTERN = re.compile(r"https?://[^\s<>()]*[^\s<>().,;:!?'\"]")
 SEARCH_FIELDS = ["summary", "status", "assignee", "issuetype", "parent"]
 
 EXIT_JIRA = 1
@@ -53,6 +53,10 @@ EXIT_CREDENTIAL = 3
 
 class JiraError(Exception):
     """Jira refused the request or the request makes no sense. Exit code 1."""
+
+
+class UsageError(Exception):
+    """A local input problem, such as an unreadable file. Exit code 2."""
 
 
 class CredentialError(Exception):
@@ -157,7 +161,12 @@ class Jira:
             raise JiraError(f"{method} {path}: HTTP {error.code} {_jira_messages(error)}") from None
         except urllib.error.URLError as error:
             raise JiraError(f"{method} {path}: {error.reason}") from None
-        return json.loads(raw) if raw.strip() else None
+        except OSError as error:  # timeouts and resets while reading the response
+            raise JiraError(f"{method} {path}: {type(error).__name__}") from None
+        try:
+            return json.loads(raw) if raw.strip() else None
+        except ValueError:
+            raise JiraError(f"{method} {path}: response is not JSON") from None
 
     def myself(self) -> dict[str, Any]:
         return self.request("GET", "/rest/api/3/myself")
@@ -201,15 +210,17 @@ class Jira:
         )
         return str(created["key"])
 
-    def transition(self, key: str, status: str) -> None:
+    def transition(self, key: str, status: str) -> str:
         check_key(key)
         transitions = self.request("GET", f"/rest/api/3/issue/{key}/transitions")["transitions"]
         matches = [t for t in transitions if t["to"]["name"].casefold() == status.casefold()]
         if not matches:
             names = sorted({t["to"]["name"] for t in transitions})
             raise JiraError(f"{key} cannot move to {status!r}. Allowed: {', '.join(names) or 'none'}")
-        before_transition(self, key, matches[0]["to"]["name"])
+        target = matches[0]["to"]["name"]
+        before_transition(self, key, target)
         self.request("POST", f"/rest/api/3/issue/{key}/transitions", {"transition": {"id": matches[0]["id"]}})
+        return target
 
     def comment(self, key: str, body: str) -> str:
         if not body.strip():
@@ -260,8 +271,11 @@ def _print_issue(issue: dict[str, Any]) -> None:
 def _read_text(path: str) -> str:
     if path == "-":
         return sys.stdin.read()
-    with open(path, encoding="utf-8") as handle:
-        return handle.read()
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return handle.read()
+    except OSError as error:
+        raise UsageError(f"cannot read {path}: {error.strerror}") from None
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -316,8 +330,7 @@ def run(args: argparse.Namespace, jira: Jira) -> None:
     elif args.command == "create":
         print(jira.create(args.parent, args.summary, _read_text(args.description_file)))
     elif args.command == "transition":
-        jira.transition(args.key, args.status)
-        print(f"{args.key} -> {args.status}")
+        print(f"{args.key} -> {jira.transition(args.key, args.status)}")
     elif args.command == "comment":
         print(f"{args.key} comment {jira.comment(args.key, _read_text(args.body_file))}")
     elif args.command == "assign":
@@ -347,7 +360,10 @@ def main(
     except JiraError as error:
         print(f"jira: {error}", file=sys.stderr)
         return EXIT_JIRA
-    except OSError as error:
+    except (KeyError, TypeError) as error:
+        print(f"jira: unexpected response from Jira ({type(error).__name__}: {error})", file=sys.stderr)
+        return EXIT_JIRA
+    except UsageError as error:
         print(f"jira: {error}", file=sys.stderr)
         return EXIT_USAGE
     return 0

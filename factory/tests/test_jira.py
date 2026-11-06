@@ -90,7 +90,7 @@ class TransitionTest(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertEqual(fake.writes(), [("POST", "/rest/api/3/issue/CHB-12/transitions", {"transition": {"id": "31"}})])
-        self.assertIn("CHB-12", out)
+        self.assertEqual(out.strip(), "CHB-12 -> In Review")
 
     def test_unknown_status_fails_and_lists_the_allowed_ones(self) -> None:
         fake = FakeJira({("GET", "/rest/api/3/issue/CHB-12/transitions"): TRANSITIONS})
@@ -251,6 +251,49 @@ class FailureTest(unittest.TestCase):
             self.assertNotIn(secret, out + err)
 
 
+class ViewTest(unittest.TestCase):
+    def test_prints_status_assignee_description_and_comments(self) -> None:
+        doc = text_to_adf("The description.")
+        issue = {
+            "key": "CHB-12",
+            "fields": {
+                "summary": "Title",
+                "issuetype": {"name": "Task"},
+                "status": {"name": "In Review"},
+                "assignee": {"displayName": "Claude (CHB agent)"},
+                "parent": {"key": "CHB-27"},
+                "description": doc,
+                "comment": {"comments": [{"author": {"displayName": "Owner"}, "created": "t", "body": doc}]},
+            },
+        }
+        path = "/rest/api/3/issue/CHB-12?fields=summary,status,assignee,issuetype,parent,description,comment"
+        code, out, _ = _run(["view", "CHB-12"], FakeJira({("GET", path): issue}))
+
+        self.assertEqual(code, 0)
+        for text in ("CHB-12 [Task] Title", "Status: In Review", "Assignee: Claude (CHB agent)", "Parent: CHB-27", "--- Owner"):
+            self.assertIn(text, out)
+        self.assertEqual(out.count("The description."), 2)
+
+
+class NetworkTest(unittest.TestCase):
+    def test_timeout_is_a_jira_failure(self) -> None:
+        def opener(request: Any) -> FakeResponse:
+            raise TimeoutError("timed out")
+
+        code = main(["assign", "CHB-1", "--account-id", "x"], token_reader=lambda: TOKEN, opener_factory=lambda: opener)
+        self.assertEqual(code, 1)
+
+    def test_non_json_response_is_a_jira_failure(self) -> None:
+        code = main(
+            ["view", "CHB-1"], token_reader=lambda: TOKEN, opener_factory=lambda: lambda r: FakeResponse(b"<html>")
+        )
+        self.assertEqual(code, 1)
+
+    def test_redirects_are_refused(self) -> None:
+        redirect = jira._NoRedirect().redirect_request(None, None, 302, "Found", {}, "https://elsewhere.example/")
+        self.assertIsNone(redirect)
+
+
 class ReadTokenTest(unittest.TestCase):
     def test_returns_the_stripped_output(self) -> None:
         self.assertEqual(read_token(["echo", "tok"]), "tok")
@@ -264,6 +307,7 @@ class ReadTokenTest(unittest.TestCase):
 class AdfTest(unittest.TestCase):
     def test_paragraphs_line_breaks_and_links(self) -> None:
         doc = text_to_adf("a\nb\n\nsee https://x.y/z now")
+        self.assertEqual(text_to_adf("PR: https://x.y/1.")["content"][0]["content"][1]["text"], "https://x.y/1")
 
         first, second = doc["content"]
         self.assertEqual([n["type"] for n in first["content"]], ["text", "hardBreak", "text"])
