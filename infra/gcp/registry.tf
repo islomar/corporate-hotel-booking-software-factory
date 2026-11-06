@@ -15,11 +15,12 @@ resource "google_artifact_registry_repository" "chb" {
     }
   }
 
+  # Five images cover rollbacks and stay under the 0.5 GB free tier (about 47 MB each). CHB-79.
   cleanup_policies {
-    id     = "keep-last-10"
+    id     = "keep-last-5"
     action = "KEEP"
     most_recent_versions {
-      keep_count = 10
+      keep_count = 5
     }
   }
 
