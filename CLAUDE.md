@@ -19,6 +19,8 @@ All work is tracked in Jira space `CHB` (see `TODO.md`). Never track work in fil
 - A correction becomes a hook or a check before it becomes prose.
 - A dependency update that breaks something gets an automated test in the fix. See `docs/knowledge/dependency-update-breaks-get-a-test.md`.
 - Work outside-in: an acceptance test first, then unit tests, one public method at a time.
+- Branch from `main`. Start dependent work after the parent PR merges.
+  A PR that must build on an open PR uses `--base <parent-branch>`, never `--base main`. GitHub retargets it to `main` when the parent merges.
 - Push branches and open PRs through `factory/bin/as-agent` (for example `factory/bin/as-agent gh pr create`), never with the owner's login. See ADR-d7b7.
 - Run `make check` before every commit. Gates read exit codes, not output text.
 - One Jira ticket per branch: `CHB-<n>-<slug>`. Every change reaches `main` through a squash-merged PR: the `main` ruleset applies to everyone (`infra/github/ruleset.tf`).
