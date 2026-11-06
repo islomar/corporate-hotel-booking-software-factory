@@ -12,6 +12,7 @@ setup: check-npm ## Install local dependencies and the repo git hooks
 	cd e2e && npm ci && npx playwright install chromium
 	ln -sf ../../scripts/git-hooks/pre-commit .git/hooks/pre-commit
 
+# Keep 11.10.0 equal to MIN_NPM in scripts/run_e2e.py.
 check-npm: ## Fail if npm is too old to honour min-release-age in .npmrc
 	@v=$$(npm --version); printf '%s\n' 11.10.0 "$$v" | sort -V -C || \
 		{ echo "npm $$v ignores min-release-age in .npmrc. Use Node 24 from .nvmrc (npm >= 11.10)."; exit 1; }

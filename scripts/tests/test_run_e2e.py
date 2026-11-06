@@ -136,6 +136,21 @@ class ProbeUrl(unittest.TestCase):
         self.addCleanup(_stop, server)
         self.assertEqual(probe(url), Probe.OTHER)
 
+    def test_program_that_does_not_speak_http(self) -> None:
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        self.addCleanup(listener.close)
+
+        def answer() -> None:
+            connection, _ = listener.accept()
+            with connection:
+                connection.recv(1024)
+                connection.sendall(b"SSH-2.0-OpenSSH\r\n")
+
+        threading.Thread(target=answer, daemon=True).start()
+        self.assertEqual(probe(f"http://127.0.0.1:{listener.getsockname()[1]}"), Probe.OTHER)
+
     def test_nothing_listening(self) -> None:
         with socket.socket() as s:
             s.bind(("127.0.0.1", 0))
@@ -261,6 +276,13 @@ class Orchestration(unittest.TestCase):
         os.environ["APP_URL"] = "http://localhost:9999"
         with self.assertRaises(E2eError):
             run_e2e.run()
+        self.assertEqual(self.commands, [])
+
+    def test_app_url_must_be_http(self) -> None:
+        os.environ["APP_URL"] = "file:///etc/passwd"
+        with self.assertRaises(E2eError) as error:
+            run_e2e.run()
+        self.assertIn("http://", str(error.exception))
         self.assertEqual(self.commands, [])
 
     def test_old_node_stops_before_anything_else(self) -> None:

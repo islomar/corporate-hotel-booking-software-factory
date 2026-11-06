@@ -19,6 +19,7 @@ node_modules, `npx playwright` downloads an unpinned package from the registry.
 from __future__ import annotations
 
 import enum
+import http.client
 import json
 import os
 import re
@@ -37,7 +38,7 @@ PLAYWRIGHT = E2E / "node_modules/.bin/playwright"
 DEFAULT_APP_URL = "http://localhost:8080"
 COMPOSE = ["docker", "compose", "--profile", "prod"]
 HEALTH_TIMEOUT_SECONDS = 60
-MIN_NPM = (11, 10)
+MIN_NPM = (11, 10)  # Keep equal to the `check-npm` target in the Makefile.
 
 
 class E2eError(Exception):
@@ -98,7 +99,7 @@ def probe(url: str) -> Probe:
         return Probe.OTHER
     except (urllib.error.URLError, ConnectionError, TimeoutError):
         return Probe.DOWN
-    except ValueError:
+    except (http.client.HTTPException, ValueError):
         return Probe.OTHER
     return Probe.APP if isinstance(body, dict) and body.get("status") == "ok" else Probe.OTHER
 
@@ -213,6 +214,8 @@ def run() -> int:
 
     explicit = bool(os.environ.get("APP_URL"))
     url = os.environ.get("APP_URL") or DEFAULT_APP_URL
+    if not url.startswith(("http://", "https://")):
+        raise E2eError(f"APP_URL={url} must start with http:// or https://.")
     action = choose(url, explicit=explicit, found=probe(url))
     started = False
     signal.signal(signal.SIGTERM, _terminate)
