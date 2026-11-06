@@ -1,0 +1,32 @@
+# Code owners for the harness and supply-chain paths. Design: ADR-ea8c, section 4.
+# The main ruleset requires code-owner review (infra/github/ruleset.tf), so a PR that
+# touches any path below needs an approval from @islomar. A GitHub App cannot be a code
+# owner. There is no `*` line: other paths need only the ruleset's normal approval.
+#
+# Syntax: the last matching pattern wins. A pattern ending in `/` matches the directory
+# and everything below it. A leading `/` anchors the pattern at the repository root.
+# A pattern without `/` matches that file name in any directory. `!` and `[ ]` do not work.
+
+# Harness: files that steer the agents, CI, infrastructure and this file.
+/.github/          @islomar
+/.claude/          @islomar
+/factory/          @islomar
+/infra/            @islomar
+/scripts/          @islomar
+/Makefile          @islomar
+/CLAUDE.md         @islomar
+/docs/decisions/   @islomar
+/docs/knowledge/   @islomar
+
+# Supply chain: manifests, lockfiles, release-age settings (ADR-ebe6), images and
+# runtime pins. File-name patterns match in any directory, so a new package directory
+# is covered without editing this file.
+pyproject.toml     @islomar
+uv.lock            @islomar
+package.json       @islomar
+package-lock.json  @islomar
+.npmrc             @islomar
+Dockerfile         @islomar
+compose.yaml       @islomar
+.nvmrc             @islomar
+.python-version    @islomar
