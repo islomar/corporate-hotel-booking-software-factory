@@ -25,6 +25,16 @@ resource "github_repository_ruleset" "main" {
       allowed_merge_methods             = ["squash"]
     }
 
+    # Copilot code review is a second opinion only (CHB-106): it leaves comments, is not a
+    # required check and does not count as an approval. Leave the repository setting "Allow
+    # Copilot approvals to count toward merge requirements" off. GitHub requests the review
+    # only if the PR author has Copilot code review; for App-authored PRs this may do nothing.
+    # One review per PR, none on drafts, to save the owner's Copilot quota.
+    copilot_code_review {
+      review_on_push             = false
+      review_draft_pull_requests = false
+    }
+
     required_status_checks {
       # false: a PR need not be rebased on the latest main before merging (CI cost guard, CHB-56).
       strict_required_status_checks_policy = false
