@@ -268,6 +268,8 @@ class RiskClassTest(unittest.TestCase):
             "backend/pyproject.toml",
             "backend/uv.lock",
             "frontend/.npmrc",
+            ".nvmrc",
+            "backend/.python-version",
             "Dockerfile",
             "compose.yaml",
         ):

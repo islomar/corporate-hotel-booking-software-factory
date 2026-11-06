@@ -71,6 +71,7 @@ SUPPLY_CHAIN_NAMES = {
     "uv.lock",
     ".npmrc",
     ".nvmrc",
+    ".python-version",
     "Dockerfile",
     "compose.yaml",
 }
