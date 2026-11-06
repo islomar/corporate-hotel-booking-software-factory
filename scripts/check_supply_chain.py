@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """Fail when a PR changes supply-chain files without Dependabot or the owner behind it.
 
-Supply-chain files (manifests, lockfiles, images, runtime pins) have no code owner, so
-Dependabot PRs can merge unattended. This check takes the code owner's place for them
-(ADR-ebe6). A PR passes when:
+Supply-chain files (manifests, lockfiles, resolver settings, images, runtime pins) have
+no code owner, so Dependabot PRs can merge unattended. This check takes the code owner's
+place for them (ADR-ebe6). A PR passes when:
 
 - it changes no supply-chain file; or
 - the owner's latest review is an approval of the current head commit; or
 - the PR author is `dependabot[bot]` and every commit is Dependabot's: author
   `dependabot[bot]`, committer `web-flow` and a signature GitHub verified. GitHub records
   Dependabot commits this way. A release-age change (`min-release-age*` in `.npmrc`,
-  `exclude-newer*` in `pyproject.toml`) rules this path out.
+  `exclude-newer*` in `uv.toml` or `pyproject.toml`) rules this path out. The
+  `dependabot-branches` ruleset lets only Dependabot push to `dependabot/**` branches.
 
-Changed files come from `git diff --no-renames --name-only BASE...HEAD`. Commits and
+Changed files come from `git diff --no-renames --name-only -z BASE...HEAD`. Commits and
 reviews come from the GitHub API. PR title, body and labels are never read.
 
 Usage: check_supply_chain.py --repo OWNER/NAME --pr N --base SHA --head SHA --owner LOGIN
@@ -40,17 +41,32 @@ DEPENDABOT = "dependabot[bot]"
 GITHUB_COMMITTER = "web-flow"
 
 SUPPLY_CHAIN_NAMES = (
+    # Python: manifests, lockfiles and resolver settings (uv.toml overrides [tool.uv]).
     "pyproject.toml",
     "uv.lock",
+    "uv.toml",
     "requirements*.txt",
+    "constraints*.txt",
+    "Pipfile",
+    "Pipfile.lock",
+    "poetry.lock",
+    "pip.conf",
+    "pip.ini",
+    # JavaScript: manifests, lockfiles and resolver settings.
     "package.json",
     "package-lock.json",
     "npm-shrinkwrap.json",
     "yarn.lock",
     "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    ".pnpmfile.cjs",
+    "bun.lock",
+    "bun.lockb",
+    "bunfig.toml",
     ".npmrc",
     ".yarnrc",
     ".yarnrc.yml",
+    # Images and runtime pins.
     "Dockerfile",
     "Dockerfile.*",
     "*.dockerfile",
@@ -87,30 +103,57 @@ def _npmrc_settings(text: str) -> list[tuple[str, str]]:
     return sorted(settings)
 
 
-def _pyproject_settings(text: str) -> dict[str, object]:
-    uv = tomllib.loads(text).get("tool", {}).get("uv", {})
-    return {key: value for key, value in uv.items() if key.startswith("exclude-newer")}
+class SettingsError(Exception):
+    pass
 
 
-def release_age_changed(path: str, base_text: str | None, head_text: str | None) -> bool:
-    """True when the release-age settings in an .npmrc or pyproject.toml differ.
+def _exclude_newer(table: object) -> dict[str, object]:
+    if not isinstance(table, dict):
+        raise SettingsError("expected a TOML table")
+    return {key: value for key, value in table.items() if key.startswith("exclude-newer")}
 
-    None means the file does not exist on that side. A file that does not parse counts
-    as a change: the check fails closed.
+
+def _uv_settings(name: str, text: str | None) -> dict[str, object]:
+    """exclude-newer* keys: top level in uv.toml, under [tool.uv] in pyproject.toml."""
+    if text is None:
+        return {}
+    try:
+        document = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as error:
+        raise SettingsError(f"not valid TOML: {error}") from error
+    if name == "uv.toml":
+        return _exclude_newer(document)
+    tool = document.get("tool", {})
+    if not isinstance(tool, dict):
+        raise SettingsError("`tool` is not a table")
+    return _exclude_newer(tool.get("uv", {}))
+
+
+def release_age_change(path: str, base_text: str | None, head_text: str | None) -> str | None:
+    """Why the release-age settings of an .npmrc, uv.toml or pyproject.toml differ, or None.
+
+    None as text means the file does not exist on that side. A file that does not parse,
+    or has an unexpected shape, counts as a change: the check fails closed.
     """
     name = PurePosixPath(path).name
     if name == ".npmrc":
         if base_text is None or head_text is None:
-            return True
-        return _npmrc_settings(base_text) != _npmrc_settings(head_text)
-    if name == "pyproject.toml":
+            return "file added or deleted"
+        if _npmrc_settings(base_text) != _npmrc_settings(head_text):
+            return "min-release-age settings differ"
+        return None
+    if name in ("pyproject.toml", "uv.toml"):
         try:
-            base = _pyproject_settings(base_text) if base_text is not None else {}
-            head = _pyproject_settings(head_text) if head_text is not None else {}
-        except tomllib.TOMLDecodeError:
-            return True
-        return base != head
-    return False
+            base = _uv_settings(name, base_text)
+            head = _uv_settings(name, head_text)
+        except SettingsError as error:
+            return f"cannot read the settings ({error})"
+        return "exclude-newer settings differ" if base != head else None
+    return None
+
+
+def release_age_changed(path: str, base_text: str | None, head_text: str | None) -> bool:
+    return release_age_change(path, base_text, head_text) is not None
 
 
 # Commits and reviews
@@ -215,10 +258,12 @@ def _git(*args: str) -> subprocess.CompletedProcess[str]:
 
 
 def changed_files(base: str, head: str) -> list[str]:
-    result = _git("diff", "--no-renames", "--name-only", f"{base}...{head}")
+    # -z: paths are NUL-separated and never C-quoted. Without it, git quotes non-ASCII
+    # paths ("d\303\251p/package.json") and the file-name match misses them.
+    result = _git("diff", "--no-renames", "--name-only", "-z", f"{base}...{head}")
     if result.returncode != 0:
         raise CheckError(f"git diff failed: {result.stderr.strip()}")
-    return [line for line in result.stdout.splitlines() if line]
+    return [path for path in result.stdout.split("\0") if path]
 
 
 def file_at(ref: str, path: str) -> str | None:
@@ -260,9 +305,12 @@ def github_get(path: str, token: str) -> list | dict:
 def gather(args: argparse.Namespace, token: str) -> Evidence:
     files = changed_files(args.base, args.head)
     fork_point = merge_base(args.base, args.head)
-    release_age_files = [
-        f for f in files if release_age_changed(f, file_at(fork_point, f), file_at(args.head, f))
-    ]
+    release_age_files = []
+    for path in files:
+        reason = release_age_change(path, file_at(fork_point, path), file_at(args.head, path))
+        if reason:
+            print(f"{path}: release-age settings: {reason}")
+            release_age_files.append(path)
     pr_path = f"/repos/{args.repo}/pulls/{args.pr}"
     pr = github_get(pr_path, token)
     if not isinstance(pr, dict):

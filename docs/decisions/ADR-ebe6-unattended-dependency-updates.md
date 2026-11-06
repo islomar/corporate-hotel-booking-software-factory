@@ -104,35 +104,43 @@ Until the App exists, safe PRs get `dependencies:safe` and a person merges them.
 
 CODEOWNERS made the owner the code owner of every manifest and lockfile.
 The `main` ruleset requires code-owner review, and a GitHub App cannot be a code owner.
-So every Dependabot PR waited for the owner, auto-merge or not.
+Every Dependabot PR therefore waited for the owner, auto-merge or not.
 
 - Manifests, lockfiles, `Dockerfile`, `compose.yaml`, `.nvmrc` and `.python-version` leave CODEOWNERS.
   `.npmrc` stays: it holds the release-age window and its exemptions.
 - A required check `supply-chain` (`.github/workflows/supply-chain.yml`, `scripts/check_supply_chain.py`) takes the code owner's place for these files.
-- Changed files come from `git diff --no-renames --name-only base...head`.
-  The file list in the script is wider than the old CODEOWNERS list. It adds other lockfiles, `requirements*.txt`, compose and Dockerfile variants, `.node-version`.
+- Changed files come from `git diff --no-renames --name-only -z base...head`.
+  Without `-z`, git C-quotes paths with non-ASCII characters, and a quoted `"dép/package.json"` would not match `package.json`.
+- The file list in the script is wider than the old CODEOWNERS list.
+  It adds resolver settings (`uv.toml`, `pip.conf`, `pnpm-workspace.yaml`, `.pnpmfile.cjs`, `.yarnrc*`, `bunfig.toml`), other lockfiles and manifests, compose and Dockerfile variants, `.node-version`.
 - The check passes when no supply-chain file changed, or the owner's latest deciding review approves the head commit, or the PR is Dependabot's:
   - the PR author is `dependabot[bot]`;
   - every commit has author `dependabot[bot]`, committer `web-flow` and a signature GitHub verified.
     GitHub records Dependabot commits this way (PRs #1 to #4). The committer is `web-flow`, not `dependabot[bot]`.
   - the API lists every commit of the PR (`pulls/{n}/commits` stops at 250).
-- A change to release-age settings needs the owner even from Dependabot: `min-release-age*` keys in any `.npmrc`, `exclude-newer*` keys under `[tool.uv]` in any `pyproject.toml`.
+- A change to release-age settings needs the owner even from Dependabot:
+  `min-release-age*` keys in any `.npmrc`, top-level `exclude-newer*` keys in any `uv.toml`, `exclude-newer*` keys under `[tool.uv]` in any `pyproject.toml`.
   The script compares parsed settings, so a dependency floor bump in `pyproject.toml` does not count.
+  A file that does not parse, or where `tool` or `tool.uv` is not a table, counts as a change.
 - Data comes from git and the GitHub API. PR title, body and labels are never read.
 - Triggers: `pull_request` and `pull_request_review` (`submitted`, `dismissed`), so an owner approval re-runs it.
   Both report a check run named `supply-chain` on the head commit. A per-PR concurrency group cancels the older run.
 - The workflow and the script run from the PR's merge commit. Their integrity rests on CODEOWNERS: both have their own owner lines.
+- A second ruleset, `dependabot-branches` (`infra/github/ruleset.tf`), restricts creation and update of `refs/heads/dependabot/**/*`.
+  Its only bypass actor is Dependabot: `actor_type = "Integration"`, `actor_id = 29110` (`gh api /apps/dependabot`), mode `always`.
+  GitHub lists Dependabot as an eligible bypass actor for rulesets.
+  Without this ruleset, any actor with contents write (the agent App, the owner) could push to a Dependabot branch.
+  Whether such a push could carry author `dependabot[bot]`, committer `web-flow` and a verified signature is unverified. The ruleset makes the question moot.
 
 Consequences:
 
-- A person who pushes to a Dependabot branch, or clicks "Update branch", adds a commit that is not Dependabot's. The PR then needs the owner.
-  To refresh a Dependabot PR, comment `@dependabot rebase`.
+- Nobody but Dependabot can push to a Dependabot branch. "Update branch" fails there too.
+  To refresh a Dependabot PR, comment `@dependabot rebase`. To change one, close it and open a new PR from another branch.
+- Deletion stays open: deleting a branch cannot forge a commit, and `delete_branch_on_merge` must still remove merged Dependabot branches.
 - GitHub Actions bumps change `.github/workflows/`, which stays in CODEOWNERS. They keep needing the owner.
   Next step, after CHB-86 removes `workflows: write` from the agent App: move `/.github/workflows/` out of CODEOWNERS and add it to the script's supply-chain set.
   Without that second part, Actions pins lose all protection.
 - Unverified: that GitHub uses the latest `supply-chain` check run when the two events both report one. Test it on the first owner-approved supply-chain PR: the merge box must turn green after the approval.
-- Unverified: whether an actor with contents write can create a commit through the API that GitHub records with author `dependabot[bot]`, committer `web-flow` and a verified signature.
-  The PR-author condition stays as a second fence.
 - Owner-authored PRs cannot pass through owner approval, because GitHub blocks self-approval. The ruleset's required approval blocks them anyway.
 
 ## Consequences

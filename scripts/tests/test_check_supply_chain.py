@@ -1,12 +1,24 @@
+import argparse
+import contextlib
+import io
+import json
+import os
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import check_supply_chain
 from check_supply_chain import (
     Evidence,
+    changed_files,
     decide,
+    gather,
+    github_get,
     is_dependabot_commit,
     is_supply_chain_file,
     owner_approved_head,
@@ -62,6 +74,10 @@ class SupplyChainFileTest(unittest.TestCase):
             ".python-version",
             "tools/pnpm-lock.yaml",
             "backend/requirements-dev.txt",
+            "backend/uv.toml",
+            "pip.conf",
+            "pnpm-workspace.yaml",
+            ".yarnrc.yml",
         ]:
             with self.subTest(path=path):
                 self.assertTrue(is_supply_chain_file(path))
@@ -109,6 +125,20 @@ class ReleaseAgeTest(unittest.TestCase):
         )
         self.assertTrue(release_age_changed("frontend/.npmrc", base, None))
         self.assertTrue(release_age_changed("new/.npmrc", None, ""))
+
+    def test_uv_toml_compares_top_level_settings(self):
+        base = 'exclude-newer = "7 days"\n'
+        self.assertFalse(release_age_changed("backend/uv.toml", base, base + "# note\n"))
+        self.assertTrue(release_age_changed("backend/uv.toml", base, 'exclude-newer = "1 day"\n'))
+        self.assertTrue(release_age_changed("uv.toml", None, base))
+        self.assertTrue(
+            release_age_changed("uv.toml", base, base + "[exclude-newer-package]\nvite = false\n")
+        )
+
+    def test_unexpected_pyproject_shape_counts_as_a_change(self):
+        for head in ["tool = 1\n", "[tool]\nuv = 1\n"]:
+            with self.subTest(head=head):
+                self.assertTrue(release_age_changed("backend/pyproject.toml", self.PYPROJECT, head))
 
     def test_other_files_never_change_release_age(self):
         self.assertFalse(release_age_changed("frontend/package.json", "{}", '{"a": 1}'))
@@ -194,6 +224,128 @@ class DecideTest(unittest.TestCase):
         self.assertFalse(decide(evidence(pr_commit_count=300)).ok)
         self.assertFalse(decide(evidence(pr_head_sha=OLD)).ok)
         self.assertFalse(decide(evidence(commits=[])).ok)
+
+
+def git(repo, *args):
+    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)  # noqa: S603,S607
+
+
+def rev(repo, ref):
+    return subprocess.run(  # noqa: S603
+        ["git", "-C", str(repo), "rev-parse", ref],  # noqa: S607
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+class GitRepoTest(unittest.TestCase):
+    """A real repository: base commit on main, head commit on a branch."""
+
+    def setUp(self):
+        # Ignore the developer's git config: global hooks would run on every test commit.
+        isolated = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+        patcher = mock.patch.dict(os.environ, isolated)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.repo = Path(tmp.name)
+        git(self.repo, "init", "-q", "-b", "main")
+        git(self.repo, "config", "user.email", "t@example.com")
+        git(self.repo, "config", "user.name", "t")
+        git(self.repo, "config", "commit.gpgsign", "false")
+        (self.repo / "backend").mkdir()
+        (self.repo / "backend/pyproject.toml").write_text('[tool.uv]\nexclude-newer = "7 days"\n')
+        (self.repo / "README.md").write_text("x\n")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "base")
+        self.base = rev(self.repo, "HEAD")
+        git(self.repo, "checkout", "-q", "-b", "pr")
+
+    def commit_head(self, files):
+        for path, text in files.items():
+            target = self.repo / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text)
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "head")
+        return rev(self.repo, "HEAD")
+
+    def test_non_ascii_and_quoted_paths_are_listed_unquoted(self):
+        head = self.commit_head({"dép/package.json": "{}", 'we"ird/Dockerfile': "FROM x\n"})
+        with contextlib.chdir(self.repo):
+            files = changed_files(self.base, head)
+        self.assertEqual(sorted(files), ["dép/package.json", 'we"ird/Dockerfile'])
+        self.assertTrue(all(is_supply_chain_file(f) for f in files))
+
+    def test_gather_reads_git_and_the_api(self):
+        head = self.commit_head(
+            {
+                "dép/package.json": "{}",
+                "backend/pyproject.toml": '[tool.uv]\nexclude-newer = "1 day"\n',
+            }
+        )
+        responses = {
+            "/repos/o/r/pulls/7": {
+                "user": {"login": "dependabot[bot]"},
+                "head": {"sha": head},
+                "commits": 1,
+            },
+            "/repos/o/r/pulls/7/commits?per_page=100": [dependabot_commit(head)],
+            "/repos/o/r/pulls/7/reviews?per_page=100": [],
+        }
+        args = argparse.Namespace(repo="o/r", pr=7, base=self.base, head=head, owner=OWNER)
+        with (
+            contextlib.chdir(self.repo),
+            contextlib.redirect_stdout(io.StringIO()),
+            mock.patch.object(
+                check_supply_chain, "github_get", lambda path, token: responses[path]
+            ),
+        ):
+            found = gather(args, token="t")  # noqa: S106
+        self.assertEqual(
+            sorted(found.changed_files), ["backend/pyproject.toml", "dép/package.json"]
+        )
+        self.assertEqual(found.release_age_files, ["backend/pyproject.toml"])
+        self.assertEqual(found.pr_author, "dependabot[bot]")
+        verdict = decide(found)
+        self.assertFalse(verdict.ok)
+        self.assertIn("Release-age settings changed", verdict.message)
+
+
+class FakeResponse(io.BytesIO):
+    def __init__(self, body, link=""):
+        super().__init__(json.dumps(body).encode())
+        self.headers = {"Link": link} if link else {}
+
+
+class GithubGetTest(unittest.TestCase):
+    def test_follows_next_links_across_pages(self):
+        pages = {
+            "https://api.github.com/x?per_page=1": FakeResponse(
+                [1],
+                '<https://api.github.com/x?page=2>; rel="next", '
+                '<https://api.github.com/x?page=3>; rel="last"',
+            ),
+            "https://api.github.com/x?page=2": FakeResponse(
+                [2], '<https://api.github.com/x?page=3>; rel="next"'
+            ),
+            "https://api.github.com/x?page=3": FakeResponse([3]),
+        }
+        opened = []
+
+        def urlopen(request, timeout):
+            opened.append(request.full_url)
+            return pages[request.full_url]
+
+        with mock.patch("urllib.request.urlopen", urlopen):
+            self.assertEqual(github_get("/x?per_page=1", "t"), [1, 2, 3])
+        self.assertEqual(len(opened), 3)
+
+    def test_returns_an_object_as_is(self):
+        with mock.patch("urllib.request.urlopen", lambda request, timeout: FakeResponse({"a": 1})):
+            self.assertEqual(github_get("/y", "t"), {"a": 1})
 
 
 if __name__ == "__main__":
