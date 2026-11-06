@@ -39,7 +39,7 @@ jobs:
     env:
       PR_URL: ${{ github.event.pull_request.html_url }}
       # Dependabot-triggered runs only see Dependabot secrets, not Actions secrets.
-      HAS_APP: ${{ secrets.AUTOMERGE_APP_PRIVATE_KEY != '' }}
+      HAS_APP: ${{ secrets.AGENT_APP_PRIVATE_KEY != '' }}
     steps:
       - id: metadata
         uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
@@ -95,14 +95,14 @@ jobs:
 
       # GITHUB APP SLOT. Missing today: the App and two Dependabot secrets.
       # Create a GitHub App with Contents and Pull requests read and write, install it on
-      # this repository only, and store AUTOMERGE_APP_CLIENT_ID and
-      # AUTOMERGE_APP_PRIVATE_KEY as Dependabot secrets (not Actions secrets).
+      # this repository only, and store AGENT_APP_CLIENT_ID and
+      # AGENT_APP_PRIVATE_KEY as Dependabot secrets (not Actions secrets).
       - id: app-token
         if: steps.ruleset.outputs.ready == 'true' && env.HAS_APP == 'true'
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          client-id: ${{ secrets.AUTOMERGE_APP_CLIENT_ID }}
-          private-key: ${{ secrets.AUTOMERGE_APP_PRIVATE_KEY }}
+          client-id: ${{ secrets.AGENT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
           permission-contents: write
           permission-pull-requests: write
 
@@ -124,8 +124,8 @@ jobs:
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         id: app-token-off
         with:
-          client-id: ${{ secrets.AUTOMERGE_APP_CLIENT_ID }}
-          private-key: ${{ secrets.AUTOMERGE_APP_PRIVATE_KEY }}
+          client-id: ${{ secrets.AGENT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
           permission-contents: write
           permission-pull-requests: write
 
