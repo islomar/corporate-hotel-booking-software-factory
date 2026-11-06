@@ -1,0 +1,33 @@
+{
+  "summary": "SQL built from user input.",
+  "dimensions": {
+    "codeQuality": {
+      "score": 10,
+      "findings": []
+    },
+    "security": {
+      "score": 7,
+      "findings": [
+        {
+          "severity": "critical",
+          "file": "backend/src/chb/app.py",
+          "line": 10,
+          "message": "Query concatenates the hotel name.",
+          "suggestedFix": "Use a bound parameter."
+        }
+      ]
+    },
+    "businessAlignment": {
+      "score": 10,
+      "findings": []
+    },
+    "tests": {
+      "score": 10,
+      "findings": []
+    },
+    "architecture": {
+      "score": 10,
+      "findings": []
+    }
+  }
+}

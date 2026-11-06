@@ -1,0 +1,71 @@
+{
+  "title": "PR review result (ADR-ea8c, rubric CHB-40)",
+  "description": "factory/review/gate.py recomputes every score from the findings. A score here is the model's opinion and is only displayed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["summary", "dimensions"],
+  "properties": {
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000
+    },
+    "dimensions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["codeQuality", "security", "businessAlignment", "tests", "architecture"],
+      "properties": {
+        "codeQuality": { "$ref": "#/$defs/dimension" },
+        "security": { "$ref": "#/$defs/dimension" },
+        "businessAlignment": { "$ref": "#/$defs/dimension" },
+        "tests": { "$ref": "#/$defs/dimension" },
+        "architecture": { "$ref": "#/$defs/dimension" }
+      }
+    }
+  },
+  "$defs": {
+    "dimension": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["score", "findings"],
+      "properties": {
+        "score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "findings": {
+          "type": "array",
+          "maxItems": 20,
+          "items": { "$ref": "#/$defs/finding" }
+        }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["severity", "file", "line", "message", "suggestedFix"],
+      "properties": {
+        "severity": { "enum": ["critical", "improvement", "cleanup"] },
+        "file": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "line": {
+          "type": ["integer", "null"],
+          "minimum": 1
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "suggestedFix": {
+          "type": "string",
+          "maxLength": 1000
+        }
+      }
+    }
+  }
+}

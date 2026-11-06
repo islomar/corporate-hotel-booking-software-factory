@@ -1,0 +1,55 @@
+{
+  "summary": "Looks great.",
+  "dimensions": {
+    "codeQuality": {
+      "score": 10,
+      "findings": [
+        {
+          "severity": "improvement",
+          "file": "backend/src/chb/app.py",
+          "line": 10,
+          "message": "Message",
+          "suggestedFix": "Fix"
+        },
+        {
+          "severity": "improvement",
+          "file": "backend/src/chb/app.py",
+          "line": 10,
+          "message": "Message",
+          "suggestedFix": "Fix"
+        }
+      ]
+    },
+    "security": {
+      "score": 10,
+      "findings": [
+        {
+          "severity": "improvement",
+          "file": "backend/src/chb/app.py",
+          "line": 10,
+          "message": "Message",
+          "suggestedFix": "Fix"
+        },
+        {
+          "severity": "improvement",
+          "file": "backend/src/chb/app.py",
+          "line": 10,
+          "message": "Message",
+          "suggestedFix": "Fix"
+        }
+      ]
+    },
+    "businessAlignment": {
+      "score": 10,
+      "findings": []
+    },
+    "tests": {
+      "score": 10,
+      "findings": []
+    },
+    "architecture": {
+      "score": 10,
+      "findings": []
+    }
+  }
+}

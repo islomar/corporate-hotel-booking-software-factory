@@ -1,0 +1,173 @@
+# Automated PR review in shadow mode (ADR-ea8c, CHB-87).
+#
+# Claude Code scores the PR against the CHB-40 rubric. factory/review/gate.py validates the
+# output, recomputes Merge Safety and decides. The reviewer App posts the verdict as a check
+# run named `review`. The `main` ruleset does not require it yet (stage 1, shadow).
+#
+# Trust boundaries:
+# - The workspace is the BASE commit. The gate, schema and prompt come from main, never from the PR.
+# - The PR head is data: checked out into a separate directory, never installed, built or run.
+# - Claude runs with --bare and read-only tools, and never sees the reviewer App key.
+#   The App token is minted only after Claude exits.
+#
+# Missing today: the reviewer App (CHB-85) and the Anthropic key (CHB-89). Until all three
+# secrets exist, the job prints a notice and posts nothing.
+name: Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions: {}
+
+concurrency:
+  group: review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # Not named `review`: Actions posts a check under the job name, which would shadow the App's check.
+  score-pr:
+    name: score-pr
+    # Same-repository branches only: fork PRs get no secrets. Dependabot PRs follow ADR-ebe6.
+    if: >-
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      HAS_SECRETS: >-
+        ${{ secrets.ANTHROPIC_API_KEY_REVIEW != '' &&
+        secrets.REVIEWER_APP_CLIENT_ID != '' &&
+        secrets.REVIEWER_APP_PRIVATE_KEY != '' }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      # Claude Code native binary from npm, pinned by version and SHA-256 of the tarball.
+      CLAUDE_VERSION: 2.1.311
+      CLAUDE_SHA256: 4353c611f9a33063c5525348a15f1212bdc0085e4a7a81b8370b790003df1b56
+    steps:
+      - name: Reviewer secrets missing
+        if: env.HAS_SECRETS != 'true'
+        run: echo "::notice::Reviewer secrets are not set (CHB-85, CHB-89). No review posted."
+
+      - name: Check out the base commit (gate, schema, prompt)
+        if: env.HAS_SECRETS == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - name: Fetch the PR head as data
+        if: env.HAS_SECRETS == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: pr-head
+          fetch-depth: 0 # the diff needs the merge base
+          persist-credentials: false
+
+      - name: Prepare the review directory
+        if: env.HAS_SECRETS == 'true'
+        run: |
+          dir="$RUNNER_TEMP/review"
+          mkdir -p "$dir"
+          mv pr-head "$dir/head"
+          git -C "$dir/head" diff --no-renames "$BASE_SHA...$HEAD_SHA" > "$dir/pr.diff"
+          git -C "$dir/head" diff -z --no-renames --name-only "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed-files.z"
+          tr '\0' '\n' < "$RUNNER_TEMP/changed-files.z" > "$dir/changed-files.txt"
+          jq '{title: .pull_request.title, body: .pull_request.body}' "$GITHUB_EVENT_PATH" > "$dir/pr.json"
+          rm -rf "$dir/head/.git"
+          # A symlink in the PR could point at runner files, such as /proc/self/environ.
+          find "$dir/head" -type l -delete
+
+      - name: Install Claude Code
+        if: env.HAS_SECRETS == 'true'
+        run: |
+          tarball="$RUNNER_TEMP/claude-code.tgz"
+          curl -fsSL -o "$tarball" \
+            "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-$CLAUDE_VERSION.tgz"
+          echo "$CLAUDE_SHA256  $tarball" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/claude-code"
+          tar -xzf "$tarball" -C "$RUNNER_TEMP/claude-code" --strip-components=1 package/claude
+
+      # Flags: https://code.claude.com/docs/en/cli-reference
+      # The prompt comes right after -p: --tools takes a variable number of values.
+      # No --allowedTools: a bare "Read" allow rule would approve reads outside the working directory.
+      # dontAsk allows reads inside it and denies everything else.
+      - id: claude
+        name: Review with Claude
+        if: env.HAS_SECRETS == 'true'
+        timeout-minutes: 20
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY_REVIEW }}
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+        run: |
+          cd "$RUNNER_TEMP/review"
+          rc=0
+          "$RUNNER_TEMP/claude-code/claude" \
+            -p "Review the pull request in this directory. Follow the PR review instructions." \
+            --bare \
+            --model claude-opus-5-5 \
+            --tools "Read,Grep,Glob" \
+            --permission-mode dontAsk \
+            --settings '{"permissions":{"blockReadsOutsideWorkingDirectories":true}}' \
+            --strict-mcp-config \
+            --no-session-persistence \
+            --append-system-prompt-file "$GITHUB_WORKSPACE/factory/review/prompt.md" \
+            --json-schema "$(cat "$GITHUB_WORKSPACE/factory/review/schema.json")" \
+            --output-format json \
+            --max-turns 40 \
+            --max-budget-usd 3 \
+            < /dev/null > "$RUNNER_TEMP/result.json" || rc=$?
+          echo "exit-code=$rc" >> "$GITHUB_OUTPUT"
+          jq -c '{subtype, is_error, num_turns, total_cost_usd, duration_ms}' "$RUNNER_TEMP/result.json" || true
+
+      # Everything below runs after Claude exited, even if a step above failed: the gate fails closed.
+      - id: app-token
+        if: ${{ !cancelled() && env.HAS_SECRETS == 'true' }}
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ secrets.REVIEWER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
+          permission-checks: write
+          permission-pull-requests: read
+
+      - name: Earlier review runs on this PR (round count)
+        if: ${{ !cancelled() && steps.app-token.outputs.token != '' }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          runs="$RUNNER_TEMP/prior-runs.json"
+          for sha in $(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/commits" --jq '.[].sha'); do
+            gh api --paginate "repos/$REPO/commits/$sha/check-runs?check_name=review&filter=all" \
+              --jq '.check_runs[] | {name, app: {slug: .app.slug}}'
+          done | jq -s '.' > "$runs" || echo '[]' > "$runs"
+
+      - name: Gate and post the review check
+        if: ${{ !cancelled() && steps.app-token.outputs.token != '' }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          CLAUDE_EXIT: ${{ steps.claude.outputs.exit-code }}
+        run: |
+          payload="$RUNNER_TEMP/check-run.json"
+          python3 -I factory/review/gate.py \
+            --result "$RUNNER_TEMP/result.json" \
+            --claude-exit-code "${CLAUDE_EXIT:-1}" \
+            --schema factory/review/schema.json \
+            --changed-files "$RUNNER_TEMP/changed-files.z" \
+            --prior-runs "$RUNNER_TEMP/prior-runs.json" \
+            --app-slug "$APP_SLUG" \
+            --head-sha "$HEAD_SHA" \
+            --out "$payload" || true
+          if [ ! -s "$payload" ]; then
+            jq -n --arg sha "$HEAD_SHA" '{name: "review", head_sha: $sha, status: "completed", conclusion: "failure",
+              output: {title: "Fail", summary: "The gate script produced no verdict. See the workflow run."}}' > "$payload"
+          fi
+          jq -r '.output.summary' "$payload" >> "$GITHUB_STEP_SUMMARY"
+          gh api -X POST "repos/$REPO/check-runs" --input "$payload" > /dev/null

@@ -1,0 +1,43 @@
+{
+  "summary": "Adds a health field. Two small issues.",
+  "dimensions": {
+    "codeQuality": {
+      "score": 8,
+      "findings": [
+        {
+          "severity": "improvement",
+          "file": "backend/src/chb/app.py",
+          "line": 10,
+          "message": "Function mixes parsing and I/O.",
+          "suggestedFix": "Split parse_request from the handler.",
+          "approved": true
+        }
+      ]
+    },
+    "security": {
+      "score": 10,
+      "findings": []
+    },
+    "businessAlignment": {
+      "score": 10,
+      "findings": []
+    },
+    "tests": {
+      "score": 9.5,
+      "findings": [
+        {
+          "severity": "cleanup",
+          "file": "backend/tests/test_health.py",
+          "line": null,
+          "message": "Test name does not state the behaviour.",
+          "suggestedFix": "Rename to test_health_reports_version."
+        }
+      ]
+    },
+    "architecture": {
+      "score": 10,
+      "findings": []
+    }
+  },
+  "mergeSafety": 10
+}

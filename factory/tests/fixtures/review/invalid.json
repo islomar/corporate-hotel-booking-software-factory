@@ -1,0 +1,29 @@
+{
+  "summary": "Missing a dimension.",
+  "dimensions": {
+    "codeQuality": {
+      "score": 10,
+      "findings": [
+        {
+          "severity": "major",
+          "file": "backend/src/chb/app.py",
+          "line": 10,
+          "message": "Message",
+          "suggestedFix": "Fix"
+        }
+      ]
+    },
+    "security": {
+      "score": 10,
+      "findings": []
+    },
+    "businessAlignment": {
+      "score": 10,
+      "findings": []
+    },
+    "tests": {
+      "score": 10,
+      "findings": []
+    }
+  }
+}
