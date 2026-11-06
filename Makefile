@@ -54,8 +54,10 @@ mutate: ## Mutation testing for the backend
 TF_ENV = GOOGLE_OAUTH_ACCESS_TOKEN=$$(CLOUDSDK_ACTIVE_CONFIG_NAME=chb gcloud auth print-access-token) \
 	TF_VAR_billing_account=$$(CLOUDSDK_ACTIVE_CONFIG_NAME=chb gcloud billing projects describe chb-factory-a92932 --format='value(billingAccountName)' | sed 's\#billingAccounts/\#\#')
 
-infra-plan: ## Terraform plan for GCP (uses your gcloud login, configuration `chb`)
-	cd infra/gcp && export $(TF_ENV) && test -n "$$TF_VAR_billing_account" && terraform init -input=false >/dev/null && terraform plan -input=false -out=gcp.tfplan
+infra-plan: ## Terraform plans for GCP and GitHub (your gcloud login and gh token)
+	export $(TF_ENV) GITHUB_TOKEN=$$(gh auth token) && test -n "$$TF_VAR_billing_account" && \
+	for d in gcp github; do (cd infra/$$d && terraform init -input=false >/dev/null && terraform plan -input=false -out=$$d.tfplan) || exit 1; done
 
-infra-apply: ## Apply the plan saved by infra-plan
-	cd infra/gcp && export $(TF_ENV) && terraform apply -input=false gcp.tfplan
+infra-apply: ## Apply the plans saved by infra-plan
+	export $(TF_ENV) GITHUB_TOKEN=$$(gh auth token) && \
+	for d in gcp github; do (cd infra/$$d && terraform apply -input=false $$d.tfplan) || exit 1; done

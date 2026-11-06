@@ -1,0 +1,71 @@
+locals {
+  repository = "corporate-hotel-booking-software-factory"
+  # GitHub Actions. Pinning checks to it stops any other app from satisfying them.
+  github_actions_app_id = 15368
+  required_checks       = ["backend", "frontend", "e2e"]
+
+  variables = {
+    APP_URL          = "https://chb-1027266991110.europe-west1.run.app"
+    GCP_DEPLOYER_SA  = "github-deployer@chb-factory-a92932.iam.gserviceaccount.com"
+    GCP_PROJECT      = "chb-factory-a92932"
+    GCP_REGION       = "europe-west1"
+    GCP_WIF_PROVIDER = "projects/1027266991110/locations/global/workloadIdentityPools/github/providers/github"
+  }
+}
+
+import {
+  to = github_repository.this
+  id = local.repository
+}
+
+resource "github_repository" "this" {
+  name         = local.repository
+  description  = "Codurance Corporate Hotel Booking kata built by an AI-agent software factory (540 + eferro practices)"
+  homepage_url = local.variables.APP_URL
+  visibility   = "public"
+
+  # Work is tracked in Jira (CHB). Docs live in the repository.
+  has_issues   = false
+  has_projects = false
+  has_wiki     = false
+
+  # One ticket, one squash commit (ADR-0faf).
+  allow_squash_merge          = true
+  allow_merge_commit          = false
+  allow_rebase_merge          = false
+  allow_auto_merge            = true
+  allow_update_branch         = true
+  delete_branch_on_merge      = true
+  squash_merge_commit_title   = "PR_TITLE"
+  squash_merge_commit_message = "PR_BODY"
+
+  vulnerability_alerts = true
+
+  security_and_analysis {
+    secret_scanning {
+      status = "enabled"
+    }
+    secret_scanning_push_protection {
+      status = "enabled"
+    }
+  }
+
+  archive_on_destroy = true
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+import {
+  for_each = local.variables
+  to       = github_actions_variable.this[each.key]
+  id       = "${local.repository}:${each.key}"
+}
+
+resource "github_actions_variable" "this" {
+  for_each      = local.variables
+  repository    = github_repository.this.name
+  variable_name = each.key
+  value         = each.value
+}
