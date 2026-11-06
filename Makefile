@@ -36,6 +36,7 @@ check-frontend:
 
 check-deps:
 	python3 -I -m unittest discover -s scripts/tests
+	python3 -I -m unittest discover -s factory/tests
 	python3 -I scripts/check_playwright_image.py
 	python3 -I scripts/check_release_age.py backend/uv.lock
 

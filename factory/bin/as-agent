@@ -1,0 +1,3 @@
+#!/bin/sh
+# Run a command as the factory GitHub App. See factory/as_agent.py.
+exec python3 -I "$(dirname "$0")/../as_agent.py" "$@"
