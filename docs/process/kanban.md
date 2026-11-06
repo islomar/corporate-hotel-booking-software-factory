@@ -1,6 +1,6 @@
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
-**Table of Contents** *generated with [DocToc](https://github.com/thlorenz/doctoc)*
+## Contents
 
 - [Kanban statuses](#kanban-statuses)
   - [Flow](#flow)
@@ -67,6 +67,14 @@ Meaning: the change is merged and deployed, but nobody has yet confirmed that it
 
 - Enter: the PR is merged and, where it applies, deployed or applied.
   For Terraform changes, the owner has run `make infra-apply`.
+- Enter: in the same step, the worker adds a ticket comment headed "Acceptance criteria (Validating)".
+  A reader without context must see what is still missing. For each criterion not yet checked live, the comment states:
+  - What must happen, in the live system.
+  - When: an absolute date and time, or the event that triggers it (for example "the next Dependabot run, Monday 2026-11-09 05:00 UTC").
+  - Where to check: the exact URL or command.
+  - Pass condition: what the check must show.
+  - Who checks: the agent or the owner. If the owner must act, the comment has numbered steps, as for Needs human.
+  - If it fails: what happens next, and by when the ticket goes back to In Progress.
 - Leave to Done: each acceptance criterion is checked in the live system, and the evidence is written as a ticket comment.
   Evidence is concrete: the smoke test of the deploy, a `gcloud` or `gh api` read of the real setting, a screenshot, a log line, a metric.
   A passing plan or a green CI run is not evidence of the live result.
@@ -78,7 +86,8 @@ Meaning: the change is merged and deployed, but nobody has yet confirmed that it
 Meaning: the work cannot continue without the owner.
 
 - Enter: an open question, a decision, an action only the owner can do (a click in a web UI, a sudo command, a payment setting), or a gate that failed and needs judgement.
-  The ticket comment states exactly what is needed: what, where and how.
+  The ticket comment is a numbered step-by-step procedure: what to do, where (exact URL or menu path), how (each click or command).
+  It also states what not to touch, the deadline if any, and how the owner reports that it is done.
 - Leave: the owner answers or acts. The ticket goes back to the status it came from.
 - This status is the top of every notification.
 
