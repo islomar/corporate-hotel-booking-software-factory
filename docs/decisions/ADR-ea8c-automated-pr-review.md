@@ -7,7 +7,7 @@
   - [Options](#options)
   - [Decision](#decision)
     - [1. Identity: a second GitHub App, `chb-factory-reviewer`](#1-identity-a-second-github-app-chb-factory-reviewer)
-    - [2. Where it runs: a `review` workflow on `pull_request`](#2-where-it-runs-a-review-workflow-on-pull_request)
+    - [2. Where it runs: a `review` workflow on `pull_request_target`](#2-where-it-runs-a-review-workflow-on-pull_request_target)
     - [3. Typed result and the gate](#3-typed-result-and-the-gate)
     - [4. Risk classes and who approves](#4-risk-classes-and-who-approves)
     - [5. Bounded loop](#5-bounded-loop)
@@ -51,6 +51,7 @@ What GitHub documents:
 - A skipped job reports success and "will not prevent a pull request from merging, even if it is a required check". `neutral` is also treated as success.
 - "Any user with write access to your repository has read access to all secrets configured in your repository."
 - On `pull_request`, the workflow file comes from the PR merge commit, and same-repository branches receive secrets. Forks receive none.
+- On `pull_request_target`, the workflow file and `GITHUB_SHA` come from the default branch, and environment rules evaluate against it (since 2025-12-08).
 
 ## Options
 
@@ -69,14 +70,18 @@ What GitHub documents:
 - Installed on this repository only.
 - Permissions: contents read, pull requests write, checks write, metadata read. No contents write, so it cannot merge (merge needs contents write). No workflows, no administration.
 - The author App never holds a reviewer credential. The reviewer App never pushes.
-- The author App loses `workflows: write`. Without it, an agent branch cannot change a workflow.
-  It then cannot read the reviewer key from a `pull_request` run. Workflow changes go through the owner. This amends ADR-d7b7.
+- The author App loses `workflows: write`. Without it, an agent branch cannot change a workflow. Workflow changes go through the owner. This amends ADR-d7b7.
 
-### 2. Where it runs: a `review` workflow on `pull_request`
+### 2. Where it runs: a `review` workflow on `pull_request_target`
 
-- Trigger: `pull_request` (`opened`, `synchronize`, `reopened`, `ready_for_review`). Not `pull_request_target`: GitHub advises against it, and it gives fork content a run with secrets.
-- The job runs only for same-repository branches. A fork PR gets no secrets, so the required check stays missing and the owner reviews it.
-- Workspace root: the base commit (`pull_request.base.sha`). Everything the job executes or reads as instructions comes from there:
+- Trigger: `pull_request_target` (`opened`, `synchronize`, `reopened`, `ready_for_review`) on PRs into `main`.
+  Amended by CHB-87: the first version used `pull_request`, where a branch that edits `review.yml` runs its own copy with the reviewer secrets.
+  On `pull_request_target`, the workflow file always comes from `main`.
+- The reviewer secrets are environment secrets of `reviewer`, which admits the `main` branch only (`infra/github/environments.tf`).
+  Repository secrets would reach any `pull_request` workflow a branch adds. A `pull_request` job runs on `refs/pull/N/merge`, so the environment rejects it.
+- The job runs only for same-repository branches into `main`, and skips Dependabot and drafts. The fork check in `if:` is a security control:
+  `pull_request_target` gives fork PRs the secrets. A fork PR gets no review, so the required check stays missing and the owner reviews it.
+- Workspace root: `main` at `GITHUB_SHA`, the commit the workflow file came from. Everything the job executes or reads as instructions comes from there:
   the gate script, schema, skill, rubric, settings and the current rollout stage.
 - The job uses no local `./` actions. A PR can change `factory/` on its branch, and CODEOWNERS blocks only the merge, not this run.
 - The PR head is checked out into a separate directory as data. Nothing from it runs: no install, no build, no hooks.
@@ -166,8 +171,8 @@ Harness paths stay human at every stage.
 - ❌ Copilot code review as the gate: no score, no rubric control, not a required check.
   Copilot approvals can count toward required approvals, but approving on its own judgment skips the typed result. It stays as a second opinion.
 - ❌ One App for author and reviewer: the author approves its own work. GitHub blocks self-approval only for the same identity.
-- ❌ `pull_request_target` or `workflow_run` with a `main`-only environment for the reviewer secrets: it protects the key even if the author keeps `workflows: write`.
-  It also runs base code with secrets for fork PRs, and GitHub advises against `pull_request_target`. Revisit if the author App must keep `workflows: write`.
+- ❌ `pull_request` with repository secrets (the first version): any branch can run its own workflow copy with the secrets. Replaced by decision 2 in CHB-87.
+- ❌ `workflow_run` after a `pull_request` run: it needs an artifact handoff from an untrusted run. `pull_request_target` with the PR head as data is simpler.
 - ❌ `required_approving_review_count = 0`, gating only on `review`: one compromised workflow run would merge feature code with no approval at all.
 - ❌ Approval counted from a GitHub Actions job (`GITHUB_TOKEN`): any workflow can produce it, and merges by `GITHUB_TOKEN` start no CI.
 
@@ -189,6 +194,8 @@ Taken on 2026-11-06:
 - Workflow changes by the agent need the owner's hands or a PR the owner pushes.
 - The rubric, schema and skill live on `main` and change only through owner-reviewed PRs.
 - Review spend becomes a CI cost, tracked with CHB-56 and CHB-65.
+- The repository is public. From 2026-12-02 GitHub disables `pull_request_target` on public repositories unless an Actions event policy allows it.
+  The owner must allow it for `review.yml` in the repository's workflow execution protections, or the review stops running.
 
 ## Unverified
 
@@ -211,6 +218,10 @@ Taken on 2026-11-06:
 - About status checks: <https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/about-status-checks>
 - Secure use of GitHub Actions: <https://docs.github.com/en/actions/reference/security/secure-use>
 - Events that trigger workflows: <https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows>
+- Securely using `pull_request_target`: <https://docs.github.com/en/actions/reference/security/securely-using-pull_request_target>
+- GitHub Security Lab, preventing pwn requests: <https://securitylab.github.com/resources/github-actions-preventing-pwn-requests/>
+- `pull_request_target` and environment branch protections changes (2025-11-07): <https://github.blog/changelog/2025-11-07-actions-pull_request_target-and-environment-branch-protections-changes/>
+- Workflow execution protections generally available (2026-09-17): <https://github.blog/changelog/2026-09-17-workflow-execution-protections-in-github-actions-generally-available/>
 - Deployments and environments: <https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments>
 - Permissions required for GitHub Apps: <https://docs.github.com/en/rest/authentication/permissions-required-for-github-apps>
 - Copilot code review: <https://docs.github.com/en/copilot/concepts/agents/code-review>
