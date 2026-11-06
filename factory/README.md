@@ -25,9 +25,17 @@ factory/bin/as-agent gh pr create --fill
 
 ## Automated PR review (shadow mode)
 
-`.github/workflows/review.yml` scores every same-repository PR into `main` with Claude Code and posts a check run named `review` as the App `chb-factory-reviewer`.
-It runs on `pull_request_target`, so the workflow, gate, schema and prompt always come from `main`. The PR head is read as data and never run.
-The `main` ruleset does not require the check yet. Design: ADR-ea8c (PR #16). Ticket: CHB-87.
+`.github/workflows/review.yml` scores every same-repository PR into `main` with Claude Code and posts a check run named `review` as the App `chb-factory-reviewer` on the PR head commit.
+The `main` ruleset does not require the check yet. Design: ADR-ea8c (PR #16). Tickets: CHB-87, CHB-93.
+
+How it starts:
+
+1. `.github/workflows/review-trigger.yml` runs on `pull_request`. It has no permissions and no secrets, and only echoes a line.
+2. When it completes, `review.yml` runs on `workflow_run`. GitHub takes it from `main`, so the workflow, gate, schema and prompt always come from `main`.
+3. Its `resolve` job takes the head SHA from the event, finds the PR through the API and checks it: open, not draft, into `main`, from this repository, not Dependabot, head equal to that SHA.
+4. Its `score-pr` job runs in the `reviewer` environment, reads the PR head as data and never runs it.
+
+A change to `review.yml` takes effect only after merge: the PR that changes it is reviewed by the copy on `main`.
 
 | File | Role |
 |---|---|

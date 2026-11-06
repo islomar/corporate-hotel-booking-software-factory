@@ -7,7 +7,7 @@
   - [Options](#options)
   - [Decision](#decision)
     - [1. Identity: a second GitHub App, `chb-factory-reviewer`](#1-identity-a-second-github-app-chb-factory-reviewer)
-    - [2. Where it runs: a `review` workflow on `pull_request_target`](#2-where-it-runs-a-review-workflow-on-pull_request_target)
+    - [2. Where it runs: a `review` workflow on `workflow_run`](#2-where-it-runs-a-review-workflow-on-workflow_run)
     - [3. Typed result and the gate](#3-typed-result-and-the-gate)
     - [4. Risk classes and who approves](#4-risk-classes-and-who-approves)
     - [5. Bounded loop](#5-bounded-loop)
@@ -52,6 +52,9 @@ What GitHub documents:
 - "Any user with write access to your repository has read access to all secrets configured in your repository."
 - On `pull_request`, the workflow file comes from the PR merge commit, and same-repository branches receive secrets. Forks receive none.
 - On `pull_request_target`, the workflow file and `GITHUB_SHA` come from the default branch, and environment rules evaluate against it (since 2025-12-08).
+- From 2026-12-02 GitHub blocks `pull_request_target` on public repositories unless an Actions event policy allows it. This personal repository has no event policies (checked 2026-11-06, CHB-93).
+- On `workflow_run`, the workflow file comes from the default branch, and `GITHUB_SHA` and `GITHUB_REF` are the default branch's. The triggered workflow gets secrets even if the triggering one did not.
+- An environment's deployment branch rule "is matched against the `GITHUB_REF` of the workflow run". So a `workflow_run` job matches `main`.
 
 ## Options
 
@@ -72,24 +75,38 @@ What GitHub documents:
 - The author App never holds a reviewer credential. The reviewer App never pushes.
 - The author App loses `workflows: write`. Without it, an agent branch cannot change a workflow. Workflow changes go through the owner. This amends ADR-d7b7.
 
-### 2. Where it runs: a `review` workflow on `pull_request_target`
+### 2. Where it runs: a `review` workflow on `workflow_run`
 
-- Trigger: `pull_request_target` (`opened`, `synchronize`, `reopened`, `ready_for_review`) on PRs into `main`.
-  Amended by CHB-87: the first version used `pull_request`, where a branch that edits `review.yml` runs its own copy with the reviewer secrets.
-  On `pull_request_target`, the workflow file always comes from `main`.
+Amended by CHB-93. The second version ran on `pull_request_target`, which GitHub blocks on public repositories from 2026-12-02.
+The first version (CHB-87) used `pull_request`, where a branch that edits `review.yml` runs its own copy with the reviewer secrets.
+
+- Two workflows:
+  - `review-trigger.yml` runs on `pull_request` (`opened`, `synchronize`, `reopened`, `ready_for_review`) for PRs into `main`.
+    It has `permissions: {}`, no secrets and no checkout. It only echoes a line. A branch can change it; nothing trusts it.
+  - `review.yml` runs on `workflow_run` of "Review trigger", type `completed`. GitHub always takes it from `main`.
+- `review.yml` has two jobs:
+  - `resolve`: no environment, no secrets, `contents: read` and `pull-requests: read`.
+    It requires a `pull_request` run of this repository that succeeded, from a branch of this repository, not by Dependabot.
+    The head SHA comes from `workflow_run.head_sha`, which GitHub sets. The PR number comes from `workflow_run.pull_requests`, or, when that list is empty, from the API (`commits/{sha}/pulls`).
+    The job reads the PR from the API and requires: open, not draft, base `main` of this repository, head from this repository, head SHA equal to the run's SHA, author not Dependabot.
+    It checks the formats (number digits only, SHAs 40 hex) before it writes its outputs. No artifact or PR text crosses into the next job.
+  - `score-pr`: runs only when `resolve` found a PR. It holds the reviewer secrets.
+- Any branch can add a workflow named "Review trigger", or change the real one. That only starts `review.yml`, which then reviews a real PR head commit or does nothing.
 - The reviewer secrets are environment secrets of `reviewer`, which admits the `main` branch only (`infra/github/environments.tf`).
   Repository secrets would reach any `pull_request` workflow a branch adds. A `pull_request` job runs on `refs/pull/N/merge`, so the environment rejects it.
-- The job runs only for same-repository branches into `main`, and skips Dependabot and drafts. The fork check in `if:` is a security control:
-  `pull_request_target` gives fork PRs the secrets. A fork PR gets no review, so the required check stays missing and the owner reviews it.
+  A `workflow_run` job has `GITHUB_REF` set to `main`, so the environment admits it. `deploy.yml` already uses this with the `production` environment, which also admits `main` only.
+- A fork PR gets no review: `resolve` rejects it, so the required check stays missing and the owner reviews it.
 - Workspace root: `main` at `GITHUB_SHA`, the commit the workflow file came from. Everything the job executes or reads as instructions comes from there:
   the gate script, schema, skill, rubric, settings and the current rollout stage.
 - The job uses no local `./` actions. A PR can change `factory/` on its branch, and CODEOWNERS blocks only the merge, not this run.
-- The PR head is checked out into a separate directory as data. Nothing from it runs: no install, no build, no hooks.
+- The PR head is checked out into a separate directory as data. `.git` and every symlink are removed. Nothing from it runs: no install, no build, no hooks.
+- The PR title and body come from the API into a file that Claude reads. No `run:` block expands a PR-controlled string.
 - Claude Code runs as `claude -p --bare --add-dir <skill dir> --tools "Read,Grep,Glob" --strict-mcp-config --json-schema <schema>`, with `--max-turns` and `--max-budget-usd`.
   - `--bare` skips hooks, skills, plugins, MCP servers and CLAUDE.md discovery, so files in the PR head cannot instruct or run anything.
   - `--tools` restricts the tool set. `--allowedTools` only pre-approves, so it is not enough.
   - The model has no shell, no network tool and no GitHub tool.
-- The reviewer App token is minted in a later step, after Claude exits. The Claude process never sees it.
+- The reviewer App token is minted in a later step, after Claude exits. The Claude process never sees it or a GitHub token.
+- The `review` check run goes on the PR head SHA, so it shows on the PR. The Actions jobs of `review.yml` attach to `main`'s commit, not to the PR.
 - CLI version and every action are pinned by commit, as in the existing workflows.
 
 ### 3. Typed result and the gate
@@ -172,7 +189,9 @@ Harness paths stay human at every stage.
   Copilot approvals can count toward required approvals, but approving on its own judgment skips the typed result. It stays as a second opinion.
 - ❌ One App for author and reviewer: the author approves its own work. GitHub blocks self-approval only for the same identity.
 - ❌ `pull_request` with repository secrets (the first version): any branch can run its own workflow copy with the secrets. Replaced by decision 2 in CHB-87.
-- ❌ `workflow_run` after a `pull_request` run: it needs an artifact handoff from an untrusted run. `pull_request_target` with the PR head as data is simpler.
+- ❌ `pull_request_target` (the second version, CHB-87): GitHub blocks it on public repositories from 2026-12-02 unless an Actions event policy allows it, and this personal repository has no event policies.
+  Replaced by `workflow_run` in CHB-93. The first rejection of `workflow_run` assumed an artifact handoff; the payload and the API give the PR number and head SHA without one.
+- ❌ A `workflow_run` design that reads the PR number from an artifact the `pull_request` run uploads: the branch controls that run, so it controls the artifact.
 - ❌ `required_approving_review_count = 0`, gating only on `review`: one compromised workflow run would merge feature code with no approval at all.
 - ❌ Approval counted from a GitHub Actions job (`GITHUB_TOKEN`): any workflow can produce it, and merges by `GITHUB_TOKEN` start no CI.
 
@@ -194,8 +213,9 @@ Taken on 2026-11-06:
 - Workflow changes by the agent need the owner's hands or a PR the owner pushes.
 - The rubric, schema and skill live on `main` and change only through owner-reviewed PRs.
 - Review spend becomes a CI cost, tracked with CHB-56 and CHB-65.
-- The repository is public. From 2026-12-02 GitHub disables `pull_request_target` on public repositories unless an Actions event policy allows it.
-  The owner must allow it for `review.yml` in the repository's workflow execution protections, or the review stops running.
+- The review needs no Actions event policy: it uses `pull_request` and `workflow_run`, not `pull_request_target`.
+- A change to `review.yml` takes effect only after merge. Its own PR is reviewed by the version on `main`.
+- A PR whose branch conflicts with `main` gets no review: GitHub runs no `pull_request` workflow without a merge commit.
 
 ## Unverified
 
@@ -219,6 +239,8 @@ Taken on 2026-11-06:
 - Secure use of GitHub Actions: <https://docs.github.com/en/actions/reference/security/secure-use>
 - Events that trigger workflows: <https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows>
 - Securely using `pull_request_target`: <https://docs.github.com/en/actions/reference/security/securely-using-pull_request_target>
+- `pull_request_target` blocked by default from 2026-12-02 (2026-11-02): <https://github.blog/changelog/2026-11-02-pull_request_target-blocked-by-default-december-2>
+- `workflow_run` event, `GITHUB_SHA` and `GITHUB_REF`: <https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run>
 - GitHub Security Lab, preventing pwn requests: <https://securitylab.github.com/resources/github-actions-preventing-pwn-requests/>
 - `pull_request_target` and environment branch protections changes (2025-11-07): <https://github.blog/changelog/2025-11-07-actions-pull_request_target-and-environment-branch-protections-changes/>
 - Workflow execution protections generally available (2026-09-17): <https://github.blog/changelog/2026-09-17-workflow-execution-protections-in-github-actions-generally-available/>
