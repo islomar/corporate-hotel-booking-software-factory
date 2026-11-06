@@ -25,6 +25,7 @@ Epics:
 | CHB-43 | Implement workflow and calibration |
 | CHB-46 | Orchestrator and notifications |
 | CHB-50 | Kata specification |
-| CHB-52 | Evals |
+| CHB-52 | Agent evals |
+| CHB-72 | DORA metrics |
 
 Raw agent session exports stay in the owner's private notes folder. Curated copies go to `docs/sessions/`.

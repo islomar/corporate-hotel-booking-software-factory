@@ -19,6 +19,7 @@ All work is tracked in Jira space `CHB` (see `TODO.md`). Never track work in fil
 - A correction becomes a hook or a check before it becomes prose.
 - A dependency update that breaks something gets an automated test in the fix. See `docs/knowledge/dependency-update-breaks-get-a-test.md`.
 - Work outside-in: an acceptance test first, then unit tests, one public method at a time.
+- Push branches and open PRs through `factory/bin/as-agent` (for example `factory/bin/as-agent gh pr create`), never with the owner's login. See ADR-d7b7.
 - Run `make check` before every commit. Gates read exit codes, not output text.
 - One Jira ticket per branch: `CHB-<n>-<slug>`. Feature work never commits to `main`. Setup commits go to `main` until the `main` ruleset exists.
 - Kata design rules: services stay stateless, no circular dependencies between services, data in repositories, packages follow actors and areas.
