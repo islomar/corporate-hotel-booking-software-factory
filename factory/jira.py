@@ -8,6 +8,8 @@ Usage:
   factory/bin/jira transition CHB-12 "In Review"
   factory/bin/jira comment CHB-12 --body-file FILE      (FILE "-" reads stdin)
   factory/bin/jira assign CHB-12 --me | --account-id ID
+  factory/bin/jira rank CHB-12 [CHB-13 ...] --before CHB-9 | --after CHB-9
+  factory/bin/jira section CHB-12 --heading TEXT --body-file FILE
 
 The account email and API token are read from the 1Password item chb-jira-claude.api-token
 (fields username and credential) on every call. The token stays in this process: it is
@@ -16,12 +18,14 @@ never printed, logged, written to a file or passed to another process.
 The account is a CHB project Administrator (Jira Free has no Member role), so this
 wrapper is the guardrail. It only touches issues whose key is CHB-<n>, creates only
 Tasks under a CHB Epic, and has no delete, no project, board, workflow or permission
-writes, and no raw request command. Do not add one.
+writes, and no raw request command. Do not add one. `rank` changes only the rank of
+issues. `section` writes only the description field, and changes only one section of it.
 
 Exit codes:
   0  done
-  1  Jira refused or failed (HTTP error, unknown status, parent is not an epic)
-  2  usage error
+  1  Jira refused or failed (HTTP error, unknown status, parent is not an epic,
+     an issue that could not be ranked)
+  2  usage error (also a bad section heading, an empty body, a duplicate rank key)
   3  no credential: 1Password is locked or `op` failed. The agent stops and reports.
 """
 
@@ -47,6 +51,7 @@ TOKEN_COMMAND = ["op", "item", "get", ITEM, "--fields", "label=credential", "--r
 KEY_PATTERN = re.compile(rf"^{PROJECT}-[1-9][0-9]*$")
 URL_PATTERN = re.compile(r"https?://[^\s<>()]*[^\s<>().,;:!?'\"]")
 SEARCH_FIELDS = ["summary", "status", "assignee", "issuetype", "parent"]
+RANK_LIMIT = 50  # issues per rank request, the Jira Software limit
 
 EXIT_JIRA = 1
 EXIT_USAGE = 2
@@ -101,17 +106,48 @@ def default_opener() -> Opener:
     return lambda request: opener.open(request, timeout=30)
 
 
-def text_to_adf(text: str) -> dict[str, Any]:
-    """Plain text to an Atlassian Document. Blank lines split paragraphs, URLs become links."""
-    paragraphs = []
+def text_to_adf(text: str, *, bullets: bool = False) -> dict[str, Any]:
+    """Plain text to an Atlassian Document. Blank lines split paragraphs, URLs become links.
+
+    With bullets, consecutive lines that start with "- " become a bullet list.
+    """
+    blocks: list[dict[str, Any]] = []
     for block in re.split(r"\n\s*\n", text.strip()):
-        content: list[dict[str, Any]] = []
-        for i, line in enumerate(block.split("\n")):
-            if i:
-                content.append({"type": "hardBreak"})
-            content.extend(_inline(line))
-        paragraphs.append({"type": "paragraph", "content": content})
-    return {"type": "doc", "version": 1, "content": paragraphs}
+        lines = block.split("\n")
+        if not bullets:
+            blocks.append(_paragraph(lines))
+            continue
+        run: list[str] = []
+        items: list[str] = []
+        for line in lines:
+            if line.startswith("- "):
+                if run:
+                    blocks.append(_paragraph(run))
+                    run = []
+                items.append(line[2:])
+            else:
+                if items:
+                    blocks.append(_bullet_list(items))
+                    items = []
+                run.append(line)
+        if run:
+            blocks.append(_paragraph(run))
+        if items:
+            blocks.append(_bullet_list(items))
+    return {"type": "doc", "version": 1, "content": blocks}
+
+
+def _paragraph(lines: list[str]) -> dict[str, Any]:
+    content: list[dict[str, Any]] = []
+    for i, line in enumerate(lines):
+        if i:
+            content.append({"type": "hardBreak"})
+        content.extend(_inline(line))
+    return {"type": "paragraph", "content": content}
+
+
+def _bullet_list(items: list[str]) -> dict[str, Any]:
+    return {"type": "bulletList", "content": [{"type": "listItem", "content": [_paragraph([item])]} for item in items]}
 
 
 def _inline(line: str) -> list[dict[str, Any]]:
@@ -136,6 +172,9 @@ def adf_to_text(node: Any) -> str:
         return str(node.get("text", ""))
     if kind == "hardBreak":
         return "\n"
+    if kind == "bulletList":
+        items = (adf_to_text(item).strip("\n") for item in node.get("content", []))
+        return "".join(f"- {item}\n" for item in items) + "\n"
     inner = "".join(adf_to_text(child) for child in node.get("content", []))
     if kind == "doc":
         return inner.strip("\n")
@@ -150,6 +189,65 @@ def check_key(key: str) -> str:
     return key
 
 
+def replace_section(description: dict[str, Any] | None, heading: str, body: str) -> dict[str, Any]:
+    """Return a copy of the description with the section under `heading` set to `body`.
+
+    The section starts at the top-level heading whose text is `heading` and ends before the next
+    heading of the same or a higher level, or at the end. It is replaced by a level-2 heading and
+    the body. Without such a heading the section is appended. Other nodes are kept as they are.
+    """
+    heading = check_section_input(heading, body)
+    doc = description if isinstance(description, dict) and description.get("type") == "doc" else None
+    content: list[Any] = list(doc.get("content", [])) if doc else []
+    new = [
+        {"type": "heading", "attrs": {"level": 2}, "content": [{"type": "text", "text": heading}]},
+        *text_to_adf(body, bullets=True)["content"],
+    ]
+    starts = [i for i, node in enumerate(content) if _is_heading(node) and adf_to_text(node).strip() == heading]
+    if len(starts) > 1:
+        raise JiraError(f"the description has {len(starts)} sections headed {heading!r}; fix it by hand")
+    if not starts:
+        content.extend(new)
+    else:
+        start = starts[0]
+        level = _level(content[start])
+        end = next(
+            (i for i in range(start + 1, len(content)) if _is_heading(content[i]) and _level(content[i]) <= level),
+            len(content),
+        )
+        content[start:end] = new
+    result = dict(doc) if doc else {"type": "doc", "version": 1}
+    result["content"] = content
+    return result
+
+
+def check_section_input(heading: str, body: str) -> str:
+    """Refuse a bad heading or an empty body (UsageError, exit 2). Return the stripped heading."""
+    heading = heading.strip()
+    if not heading or "\n" in heading:
+        raise UsageError("heading must be one non-empty line")
+    if not body.strip():
+        raise UsageError("section body is empty")
+    return heading
+
+
+def check_rank_input(keys: list[str], anchor: str) -> None:
+    """Refuse a rank request that makes no sense (UsageError, exit 2). Keys are checked apart."""
+    if not keys or len(keys) > RANK_LIMIT:
+        raise UsageError(f"rank takes 1 to {RANK_LIMIT} issues, got {len(keys)}")
+    if len(set(keys)) != len(keys) or anchor in keys:
+        raise UsageError("each issue may appear once, and not as its own anchor")
+
+
+def _is_heading(node: Any) -> bool:
+    return isinstance(node, dict) and node.get("type") == "heading"
+
+
+def _level(node: dict[str, Any]) -> int:
+    level = node.get("attrs", {}).get("level", 1)
+    return level if isinstance(level, int) else 1
+
+
 class Jira:
     def __init__(self, email: str, token: str, opener: Opener, site: str = SITE) -> None:
         credentials = base64.b64encode(f"{email}:{token}".encode()).decode()
@@ -157,8 +255,8 @@ class Jira:
         self._opener = opener
         self._site = site
 
-    def request(self, method: str, path: str, body: object | None = None, *, empty_ok: bool = False) -> dict[str, Any]:
-        """Send one request. The answer must be a JSON object, or empty where empty_ok (HTTP 204)."""
+    def send(self, method: str, path: str, body: object | None = None) -> tuple[int, bytes]:
+        """Send one request. Return the HTTP status and the raw answer. HTTP errors raise JiraError."""
         request = urllib.request.Request(  # noqa: S310 - fixed https site
             self._site + path,
             method=method,
@@ -167,24 +265,18 @@ class Jira:
         )
         try:
             with self._opener(request) as response:
-                raw = response.read()
+                return getattr(response, "status", 200), response.read()
         except urllib.error.HTTPError as error:
             raise JiraError(f"{method} {path}: HTTP {error.code} {_jira_messages(error)}") from None
         except urllib.error.URLError as error:
             raise JiraError(f"{method} {path}: {error.reason}") from None
         except OSError as error:  # timeouts and resets while reading the response
             raise JiraError(f"{method} {path}: {type(error).__name__}") from None
-        if not raw.strip():
-            if empty_ok:
-                return {}
-            raise JiraError(f"{method} {path}: empty response")
-        try:
-            data = json.loads(raw)
-        except ValueError:
-            raise JiraError(f"{method} {path}: response is not JSON") from None
-        if not isinstance(data, dict):
-            raise JiraError(f"{method} {path}: response is not a JSON object")
-        return data
+
+    def request(self, method: str, path: str, body: object | None = None, *, empty_ok: bool = False) -> dict[str, Any]:
+        """Send one request. The answer must be a JSON object, or empty where empty_ok (HTTP 204)."""
+        _, raw = self.send(method, path, body)
+        return _json_object(method, path, raw, empty_ok=empty_ok)
 
     def myself(self) -> dict[str, Any]:
         return self.request("GET", "/rest/api/3/myself")
@@ -248,6 +340,55 @@ class Jira:
 
     def assign(self, key: str, account_id: str) -> None:
         self.request("PUT", f"/rest/api/3/issue/{check_key(key)}/assignee", {"accountId": account_id}, empty_ok=True)
+
+    def rank(self, keys: list[str], *, before: str | None = None, after: str | None = None) -> None:
+        """Move the issues, in the given order, just before or just after another issue."""
+        if (before is None) == (after is None):
+            raise UsageError("rank needs exactly one of before or after")
+        anchor = check_key(before or after or "")
+        for key in keys:
+            check_key(key)
+        check_rank_input(keys, anchor)
+        side = "rankBeforeIssue" if before else "rankAfterIssue"
+        path = "/rest/agile/1.0/issue/rank"
+        status, raw = self.send("PUT", path, {"issues": keys, side: anchor})
+        if status in (200, 204) and not raw.strip():
+            return
+        data = _json_object("PUT", path, raw, empty_ok=True)
+        entries = data.get("entries")
+        entries = [e for e in entries if isinstance(e, dict)] if isinstance(entries, list) else []
+        failed = [e for e in entries if e.get("errors") or e.get("status") not in (None, 200, 204)]
+        if status not in (200, 204) or failed:
+            details = "; ".join(f"{e.get('issueKey', e.get('issueId', '?'))}: {_errors(e.get('errors'))}" for e in failed)
+            raise JiraError(f"rank failed for some issues (HTTP {status}): {details or 'no details'}")
+
+    def set_section(self, key: str, heading: str, body: str) -> bool:
+        """Set one section of the description. Return False when it already had that content."""
+        check_key(key)
+        current = self.request("GET", f"/rest/api/3/issue/{key}?fields=description")["fields"].get("description")
+        updated = replace_section(current, heading, body)
+        if updated == current:
+            return False
+        self.request("PUT", f"/rest/api/3/issue/{key}", {"fields": {"description": updated}}, empty_ok=True)
+        return True
+
+
+def _errors(errors: Any) -> str:
+    return ", ".join(map(str, errors)) if isinstance(errors, list) else str(errors or "")
+
+
+def _json_object(method: str, path: str, raw: bytes, *, empty_ok: bool) -> dict[str, Any]:
+    if not raw.strip():
+        if empty_ok:
+            return {}
+        raise JiraError(f"{method} {path}: empty response")
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        raise JiraError(f"{method} {path}: response is not JSON") from None
+    if not isinstance(data, dict):
+        raise JiraError(f"{method} {path}: response is not a JSON object")
+    return data
 
 
 def before_transition(jira: Jira, key: str, status: str) -> None:
@@ -329,6 +470,17 @@ def _parser() -> argparse.ArgumentParser:
     who = assign.add_mutually_exclusive_group(required=True)
     who.add_argument("--me", action="store_true")
     who.add_argument("--account-id")
+
+    rank = commands.add_parser("rank", help="move issues, in order, just before or after another issue")
+    rank.add_argument("keys", nargs="+", metavar="key")
+    where = rank.add_mutually_exclusive_group(required=True)
+    where.add_argument("--before")
+    where.add_argument("--after")
+
+    section = commands.add_parser("section", help="set one headed section of the description")
+    section.add_argument("key")
+    section.add_argument("--heading", required=True)
+    section.add_argument("--body-file", required=True)
     return parser
 
 
@@ -357,6 +509,12 @@ def run(args: argparse.Namespace, jira: Jira) -> None:
         account_id = jira.myself()["accountId"] if args.me else args.account_id
         jira.assign(args.key, account_id)
         print(f"{args.key} assigned to {account_id}")
+    elif args.command == "rank":
+        jira.rank(args.keys, before=args.before, after=args.after)
+        print(f"{' '.join(args.keys)} ranked {'before ' + args.before if args.before else 'after ' + args.after}")
+    elif args.command == "section":
+        changed = jira.set_section(args.key, args.heading, args.body)
+        print(f"{args.key} section {args.heading!r} {'set' if changed else 'unchanged'}")
 
 
 def main(
@@ -369,9 +527,15 @@ def main(
     except SystemExit as exit_:
         return EXIT_USAGE if exit_.code else 0
     try:
-        for key in (getattr(args, "key", None), getattr(args, "parent", None)):
+        keys = [getattr(args, name, None) for name in ("key", "parent", "before", "after")] + getattr(args, "keys", [])
+        for key in keys:
             if key is not None:
                 check_key(key)  # before 1Password and before reading any file
+        if args.command == "rank":
+            check_rank_input(args.keys, args.before or args.after)
+        if args.command == "section":
+            args.body = _read_text(args.body_file)
+            check_section_input(args.heading, args.body)
         jira = Jira(*credentials_reader(), opener_factory())
         run(args, jira)
     except CredentialError as error:

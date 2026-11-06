@@ -38,9 +38,22 @@ factory/bin/jira create --parent CHB-27 --summary "Short title" --description-fi
 factory/bin/jira transition CHB-12 "In Review"
 factory/bin/jira comment CHB-12 --body-file comment.txt   # "-" reads stdin
 factory/bin/jira assign CHB-12 --me
+factory/bin/jira rank CHB-12 CHB-14 --before CHB-9   # or --after; up to 50 issues, kept in that order
+factory/bin/jira section CHB-12 --heading "Acceptance criteria (Validating)" --body-file section.txt
 ```
 
 Text files are plain text. Blank lines separate paragraphs and URLs become links.
+
+`rank` calls `PUT /rest/agile/1.0/issue/rank`. When Jira ranks only some of the issues (HTTP 207), it exits 1 and names each issue that failed.
+
+`section` reads the description and finds the top-level heading with that exact text.
+It replaces the section up to the next heading of the same or a higher level, or appends the section when the heading is absent.
+The new section is a level-2 heading and the body. In the body, lines that start with a dash and a space become a bullet list.
+It sends every other part of the description back unchanged. It refuses a description with two such headings.
+It reads, then writes: it overwrites an edit that someone else makes between the two requests.
+A bad heading, an empty body, a duplicate key or more than 50 issues exit 2 before the wrapper reads 1Password.
+
+`view` shows a bullet list as lines that start with a dash.
 
 Exit codes: 0 done, 1 Jira refused or failed, 2 usage error, 3 no credential (1Password locked or `op` failed). On 3 the agent stops and reports.
 
@@ -49,6 +62,7 @@ It can delete issues and change project and board settings through the REST API.
 The wrapper is the guardrail:
 
 - it accepts only `CHB-<n>` keys and creates only Tasks under a CHB Epic;
+- `rank` changes only the rank of issues, and `section` writes only the description field;
 - it has no delete, no project, board, workflow or permission write, and no raw request command;
 - it refuses HTTP redirects, so the token is never sent to another host.
 

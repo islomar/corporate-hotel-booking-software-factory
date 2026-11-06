@@ -68,6 +68,7 @@ Meaning: the change is merged and deployed, but nobody has yet confirmed that it
 - Enter: the PR is merged and, where it applies, deployed or applied.
   For Terraform changes, the owner has run `make infra-apply`.
 - Enter: in the same step, the worker writes a section headed "Acceptance criteria (Validating)" in the ticket description, not in a comment.
+  An agent writes it with `factory/bin/jira section CHB-<n> --heading "Acceptance criteria (Validating)" --body-file FILE`.
   A reader without context must see what is still missing. For each criterion not yet checked live, the section states:
   - What must happen, in the live system.
   - When: an absolute date and time, or the event that triggers it (for example "the next Dependabot run, Monday 2026-11-09 05:00 UTC").
@@ -108,7 +109,7 @@ Meaning: the ticket will not be done. This is a valid outcome.
 The person or agent doing the work is the assignee.
 Agent work is assigned to the Claude account ("Claude (CHB agent)").
 
-Agents make every Jira write (create, transition, comment, assign) through `factory/bin/jira`, so Jira history shows the Claude account as the author.
+Agents make every Jira write (create, transition, comment, assign, rank, description section) through `factory/bin/jira`, so Jira history shows the Claude account as the author.
 `acli` is logged in as the owner and is for the owner only.
 When `factory/bin/jira` fails, the agent stops and reports. It never falls back to `acli`.
 See `factory/README.md`.
