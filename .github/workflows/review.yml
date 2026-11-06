@@ -4,19 +4,30 @@
 # output, recomputes Merge Safety and decides. The reviewer App posts the verdict as a check
 # run named `review`. The `main` ruleset does not require it yet (stage 1, shadow).
 #
-# Trust boundaries:
-# - The workspace is the BASE commit. The gate, schema and prompt come from main, never from the PR.
-# - The PR head is data: checked out into a separate directory, never installed, built or run.
-# - Claude runs with --bare and read-only tools, and never sees the reviewer App key.
-#   The App token is minted only after Claude exits.
+# Why pull_request_target: on `pull_request`, a same-repository branch runs its own copy of
+# this file with the repository secrets, so a branch that edits it could read the reviewer keys.
+# On `pull_request_target`, GitHub always takes this file from the default branch (main).
 #
-# Missing today: the reviewer App (CHB-85) and the Anthropic key (CHB-89). Until all three
-# secrets exist, the job prints a notice and posts nothing.
+# Trust boundaries (GitHub Security Lab, "Preventing pwn requests"):
+# - The workspace is main at the commit this file came from. The gate, schema and prompt come
+#   from there, never from the PR.
+# - The PR head is data: checked out into a separate directory, never installed, built, sourced
+#   or run. No step restores or saves a cache. No `run:` block expands a PR-controlled string.
+# - Claude runs with --bare and read-only tools, and never sees the reviewer App key.
+#   The Anthropic key is only in the env of the Claude step. The App token is minted after Claude exits.
+#
+# The three secrets live in the `reviewer` environment (main only). Until they exist there, the job
+# prints a notice and posts nothing.
 name: Review
 
 on:
-  pull_request:
+  # zizmor flags pull_request_target as dangerous. This workflow checks out the PR head only as
+  # data, runs nothing from it, uses no cache, keeps no credentials in git config, and skips
+  # forks, Dependabot and drafts. See the trust boundaries above.
+  pull_request_target: # zizmor: ignore[dangerous-triggers]
     types: [opened, synchronize, reopened, ready_for_review]
+    # Only PRs into main: the gate must come from main, and the diff base must be a main commit.
+    branches: [main]
 
 permissions: {}
 
@@ -28,13 +39,19 @@ jobs:
   # Not named `review`: Actions posts a check under the job name, which would shadow the App's check.
   score-pr:
     name: score-pr
-    # Same-repository branches only: fork PRs get no secrets. Dependabot PRs follow ADR-ebe6.
+    # Same-repository branches into main only: fork PRs never reach the secrets.
+    # Dependabot PRs follow ADR-ebe6.
     if: >-
       github.event.pull_request.user.login != 'dependabot[bot]' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == 'main' &&
       !github.event.pull_request.draft
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # The reviewer secrets live in this environment, limited to the main branch, not in repository
+    # secrets: any branch can add a `pull_request` workflow, and its copy would get repository secrets.
+    # This job runs on main's ref under pull_request_target, so the environment admits it.
+    environment: reviewer
     permissions:
       contents: read
     env:
@@ -50,15 +67,17 @@ jobs:
     steps:
       - name: Reviewer secrets missing
         if: env.HAS_SECRETS != 'true'
-        run: echo "::notice::Reviewer secrets are not set (CHB-85, CHB-89). No review posted."
+        run: echo "::notice::Reviewer secrets are not set. No review posted."
 
-      - name: Check out the base commit (gate, schema, prompt)
+      # github.sha is the main commit this workflow file came from, so the gate matches the workflow.
+      - name: Check out main (gate, schema, prompt)
         if: env.HAS_SECRETS == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
+      # Data only. Nothing below executes, sources or installs a file from this checkout.
       - name: Fetch the PR head as data
         if: env.HAS_SECRETS == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

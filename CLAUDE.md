@@ -11,7 +11,7 @@
 # Agent instructions
 
 Read `README.md` for layout and commands. Decisions are in `docs/decisions/`.
-All work is tracked in Jira space `CHB` (see `TODO.md`). Never track work in files outside this repository or Jira.
+All work is tracked in Jira space `CHB` (see `TODO.md`). Move tickets only as `docs/process/kanban.md` defines. Never track work in files outside this repository or Jira.
 
 ## Rules
 
