@@ -7,11 +7,13 @@ place for them (ADR-ebe6). A PR passes when:
 
 - it changes no supply-chain file; or
 - the owner's latest review is an approval of the current head commit; or
-- the PR author is `dependabot[bot]` and every commit is Dependabot's: author
-  `dependabot[bot]`, committer `web-flow` and a signature GitHub verified. GitHub records
-  Dependabot commits this way. A release-age change (`min-release-age*` in `.npmrc`,
-  `exclude-newer*` in `uv.toml` or `pyproject.toml`) rules this path out. The
-  `dependabot-branches` ruleset lets only Dependabot push to `dependabot/**` branches.
+- the PR author is `dependabot[bot]`, every commit is Dependabot's (author
+  `dependabot[bot]`, committer `web-flow`, a signature GitHub verified: GitHub records
+  Dependabot commits this way), and the update is safe: patch, or minor from 1.0, read
+  from the commits' `updated-dependencies` trailer (see update_risks). A release-age
+  change (`min-release-age*` in `.npmrc`, `exclude-newer*` in `uv.toml` or
+  `pyproject.toml`) rules this path out. The `dependabot-branches` ruleset lets only
+  Dependabot push to `dependabot/**` branches.
 
 Changed files come from `git diff --no-renames --name-only -z BASE...HEAD`. Commits and
 reviews come from the GitHub API. PR title, body and labels are never read.
@@ -84,6 +86,10 @@ class CheckError(Exception):
     pass
 
 
+class SettingsError(Exception):
+    pass
+
+
 def is_supply_chain_file(path: str) -> bool:
     name = PurePosixPath(path).name
     return any(fnmatch.fnmatchcase(name, pattern) for pattern in SUPPLY_CHAIN_NAMES)
@@ -101,10 +107,6 @@ def _npmrc_settings(text: str) -> list[tuple[str, str]]:
             if key.startswith("min-release-age"):
                 settings.append((key, value))
     return sorted(settings)
-
-
-class SettingsError(Exception):
-    pass
 
 
 def _exclude_newer(table: object) -> dict[str, object]:
@@ -152,10 +154,6 @@ def release_age_change(path: str, base_text: str | None, head_text: str | None) 
     return None
 
 
-def release_age_changed(path: str, base_text: str | None, head_text: str | None) -> bool:
-    return release_age_change(path, base_text, head_text) is not None
-
-
 # Commits and reviews
 
 
@@ -189,6 +187,77 @@ def owner_approved_head(reviews: list[dict], owner: str, head_sha: str) -> bool:
     return latest["state"] == "APPROVED" and latest.get("commit_id") == head_sha
 
 
+# Update type, from the `updated-dependencies` trailer Dependabot writes in its commits
+
+
+def parse_updated_dependencies(message: str) -> list[dict[str, str]] | None:
+    """The entries of the YAML trailer between `---` and `...`, or None if it is malformed.
+
+    Dependabot writes a fixed subset of YAML: `- key: value` starts an entry, `  key: value`
+    continues it. Anything else is rejected rather than guessed.
+    """
+    lines = message.splitlines()
+    try:
+        start = lines.index("updated-dependencies:")
+    except ValueError:
+        return None
+    if start == 0 or lines[start - 1] != "---":
+        return None
+    entries: list[dict[str, str]] = []
+    for line in lines[start + 1 :]:
+        if line == "...":
+            ok = entries and all("dependency-name" in e for e in entries)
+            return entries if ok else None
+        if line.startswith("- "):
+            entries.append({})
+            body = line[2:]
+        elif line.startswith("  ") and entries:
+            body = line[2:]
+        else:
+            return None
+        key, sep, value = body.partition(": ")
+        if not sep or not key or key.startswith(" "):
+            return None
+        entries[-1][key] = value.strip().strip("\"'")
+    return None
+
+
+def update_risks(dependencies: list[dict[str, str]] | None, ecosystem: str) -> list[str]:
+    """Reasons an update needs a human. An empty list means safe.
+
+    Mirrors the `decide` step of .github/workflows/dependabot-auto-merge.yml: safe are
+    patch updates, minor updates from 1.0, and GitHub Actions bumps without an update type.
+    A minor update keeps the major version, so the new version tells a 0.x minor apart.
+    """
+    if not dependencies:
+        return ["no dependency metadata"]
+    reasons = []
+    for dependency in dependencies:
+        name = dependency.get("dependency-name", "?")
+        version = dependency.get("dependency-version", "")
+        update_type = dependency.get("update-type", "")
+        major = re.sub(r"^[^0-9]*", "", version).split(".")[0]
+        if "playwright" in name:
+            reasons.append(f"{name}: the Playwright image in deploy.yml must move in the same PR")
+        elif update_type == "version-update:semver-major":
+            reasons.append(f"{name}: major update to {version}")
+        elif update_type == "version-update:semver-minor" and major == "0":
+            reasons.append(f"{name}: 0.x minor update to {version}")
+        elif update_type in ("version-update:semver-minor", "version-update:semver-patch") or (
+            not update_type and ecosystem == "github_actions"
+        ):
+            continue
+        else:
+            reasons.append(f"{name}: unknown update type {update_type or 'none'}")
+    return reasons
+
+
+def dependabot_ecosystem(head_ref: str) -> str:
+    """`dependabot/<ecosystem>/...`. Only Dependabot can create these branches."""
+    parts = head_ref.split("/")
+    return parts[1] if len(parts) > 2 and parts[0] == "dependabot" else ""
+
+
 # Decision
 
 
@@ -197,6 +266,7 @@ class Evidence:
     changed_files: list[str]
     release_age_files: list[str]
     pr_author: str | None
+    pr_head_ref: str
     pr_head_sha: str
     pr_commit_count: int
     commits: list[dict]
@@ -209,6 +279,15 @@ class Evidence:
 class Verdict:
     ok: bool
     message: str
+
+
+def pr_update_risks(evidence: Evidence) -> list[str]:
+    trailers = [
+        parse_updated_dependencies(c.get("commit", {}).get("message", "")) for c in evidence.commits
+    ]
+    if any(t != trailers[0] for t in trailers):
+        return ["the commits disagree on `updated-dependencies`"]
+    return update_risks(trailers[0], dependabot_ecosystem(evidence.pr_head_ref))
 
 
 def _dependabot_problems(evidence: Evidence) -> list[str]:
@@ -247,7 +326,11 @@ def decide(evidence: Evidence) -> Verdict:
     if problems:
         reasons = "\n".join(f"- {p}" for p in problems)
         return Verdict(False, f"{listing}\nNot a Dependabot-only PR:\n{reasons}\n{ask}")
-    return Verdict(True, f"{listing}\nEvery commit is Dependabot's, signed by GitHub.")
+    risks = pr_update_risks(evidence)
+    if risks:
+        reasons = "\n".join(f"- {r}" for r in risks)
+        return Verdict(False, f"{listing}\nDependabot update that needs a human:\n{reasons}\n{ask}")
+    return Verdict(True, f"{listing}\nEvery commit is Dependabot's, signed by GitHub; safe update.")
 
 
 # Git and GitHub
@@ -321,6 +404,7 @@ def gather(args: argparse.Namespace, token: str) -> Evidence:
         changed_files=files,
         release_age_files=release_age_files,
         pr_author=_login(pr.get("user")),
+        pr_head_ref=pr["head"]["ref"],
         pr_head_sha=pr["head"]["sha"],
         pr_commit_count=int(pr["commits"]),
         # `pulls/{n}/commits` lists at most 250 commits. decide() compares the count.

@@ -117,7 +117,13 @@ Every Dependabot PR therefore waited for the owner, auto-merge or not.
   - the PR author is `dependabot[bot]`;
   - every commit has author `dependabot[bot]`, committer `web-flow` and a signature GitHub verified.
     GitHub records Dependabot commits this way (PRs #1 to #4). The committer is `web-flow`, not `dependabot[bot]`.
-  - the API lists every commit of the PR (`pulls/{n}/commits` stops at 250).
+  - the API lists every commit of the PR (`pulls/{n}/commits` stops at 250);
+  - the update is safe. `update_risks` classifies it from the `updated-dependencies` trailer Dependabot writes in each commit message.
+    Every commit must carry the same trailer. Safe: patch, minor from 1.0, and GitHub Actions bumps without an update type (ecosystem from the `dependabot/<ecosystem>/` branch name).
+    Needs the owner: majors, 0.x minors, Playwright, an unknown or missing update type, a trailer that does not parse.
+    The rules mirror `dependabot-auto-merge.yml`. Without this, a major would merge with one approval from anyone, because the label is advisory.
+    Dependabot omits `update-type` for requirement-range updates (PR #2), so those need the owner.
+    CHB-95 (security updates) reuses `update_risks`: a security fix merges unattended only if it is safe by these rules.
 - A change to release-age settings needs the owner even from Dependabot:
   `min-release-age*` keys in any `.npmrc`, top-level `exclude-newer*` keys in any `uv.toml`, `exclude-newer*` keys under `[tool.uv]` in any `pyproject.toml`.
   The script compares parsed settings, so a dependency floor bump in `pyproject.toml` does not count.
@@ -125,6 +131,7 @@ Every Dependabot PR therefore waited for the owner, auto-merge or not.
 - Data comes from git and the GitHub API. PR title, body and labels are never read.
 - Triggers: `pull_request` and `pull_request_review` (`submitted`, `dismissed`), so an owner approval re-runs it.
   Both report a check run named `supply-chain` on the head commit. A per-PR concurrency group cancels the older run.
+- The trailer is trusted data: GitHub verified the commit, and only Dependabot can write to its branches (next bullet).
 - The workflow and the script run from the PR's merge commit. Their integrity rests on CODEOWNERS: both have their own owner lines.
 - A second ruleset, `dependabot-branches` (`infra/github/ruleset.tf`), restricts creation and update of `refs/heads/dependabot/**/*`.
   Its only bypass actor is Dependabot: `actor_type = "Integration"`, `actor_id = 29110` (`gh api /apps/dependabot`), mode `always`.
