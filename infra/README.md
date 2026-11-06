@@ -15,7 +15,7 @@ Terraform manages the infrastructure. See ADR-aae8.
 | Folder | Scope | Credentials | State |
 |---|---|---|---|
 | `gcp/` | Google Cloud: APIs, registry, service accounts, Workload Identity, budget, Cloud Run | your gcloud login (configuration `chb`) | `gs://chb-factory-a92932-tfstate/gcp` |
-| `github/` | Repository settings, Actions variables, the `main` ruleset | your `gh auth token` (admin) | `gs://chb-factory-a92932-tfstate/github` |
+| `github/` | Repository settings, Actions variables, the `main` ruleset, deployment environments | your `gh auth token` (admin) | `gs://chb-factory-a92932-tfstate/github` |
 
 The state bucket was created by hand (CHB-10) and is imported into `gcp/`.
 

@@ -25,7 +25,8 @@ factory/bin/as-agent gh pr create --fill
 
 ## Automated PR review (shadow mode)
 
-`.github/workflows/review.yml` scores every same-repository PR with Claude Code and posts a check run named `review` as the App `chb-factory-reviewer`.
+`.github/workflows/review.yml` scores every same-repository PR into `main` with Claude Code and posts a check run named `review` as the App `chb-factory-reviewer`.
+It runs on `pull_request_target`, so the workflow, gate, schema and prompt always come from `main`. The PR head is read as data and never run.
 The `main` ruleset does not require the check yet. Design: ADR-ea8c (PR #16). Ticket: CHB-87.
 
 | File | Role |
@@ -41,7 +42,8 @@ Malformed JSON, a schema violation, an extra field, an error result or a non-zer
 
 The summary also shows the risk class from `git diff --no-renames --name-only base...head` and the round number from earlier `review` runs of the App.
 
-The workflow needs three repository secrets: `ANTHROPIC_API_KEY_REVIEW` (CHB-89), `REVIEWER_APP_CLIENT_ID` and `REVIEWER_APP_PRIVATE_KEY` (CHB-85).
+The workflow needs three secrets in the `reviewer` environment, which admits `main` only: `ANTHROPIC_API_KEY_REVIEW` (CHB-89), `REVIEWER_APP_CLIENT_ID` and `REVIEWER_APP_PRIVATE_KEY` (CHB-85).
+Do not store them as repository secrets: a branch can add a `pull_request` workflow that reads repository secrets.
 Without them the job prints a notice and posts nothing.
 
 Run the gate on a saved result:
