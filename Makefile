@@ -17,8 +17,8 @@ check-npm: ## Fail if npm is too old to honour min-release-age in .npmrc
 	@v=$$(npm --version); printf '%s\n' 11.10.0 "$$v" | sort -V -C || \
 		{ echo "npm $$v ignores min-release-age in .npmrc. Use Node 24 from .nvmrc (npm >= 11.10)."; exit 1; }
 
-dev: ## Run backend and frontend with hot reload (http://localhost:5173)
-	docker compose up --build backend frontend
+dev: ## Run backend and frontend with hot reload (http://localhost:5173), Grafana (http://localhost:3000)
+	docker compose up --build backend frontend lgtm
 
 down: ## Stop all containers
 	docker compose --profile prod down

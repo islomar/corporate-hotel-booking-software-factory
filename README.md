@@ -5,6 +5,7 @@
 - [Corporate Hotel Booking: software factory experiment](#corporate-hotel-booking-software-factory-experiment)
   - [Quick start](#quick-start)
   - [API documentation](#api-documentation)
+  - [Observability](#observability)
   - [Layout](#layout)
   - [Process](#process)
 
@@ -37,6 +38,7 @@ Requirements: Docker, GNU Make. For running checks outside Docker: [uv](https://
 ```sh
 make setup   # dependencies, Playwright browser, git pre-commit hook
 make dev     # backend and frontend with hot reload: http://localhost:5173
+             # Grafana with the app's traces, metrics and logs: http://localhost:3000
 make check   # lint, typecheck and tests (the pre-commit gate)
 make up      # production image: http://localhost:8080
 make e2e     # Playwright against the production image
@@ -55,6 +57,43 @@ The schema cannot drift from the code because the code is its source.
 | `/api/openapi.json` | The raw schema, for clients and contract checks |
 
 Locally the same paths work on <http://localhost:8000> (`make dev`) and <http://localhost:8080> (`make up`).
+
+## Observability
+
+The backend uses OpenTelemetry (ADR-c17d). Environment variables choose the destination; the code is the same everywhere.
+
+| Where | `OTEL_EXPORTER_OTLP_ENDPOINT` | Traces | Metrics | Logs |
+|---|---|---|---|---|
+| Tests, CI, `make up` | unset | none | none | JSON on stdout |
+| `make dev` | `http://lgtm:4318` | Tempo | Prometheus | JSON on stdout and Loki |
+| Cloud Run | `https://telemetry.googleapis.com` | Cloud Trace | Cloud Monitoring | JSON on stdout to Cloud Logging |
+
+Local: open <http://localhost:3000> (no login), then Explore.
+
+- Tempo: search `{resource.service.name="chb"}`.
+- Prometheus: query `http_server_request_duration_seconds_count`.
+- Loki: query `{service_name="chb"}`.
+
+The `lgtm` container keeps data in memory: `make down` discards it.
+
+Production: each JSON log line carries `logging.googleapis.com/trace` and `logging.googleapis.com/spanId`, so Cloud Logging links it to its trace in Cloud Trace.
+Cloud Logging moves these fields to the entry's `trace`, `spanId` and `traceSampled`. Health-check lines have `traceSampled: false` and no trace.
+To find a traced request:
+
+```sh
+gcloud logging read 'resource.labels.service_name="chb" AND jsonPayload.message:"GET /api/openapi.json" AND traceSampled=true' --limit 1 --format=json
+```
+
+Metrics appear in Cloud Monitoring as Prometheus metrics, with names that start with `prometheus.googleapis.com/http_server_request_duration_seconds`.
+
+Cloud Run throttles CPU after the response goes out.
+The backend holds back the last chunk of each response until it has exported the spans of that request.
+It exports metrics from the same place, at most once a minute.
+One thread runs flushes, one at a time; concurrent responses share the next flush.
+A response waits at most 2 s for a flush. After a flush that fails or takes over 0.5 s, responses skip flushing for 30 s.
+If telemetry setup fails at startup, the app logs one warning and runs without export.
+The backend decides sampling itself: health checks (`/api/health`) get request metrics but no traces, every other request is traced.
+The sampled flag in an incoming `traceparent` header is ignored; its trace ID is kept.
 
 ## Layout
 
