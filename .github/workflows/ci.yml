@@ -81,6 +81,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [backend, frontend]
+    env:
+      # Browsers and their system packages ship in this image: no apt mirror on the critical
+      # path (CHB-101). Keep the tag equal to @playwright/test in e2e/package-lock.json:
+      # scripts/check_playwright_image.py fails `make check` and this job on a mismatch.
+      PLAYWRIGHT_IMAGE: mcr.microsoft.com/playwright:v1.65.0-noble@sha256:6e3fb709361521eb27161606e6da6d2674e5e89fa16516cb37d6fdd91372273d
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -91,7 +96,7 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: e2e/package-lock.json
-      - name: Playwright image in deploy.yml matches @playwright/test
+      - name: Playwright images in ci.yml and deploy.yml match @playwright/test
         run: python3 -I scripts/check_playwright_image.py
       - name: Build and start the production image
         env:
@@ -117,13 +122,19 @@ jobs:
         with:
           lockfile: e2e/package-lock.json
           base-ref: origin/${{ github.base_ref }}
-      - run: npx playwright install --with-deps chromium
-        working-directory: e2e
+      - name: Pull the Playwright image
+        run: docker pull "$PLAYWRIGHT_IMAGE"
+        timeout-minutes: 3
+      # The tests run in the Playwright image, on the runner's network, against the app
+      # container started above. node_modules comes from the `npm ci` on the runner, whose
+      # Node can differ from the image's: e2e dependencies must stay free of native modules.
+      - name: Playwright tests in the Playwright image
         timeout-minutes: 5
-      - run: npx playwright test
-        working-directory: e2e
-        env:
-          APP_URL: http://localhost:8080
+        run: >-
+          docker run --rm --network host --ipc host
+          --user "$(id -u):$(id -g)" -e HOME=/tmp -e CI -e APP_URL=http://localhost:8080
+          -v "$PWD/e2e:/e2e" -w /e2e
+          "$PLAYWRIGHT_IMAGE" npx playwright test
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

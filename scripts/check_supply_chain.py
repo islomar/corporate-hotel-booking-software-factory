@@ -12,7 +12,8 @@ place for them (ADR-ebe6). A PR passes when:
   Dependabot commits this way), and the update is safe: patch, or minor from 1.0, read
   from the commits' `updated-dependencies` trailer (see update_risks). A release-age
   change (`min-release-age*` in `.npmrc`, `exclude-newer*` in `uv.toml` or
-  `pyproject.toml`) rules this path out. The `dependabot-branches` ruleset lets only
+  `pyproject.toml`, any change to `pnpm-workspace.yaml`, `.yarnrc.yml` or
+  `bunfig.toml`) rules this path out. The `dependabot-branches` ruleset lets only
   Dependabot push to `dependabot/**` branches.
 
 Changed files come from `git diff --no-renames --name-only -z BASE...HEAD`. Commits and
@@ -68,18 +69,32 @@ SUPPLY_CHAIN_NAMES = (
     ".npmrc",
     ".yarnrc",
     ".yarnrc.yml",
-    # Images and runtime pins.
-    "Dockerfile",
-    "Dockerfile.*",
-    "*.dockerfile",
-    "compose.yaml",
-    "compose.yml",
-    "docker-compose.yaml",
-    "docker-compose.yml",
+    # Runtime pins.
     ".nvmrc",
     ".node-version",
     ".python-version",
 )
+
+# Image build and compose files, matched in any case: Docker and Podman accept any name
+# with -f, and macOS and Windows file systems ignore case. `containerfile*` is wider than
+# the Dockerfile patterns on purpose: Podman variants have no fixed suffix convention.
+ANY_CASE_NAMES = (
+    "dockerfile",
+    "dockerfile.*",
+    "*.dockerfile",
+    "containerfile*",
+    "*.containerfile",
+    "compose.yaml",
+    "compose.yml",
+    "docker-compose.yaml",
+    "docker-compose.yml",
+)
+
+
+# Files that can hold a release-age setting the script does not parse: pnpm
+# `minimumReleaseAge*`, Yarn `npmMinimalAgeGate`/`npmPreapprovedPackages`, Bun
+# `install.minimumReleaseAge*`. Any change to them counts as a release-age change.
+OPAQUE_RELEASE_AGE_NAMES = ("pnpm-workspace.yaml", ".yarnrc.yml", "bunfig.toml")
 
 
 class CheckError(Exception):
@@ -92,7 +107,9 @@ class SettingsError(Exception):
 
 def is_supply_chain_file(path: str) -> bool:
     name = PurePosixPath(path).name
-    return any(fnmatch.fnmatchcase(name, pattern) for pattern in SUPPLY_CHAIN_NAMES)
+    return any(fnmatch.fnmatchcase(name, pattern) for pattern in SUPPLY_CHAIN_NAMES) or any(
+        fnmatch.fnmatchcase(name.lower(), pattern) for pattern in ANY_CASE_NAMES
+    )
 
 
 # Release-age settings
@@ -132,10 +149,11 @@ def _uv_settings(name: str, text: str | None) -> dict[str, object]:
 
 
 def release_age_change(path: str, base_text: str | None, head_text: str | None) -> str | None:
-    """Why the release-age settings of an .npmrc, uv.toml or pyproject.toml differ, or None.
+    """Why the release-age settings of a file differ between base and head, or None.
 
     None as text means the file does not exist on that side. A file that does not parse,
-    or has an unexpected shape, counts as a change: the check fails closed.
+    or has an unexpected shape, counts as a change: the check fails closed. pnpm, Yarn
+    and Bun settings are not parsed: any change to those files counts.
     """
     name = PurePosixPath(path).name
     if name == ".npmrc":
@@ -151,6 +169,8 @@ def release_age_change(path: str, base_text: str | None, head_text: str | None) 
         except SettingsError as error:
             return f"cannot read the settings ({error})"
         return "exclude-newer settings differ" if base != head else None
+    if name in OPAQUE_RELEASE_AGE_NAMES:
+        return "file changed (not parsed: any change counts)" if base_text != head_text else None
     return None
 
 
@@ -282,6 +302,8 @@ class Verdict:
 
 
 def pr_update_risks(evidence: Evidence) -> list[str]:
+    if not evidence.commits:
+        return ["no commits"]
     trailers = [
         parse_updated_dependencies(c.get("commit", {}).get("message", "")) for c in evidence.commits
     ]

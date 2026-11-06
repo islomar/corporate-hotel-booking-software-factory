@@ -74,8 +74,9 @@ These run as steps of the `backend`, `frontend` and `e2e` jobs, so auto-merge wa
 - `npm audit signatures` after each `npm ci`: registry signatures and attestations must verify.
 - `danielroe/provenance-action` v0.2.0, pinned by commit: fails when a changed lockfile entry loses npm provenance, trusted publisher or staged publishing compared with the base branch.
   It has no runtime dependencies and calls only `registry.npmjs.org`.
-- `scripts/check_playwright_image.py`: the smoke test image in `deploy.yml` must match `@playwright/test` in `e2e/package-lock.json` and carry a digest pin.
-  Dependabot does not update `container:` images in workflows. A Playwright bump fails this check until a person moves the image in the same PR.
+- `scripts/check_playwright_image.py`: the Playwright images of the `e2e` job in `ci.yml` and the smoke job in `deploy.yml` must match `@playwright/test` in `e2e/package-lock.json`.
+  Each image carries a digest pin.
+  Dependabot does not update these images. A Playwright bump fails this check until a person moves both images in the same PR.
 
 ### Lockfile-only installs
 
@@ -113,6 +114,9 @@ Every Dependabot PR therefore waited for the owner, auto-merge or not.
   Without `-z`, git C-quotes paths with non-ASCII characters, and a quoted `"dép/package.json"` would not match `package.json`.
 - The file list in the script is wider than the old CODEOWNERS list.
   It adds resolver settings (`uv.toml`, `pip.conf`, `pnpm-workspace.yaml`, `.pnpmfile.cjs`, `.yarnrc*`, `bunfig.toml`), other lockfiles and manifests, compose and Dockerfile variants, `.node-version`.
+- Image build and compose files match in any case: `Dockerfile`, `Dockerfile.*`, `*.Dockerfile`, `Containerfile*`, `*.Containerfile`, and `compose` and `docker-compose` with `.yaml` or `.yml`.
+  Docker and Podman accept any file name with `-f`, and macOS and Windows file systems ignore case.
+  Other names match in exact case.
 - The check passes when no supply-chain file changed, or the owner's latest deciding review approves the head commit, or the PR is Dependabot's:
   - the PR author is `dependabot[bot]`;
   - every commit has author `dependabot[bot]`, committer `web-flow` and a signature GitHub verified.
@@ -128,8 +132,13 @@ Every Dependabot PR therefore waited for the owner, auto-merge or not.
   `min-release-age*` keys in any `.npmrc`, top-level `exclude-newer*` keys in any `uv.toml`, `exclude-newer*` keys under `[tool.uv]` in any `pyproject.toml`.
   The script compares parsed settings, so a dependency floor bump in `pyproject.toml` does not count.
   A file that does not parse, or where `tool` or `tool.uv` is not a table, counts as a change.
+- Any change to `pnpm-workspace.yaml`, `.yarnrc.yml` or `bunfig.toml` counts as a release-age change, including adding or deleting the file.
+  These files can hold release-age settings: pnpm `minimumReleaseAge`, Yarn `npmMinimalAgeGate`, Bun `install.minimumReleaseAge`.
+  The script does not parse them, so it fails closed. The repository uses none of these tools today.
 - Data comes from git and the GitHub API. PR title, body and labels are never read.
 - Triggers: `pull_request` and `pull_request_review` (`submitted`, `dismissed`), so an owner approval re-runs it.
+  `pull_request` includes `edited`, so a change of base branch re-runs it: the diff and the release-age comparison depend on the base.
+  `edited` also fires on title and body edits. Those runs evaluate in full. A job skipped with `if:` reports success to a required check, and the concurrency group would let it replace a failing run.
   Both report a check run named `supply-chain` on the head commit. A per-PR concurrency group cancels the older run.
 - The trailer is trusted data: GitHub verified the commit, and only Dependabot can write to its branches (next bullet).
 - The workflow and the script run from the PR's merge commit. Their integrity rests on CODEOWNERS: both have their own owner lines.
