@@ -22,8 +22,8 @@ resource "github_repository_environment" "this" {
   repository  = github_repository.this.name
   environment = each.value
 
-  # GitHub's current values for production. Admins (the owner) can still bypass.
-  can_admins_bypass   = true
+  # Admins (the owner) cannot bypass the protection rules either (CHB-96).
+  can_admins_bypass   = false
   prevent_self_review = false
 
   deployment_branch_policy {
