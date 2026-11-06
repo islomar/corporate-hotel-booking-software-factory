@@ -126,7 +126,8 @@ jobs:
         run: docker pull "$PLAYWRIGHT_IMAGE"
         timeout-minutes: 3
       # The tests run in the Playwright image, on the runner's network, against the app
-      # container started above. node_modules comes from the `npm ci` on the runner.
+      # container started above. node_modules comes from the `npm ci` on the runner, whose
+      # Node can differ from the image's: e2e dependencies must stay free of native modules.
       - name: Playwright tests in the Playwright image
         timeout-minutes: 5
         run: >-

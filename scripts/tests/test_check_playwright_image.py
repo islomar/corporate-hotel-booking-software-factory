@@ -32,8 +32,10 @@ class ErrorsTest(unittest.TestCase):
         [error] = errors("1.65.0", "ci.yml", "npx playwright install --with-deps chromium")
         self.assertIn("file=ci.yml::no mcr.microsoft.com/playwright image found", error)
 
-    def test_both_workflows_are_checked(self):
+    def test_the_repository_workflows_pass(self):
         self.assertEqual({w.name for w in WORKFLOWS}, {"ci.yml", "deploy.yml"})
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main(), 0)
 
 
 class MainTest(unittest.TestCase):
