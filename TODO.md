@@ -37,13 +37,12 @@ When a task is done, tick it, move it to Done, and add the commit hash or the da
 
 ### Phase 1: base
 
-- [ ] Confirm the first automated deploy: CI, deploy, health version check, live smoke test.
 - [ ] Turn on the `main` ruleset: PR required, checks `backend`, `frontend`, `e2e`, no force push, no bypass. Managed by IaC once the tool is chosen.
 - [ ] Import the resources created by hand into IaC:
   - GCP project services, Artifact Registry repository and cleanup policy.
   - Service accounts and roles, Workload Identity pool and provider.
   - Budget, Cloud Run service, GitHub repository variables.
-- [ ] Close or merge Dependabot PRs #1 to #4. The grouped config replaces them.
+- [ ] Review Dependabot PRs #2 (uvicorn) and #3 (jsdom 30). CI passes on both. Dependabot closed #1 and #4 under the new ignore rules.
 - [ ] Add a scrubbed export of the planning session to `docs/sessions/`, with a check that blocks private data (billing IDs, emails, local paths).
 
 ### Phase 2: guardrails
@@ -89,4 +88,5 @@ When a task is done, tick it, move it to Done, and add the commit hash or the da
 - [x] First manual Cloud Run deploy with public access. 2026-11-06.
 - [x] Jira CLI (`acli`) authenticated. 2026-11-06.
 - [x] Deploy workflow after CI on `main`. Commit `094132b`.
-- [x] API docs under `/api/docs`, README badges and production URL. 2026-11-06.
+- [x] API docs under `/api/docs`, README badges and production URL. Commit `1e9d79f`.
+- [x] First automated deploy: CI, deploy, health version check, live smoke test in the Playwright image. Commit `1e9d79f`.
