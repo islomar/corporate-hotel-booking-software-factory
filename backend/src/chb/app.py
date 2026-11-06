@@ -63,6 +63,8 @@ def app_from_env(env: Mapping[str, str]) -> ASGIApp:
     configure_logging(env.get("GOOGLE_CLOUD_PROJECT"), [log_handler] if log_handler else [])
     if error is not None:
         logger.warning("Telemetry is off: setup failed: %r", error)
+    if telemetry is not None and telemetry.metrics_off_reason is not None:
+        logger.warning(telemetry.metrics_off_reason)
     static_dir = env.get("STATIC_DIR")
     fastapi_app = create_app(Path(static_dir) if static_dir else None, telemetry)
     return telemetry.wrap(fastapi_app) if telemetry is not None else fastapi_app
