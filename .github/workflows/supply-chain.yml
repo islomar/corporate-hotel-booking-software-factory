@@ -1,0 +1,53 @@
+# Required check `supply-chain`: takes the code owner's place for supply-chain files.
+# Design: docs/decisions/ADR-ebe6-unattended-dependency-updates.md, logic in
+# scripts/check_supply_chain.py.
+#
+# A PR that changes a manifest, lockfile, image or runtime pin passes only if every commit
+# is Dependabot's (and no release-age setting changed), or the owner approved the head.
+#
+# The workflow and the script run from the PR's merge commit. CODEOWNERS keeps both files
+# owned, so a PR that weakens them needs the owner.
+#
+# `pull_request_review` re-runs the check after the owner approves or a review is
+# dismissed. Both events report a check run named `supply-chain` on the head commit; the
+# latest one counts. Concurrency cancels an older run so it cannot finish last.
+name: Supply chain
+
+on:
+  pull_request:
+  pull_request_review:
+    types: [submitted, dismissed]
+
+permissions: {}
+
+concurrency:
+  group: supply-chain-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  supply-chain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read # commits and reviews of the PR
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # the check diffs the PR head against the base branch
+      - name: Fetch the PR head (the merge ref can lag behind the event)
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: git cat-file -e "$HEAD_SHA^{commit}" 2>/dev/null || git fetch --no-tags origin "$HEAD_SHA"
+      - name: Supply-chain files need Dependabot or the owner
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          OWNER: ${{ github.repository_owner }}
+        run: >-
+          python3 -I scripts/check_supply_chain.py
+          --repo "$REPO" --pr "$PR" --base "$BASE_SHA" --head "$HEAD_SHA" --owner "$OWNER"
