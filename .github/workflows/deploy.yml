@@ -1,4 +1,7 @@
 name: Deploy
+# For workflow_run triggers, GitHub lists main's HEAD at trigger time as the run's commit,
+# not the commit being deployed. The run name shows the deployed commit instead. CHB-80.
+run-name: Deploy ${{ github.event.workflow_run.head_sha }} (${{ github.event.workflow_run.display_title }})
 
 on:
   # zizmor flags workflow_run as dangerous. The deploy job runs only for successful CI runs
