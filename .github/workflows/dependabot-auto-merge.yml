@@ -57,7 +57,7 @@ jobs:
             def major: (.prevVersion // "" | sub("^[^0-9]*"; "") | split(".")[0]);
             if length == 0 then "no dependency metadata" else .[] |
               if (.dependencyName | test("playwright")) then
-                "\(.dependencyName): the Playwright image in deploy.yml must move in the same PR"
+                "\(.dependencyName): the Playwright images in ci.yml and deploy.yml must move in the same PR"
               elif .updateType == "version-update:semver-major" then
                 "\(.dependencyName): major update \(.prevVersion) to \(.newVersion)"
               elif .updateType == "version-update:semver-minor" and major == "0" then

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Fail when the Playwright container image in deploy.yml differs from @playwright/test.
+"""Fail when a Playwright container image in the workflows differs from @playwright/test.
 
-Dependabot bumps @playwright/test in e2e/package-lock.json but not the `container:` image
-of the smoke job. A browser build that differs from the test runner breaks the smoke test
-after the deploy, so this check stops the mismatch in the pull request instead.
+Dependabot bumps @playwright/test in e2e/package-lock.json but not the Playwright images
+that the e2e job of ci.yml and the smoke job of deploy.yml run in. A browser build that
+differs from the test runner breaks those jobs, so this check stops the mismatch in the
+pull request instead.
 """
 
 from __future__ import annotations
@@ -15,40 +16,45 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCKFILE = ROOT / "e2e/package-lock.json"
-WORKFLOW = ROOT / ".github/workflows/deploy.yml"
+WORKFLOWS = (ROOT / ".github/workflows/ci.yml", ROOT / ".github/workflows/deploy.yml")
 IMAGE = re.compile(
     r"mcr\.microsoft\.com/playwright:v(?P<version>[^\s@-]+)-(?P<distro>[a-z]+)(?P<digest>@sha256:[0-9a-f]{64})?"
 )
+
+
+def errors(locked: str, name: str, text: str) -> list[str]:
+    """GitHub error annotations for the Playwright images in one workflow file."""
+    images = list(IMAGE.finditer(text))
+    if not images:
+        return [f"::error file={name}::no mcr.microsoft.com/playwright image found"]
+    found = []
+    for image in images:
+        tag = f"v{locked}-{image['distro']}"
+        if image["version"] != locked:
+            found.append(
+                f"::error file={name}::Playwright image v{image['version']} "
+                f"does not match @playwright/test {locked}. Set the image to {tag} and its digest:\n"
+                f"  docker buildx imagetools inspect mcr.microsoft.com/playwright:{tag} --format '{{{{.Manifest.Digest}}}}'"
+            )
+        elif not image["digest"]:
+            found.append(f"::error file={name}::pin mcr.microsoft.com/playwright:{tag} by digest")
+    return found
 
 
 def main() -> int:
     locked = json.loads(LOCKFILE.read_text())["packages"]["node_modules/@playwright/test"][
         "version"
     ]
-    images = list(IMAGE.finditer(WORKFLOW.read_text()))
-    if not images:
-        print(
-            f"::error file={WORKFLOW.relative_to(ROOT)}::no mcr.microsoft.com/playwright image found"
-        )
-        return 1
-    failed = False
-    for image in images:
-        tag = f"v{locked}-{image['distro']}"
-        if image["version"] != locked:
-            failed = True
-            print(
-                f"::error file={WORKFLOW.relative_to(ROOT)}::Playwright image v{image['version']} "
-                f"does not match @playwright/test {locked}. Set the image to {tag} and its digest:\n"
-                f"  docker buildx imagetools inspect mcr.microsoft.com/playwright:{tag} --format '{{{{.Manifest.Digest}}}}'"
-            )
-        elif not image["digest"]:
-            failed = True
-            print(
-                f"::error file={WORKFLOW.relative_to(ROOT)}::pin mcr.microsoft.com/playwright:{tag} by digest"
-            )
-    if not failed:
-        print(f"Playwright image matches @playwright/test {locked}")
-    return 1 if failed else 0
+    found = [
+        error
+        for workflow in WORKFLOWS
+        for error in errors(locked, str(workflow.relative_to(ROOT)), workflow.read_text())
+    ]
+    for error in found:
+        print(error)
+    if not found:
+        print(f"Playwright images match @playwright/test {locked}")
+    return 1 if found else 0
 
 
 if __name__ == "__main__":
