@@ -1,0 +1,3 @@
+#!/bin/sh
+# Act in Jira as the agent account. See factory/jira.py.
+exec python3 -I "$(dirname "$0")/../jira.py" "$@"
