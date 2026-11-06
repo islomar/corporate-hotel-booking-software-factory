@@ -128,3 +128,11 @@ updates:
       # Revisit: with the `node` rule of the docker block above.
       - dependency-name: node
         update-types: ["version-update:semver-major"]
+  - package-ecosystem: terraform
+    directory: /infra/gcp
+    schedule: { interval: weekly, day: monday, time: "06:00", timezone: Europe/Madrid }
+    open-pull-requests-limit: 5
+    cooldown: { default-days: 7, semver-major-days: 14 }
+    groups:
+      terraform-providers:
+        update-types: [minor, patch]

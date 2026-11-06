@@ -2,7 +2,7 @@
 SHELL := /bin/bash
 APP_URL ?= http://localhost:8080
 
-.PHONY: help setup check-npm dev down up check check-backend check-frontend check-deps test e2e format mutate
+.PHONY: help setup check-npm dev down up check check-backend check-frontend check-deps test e2e format mutate infra-plan infra-apply
 
 help: ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-16s %s\n", $$1, $$2}'
@@ -50,3 +50,12 @@ format: ## Format all code
 
 mutate: ## Mutation testing for the backend
 	cd backend && uv run --locked mutmut run
+
+TF_ENV = GOOGLE_OAUTH_ACCESS_TOKEN=$$(CLOUDSDK_ACTIVE_CONFIG_NAME=chb gcloud auth print-access-token) \
+	TF_VAR_billing_account=$$(CLOUDSDK_ACTIVE_CONFIG_NAME=chb gcloud billing projects describe chb-factory-a92932 --format='value(billingAccountName)' | sed 's\#billingAccounts/\#\#')
+
+infra-plan: ## Terraform plan for GCP (uses your gcloud login, configuration `chb`)
+	cd infra/gcp && export $(TF_ENV) && test -n "$$TF_VAR_billing_account" && terraform init -input=false >/dev/null && terraform plan -input=false -out=gcp.tfplan
+
+infra-apply: ## Apply the plan saved by infra-plan
+	cd infra/gcp && export $(TF_ENV) && terraform apply -input=false gcp.tfplan

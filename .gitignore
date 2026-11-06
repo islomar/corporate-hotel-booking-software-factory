@@ -11,3 +11,9 @@ playwright-report/
 .env.*
 *.local
 .DS_Store
+
+# Terraform
+.terraform/
+*.tfplan
+*.tfstate
+*.tfstate.*
