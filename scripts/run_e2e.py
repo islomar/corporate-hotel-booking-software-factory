@@ -2,8 +2,9 @@
 """Run the Playwright tests with everything they need. `make e2e` calls this script.
 
 Steps:
-1. Node must match the major version in .nvmrc.
+1. Node must be at least the major version in .nvmrc.
 2. `npm ci` in e2e/ when node_modules is missing or older than package-lock.json.
+   npm must be at least 11.10, the same rule as `make check-npm`.
 3. The Playwright browser is downloaded when it is missing.
 4. The app:
    - APP_URL set: test that URL. Never start a container.
@@ -36,10 +37,16 @@ PLAYWRIGHT = E2E / "node_modules/.bin/playwright"
 DEFAULT_APP_URL = "http://localhost:8080"
 COMPOSE = ["docker", "compose", "--profile", "prod"]
 HEALTH_TIMEOUT_SECONDS = 60
+MIN_NPM = (11, 10)
 
 
 class E2eError(Exception):
     """A problem the developer can fix. The message says how."""
+
+
+class Action(enum.Enum):
+    REUSE = "reuse"
+    START = "start"
 
 
 class Probe(enum.Enum):
@@ -48,16 +55,37 @@ class Probe(enum.Enum):
     DOWN = "down"  # nothing answers
 
 
+def _version(text: str) -> tuple[int, ...] | None:
+    match = re.fullmatch(r"v?(\d+)(?:\.(\d+))?(?:\.\d+)?", text.strip())
+    return tuple(int(part) for part in match.groups() if part is not None) if match else None
+
+
 def node_problem(version: str | None, nvmrc: str) -> str | None:
-    required = int(nvmrc.strip().lstrip("v").split(".")[0])
+    wanted = _version(nvmrc)
+    if wanted is None:
+        raise E2eError(f".nvmrc must hold a Node version such as 24, not {nvmrc.strip()!r}.")
+    required = wanted[0]
     if version is None:
         return f"Node is not installed. e2e needs Node {required} (.nvmrc): run `nvm install`."
     found = version.strip()
-    if int(found.lstrip("v").split(".")[0]) >= required:
+    parsed = _version(found)
+    if parsed is not None and parsed[0] >= required:
         return None
     return (
         f"Node {found} is too old: e2e needs Node {required} (.nvmrc).\n"
         f"Run `nvm use` in the repository root, then `make e2e` again."
+    )
+
+
+def npm_problem(version: str | None) -> str | None:
+    parsed = _version(version) if version is not None else None
+    if parsed is not None and parsed[:2] >= MIN_NPM:
+        return None
+    found = version.strip() if version else "not found"
+    return (
+        f"npm {found} is too old: it ignores min-release-age in .npmrc. "
+        f"e2e needs npm {MIN_NPM[0]}.{MIN_NPM[1]} or newer.\n"
+        "Run `nvm install` in the repository root for the current Node 24 and its npm."
     )
 
 
@@ -75,10 +103,10 @@ def probe(url: str) -> Probe:
     return Probe.APP if isinstance(body, dict) and body.get("status") == "ok" else Probe.OTHER
 
 
-def choose(url: str, *, explicit: bool, found: Probe) -> str:
-    """Return "reuse" or "start", or raise E2eError with the fix."""
+def choose(url: str, *, explicit: bool, found: Probe) -> Action:
+    """Return what to do with the app, or raise E2eError with the fix."""
     if found is Probe.APP:
-        return "reuse"
+        return Action.REUSE
     if explicit:
         state = "is not this app" if found is Probe.OTHER else "does not answer"
         raise E2eError(
@@ -92,7 +120,7 @@ def choose(url: str, *, explicit: bool, found: Probe) -> str:
             "Find it with `ss -ltnp 'sport = :8080'` (Linux) or `lsof -i :8080` (macOS) and stop "
             "it, or set APP_URL to a running copy of the app."
         )
-    return "start"
+    return Action.START
 
 
 def deps_are_stale(e2e: Path) -> bool:
@@ -111,10 +139,10 @@ def say(message: str) -> None:
     print(f"==> {message}", flush=True)
 
 
-def node_version() -> str | None:
+def tool_version(tool: str) -> str | None:
     try:
         return subprocess.run(
-            ["node", "--version"], capture_output=True, text=True, check=True
+            [tool, "--version"], capture_output=True, text=True, check=True
         ).stdout
     except (OSError, subprocess.CalledProcessError):
         return None
@@ -122,6 +150,9 @@ def node_version() -> str | None:
 
 def install_deps() -> None:
     if deps_are_stale(E2E):
+        problem = npm_problem(tool_version("npm"))
+        if problem:
+            raise E2eError(problem)
         say("Installing e2e dependencies (npm ci in e2e/)")
         subprocess.run(["npm", "ci"], cwd=E2E, check=True)
     dry_run = subprocess.run(
@@ -175,7 +206,7 @@ def _terminate(signum: int, frame: FrameType | None) -> None:
 
 
 def run() -> int:
-    problem = node_problem(node_version(), (ROOT / ".nvmrc").read_text())
+    problem = node_problem(tool_version("node"), (ROOT / ".nvmrc").read_text())
     if problem:
         raise E2eError(problem)
     install_deps()
@@ -186,7 +217,7 @@ def run() -> int:
     started = False
     signal.signal(signal.SIGTERM, _terminate)
     try:
-        if action == "start":
+        if action is Action.START:
             check_docker()
             started = True
             start_app(url)
@@ -198,6 +229,9 @@ def run() -> int:
         return result.returncode
     finally:
         if started:
+            # A second Ctrl-C must not cut the teardown short and leave the container running.
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
             stop_app()
 
 
