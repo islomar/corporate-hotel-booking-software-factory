@@ -74,8 +74,9 @@ These run as steps of the `backend`, `frontend` and `e2e` jobs, so auto-merge wa
 - `npm audit signatures` after each `npm ci`: registry signatures and attestations must verify.
 - `danielroe/provenance-action` v0.2.0, pinned by commit: fails when a changed lockfile entry loses npm provenance, trusted publisher or staged publishing compared with the base branch.
   It has no runtime dependencies and calls only `registry.npmjs.org`.
-- `scripts/check_playwright_image.py`: the smoke test image in `deploy.yml` must match `@playwright/test` in `e2e/package-lock.json` and carry a digest pin.
-  Dependabot does not update `container:` images in workflows. A Playwright bump fails this check until a person moves the image in the same PR.
+- `scripts/check_playwright_image.py`: the Playwright images of the `e2e` job in `ci.yml` and the smoke job in `deploy.yml` must match `@playwright/test` in `e2e/package-lock.json`.
+  Each image carries a digest pin.
+  Dependabot does not update these images. A Playwright bump fails this check until a person moves both images in the same PR.
 
 ### Lockfile-only installs
 
