@@ -59,18 +59,19 @@ jobs:
     needs: deploy
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Browsers and their system packages ship in the image: no apt mirror on the critical path.
+    # Keep the tag equal to @playwright/test in e2e/package-lock.json.
+    container:
+      image: mcr.microsoft.com/playwright:v1.65.0-noble@sha256:6e3fb709361521eb27161606e6da6d2674e5e89fa16516cb37d6fdd91372273d
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-          cache-dependency-path: e2e/package-lock.json
-      - run: npm ci && npx playwright install --with-deps chromium
+      - run: npm ci
         working-directory: e2e
+        timeout-minutes: 3
       - run: npx playwright test
         working-directory: e2e
+        timeout-minutes: 3
         env:
           APP_URL: ${{ vars.APP_URL }}

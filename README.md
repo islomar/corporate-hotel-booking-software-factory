@@ -1,15 +1,25 @@
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
-**Table of Contents** *generated with [DocToc](https://github.com/thlorenz/doctoc)*
+**Table of Contents**
 
 - [Corporate Hotel Booking: software factory experiment](#corporate-hotel-booking-software-factory-experiment)
   - [Quick start](#quick-start)
+  - [API documentation](#api-documentation)
   - [Layout](#layout)
   - [Process](#process)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
 # Corporate Hotel Booking: software factory experiment
+
+[![CI](https://github.com/islomar/corporate-hotel-booking-software-factory/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/islomar/corporate-hotel-booking-software-factory/actions/workflows/ci.yml)
+[![Deploy](https://github.com/islomar/corporate-hotel-booking-software-factory/actions/workflows/deploy.yml/badge.svg?branch=main)](https://github.com/islomar/corporate-hotel-booking-software-factory/actions/workflows/deploy.yml)
+[![Production version](https://img.shields.io/badge/dynamic/json?url=https://chb-1027266991110.europe-west1.run.app/api/health&query=%24.version&label=production&color=blue)](https://chb-1027266991110.europe-west1.run.app)
+![Python](https://img.shields.io/badge/python-3.15-3776AB?logo=python&logoColor=white)
+![React](https://img.shields.io/badge/react-19-61DAFB?logo=react&logoColor=black)
+
+- Production: <https://chb-1027266991110.europe-west1.run.app>
+- API reference (OpenAPI): <https://chb-1027266991110.europe-west1.run.app/api/docs>
 
 A web app built from the Codurance kata [Corporate Hotel Booking](https://www.codurance.com/katas/corporate-hotel-booking), developed through an AI-agent software factory.
 
@@ -33,6 +43,19 @@ make e2e     # Playwright against the production image
 make help    # all targets
 ```
 
+## API documentation
+
+FastAPI generates an [OpenAPI 3.1](https://spec.openapis.org/oas/v3.1.0) schema from the route type hints and pydantic models.
+The schema cannot drift from the code because the code is its source.
+
+| Path | Content |
+|---|---|
+| `/api/docs` | Swagger UI: browse and call the endpoints |
+| `/api/redoc` | ReDoc: read-only reference |
+| `/api/openapi.json` | The raw schema, for clients and contract checks |
+
+Locally the same paths work on <http://localhost:8000> (`make dev`) and <http://localhost:8080> (`make up`).
+
 ## Layout
 
 | Path | Content |
@@ -49,6 +72,9 @@ make help    # all targets
 
 ## Process
 
-- Tasks live in Jira, space `CHB`.
+Pushes to `main` run CI. When CI passes, the deploy workflow builds the image, deploys it to Cloud Run, checks that `/api/health` reports the new commit, and runs Playwright against the live URL.
+
+- Product tasks live in Jira, space `CHB`.
+- Setup and factory work is tracked in [`TODO.md`](TODO.md).
 - One ticket, one short-lived branch, one pull request. See `docs/decisions/ADR-0faf-short-lived-branches.md`.
 - Merged is not done. See `docs/decisions/ADR-ad3e-definition-of-done.md`.

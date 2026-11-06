@@ -70,6 +70,7 @@ jobs:
         working-directory: e2e
       - run: npx playwright install --with-deps chromium
         working-directory: e2e
+        timeout-minutes: 5
       - run: npx playwright test
         working-directory: e2e
         env:

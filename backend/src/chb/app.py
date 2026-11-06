@@ -14,7 +14,13 @@ class Health(BaseModel):
 
 
 def create_app(static_dir: Path | None = None) -> FastAPI:
-    app = FastAPI(title="Corporate Hotel Booking")
+    app = FastAPI(
+        title="Corporate Hotel Booking",
+        summary="Book hotel rooms for company employees under company booking policies.",
+        docs_url="/api/docs",
+        redoc_url="/api/redoc",
+        openapi_url="/api/openapi.json",
+    )
 
     @app.get("/api/health")
     def health() -> Health:  # pyright: ignore[reportUnusedFunction]

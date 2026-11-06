@@ -11,6 +11,7 @@
 # Agent instructions
 
 Read `README.md` for layout and commands. Decisions are in `docs/decisions/`.
+Pending setup and factory work is in `TODO.md`. Track it there, never in files outside this repository.
 
 ## Rules
 
@@ -18,7 +19,7 @@ Read `README.md` for layout and commands. Decisions are in `docs/decisions/`.
 - A correction becomes a hook or a check before it becomes prose.
 - Work outside-in: an acceptance test first, then unit tests, one public method at a time.
 - Run `make check` before every commit. Gates read exit codes, not output text.
-- One Jira ticket per branch: `CHB-<n>-<slug>`. Never commit to `main`.
+- One Jira ticket per branch: `CHB-<n>-<slug>`. Feature work never commits to `main`. Setup commits go to `main` until the `main` ruleset exists.
 - Kata design rules: services stay stateless, no circular dependencies between services, data in repositories, packages follow actors and areas.
 - Do not edit `.claude/`, `factory/` or `.github/` as part of a feature ticket.
 
