@@ -11,10 +11,16 @@
 # `pull_request_review` re-runs the check after the owner approves or a review is
 # dismissed. Both events report a check run named `supply-chain` on the head commit; the
 # latest one counts. Concurrency cancels an older run so it cannot finish last.
+#
+# `edited` re-runs the check when the PR's base branch changes: the diff and the release-age
+# comparison depend on it. `edited` also fires on title and body edits. Those runs evaluate
+# in full (about 20 s): a job skipped with `if:` reports success, and it could cancel and
+# replace a failing run.
 name: Supply chain
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   pull_request_review:
     types: [submitted, dismissed]
 
@@ -36,10 +42,14 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0 # the check diffs the PR head against the base branch
-      - name: Fetch the PR head (the merge ref can lag behind the event)
+      - name: Fetch the PR head and base (the merge ref can lag behind the event)
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: git cat-file -e "$HEAD_SHA^{commit}" 2>/dev/null || git fetch --no-tags origin "$HEAD_SHA"
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          for sha in "$HEAD_SHA" "$BASE_SHA"; do
+            git cat-file -e "$sha^{commit}" 2>/dev/null || git fetch --no-tags origin "$sha"
+          done
       - name: Supply-chain files need Dependabot or the owner
         env:
           GH_TOKEN: ${{ github.token }}

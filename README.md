@@ -45,6 +45,20 @@ make e2e     # Playwright against the production image
 make help    # all targets
 ```
 
+`make e2e` needs Node 24 (run `nvm use`) and Docker.
+It installs the e2e dependencies and the Playwright browser when they are missing.
+If the app from `make up` answers on port 8080, it tests that app and leaves it running.
+Otherwise it builds and starts the production container, runs the tests, and removes the container.
+`make dev` does not get in the way: it uses ports 5173, 8000 and 3000.
+
+To test an app that runs elsewhere, set `APP_URL`. Then `make e2e` starts nothing:
+
+```sh
+APP_URL=https://chb-1027266991110.europe-west1.run.app make e2e
+```
+
+To pass arguments to Playwright, run the script directly: `python3 scripts/run_e2e.py --headed`.
+
 ## API documentation
 
 FastAPI generates an [OpenAPI 3.1](https://spec.openapis.org/oas/v3.1.0) schema from the route type hints and pydantic models.
