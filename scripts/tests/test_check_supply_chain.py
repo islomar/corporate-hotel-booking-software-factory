@@ -24,6 +24,7 @@ from check_supply_chain import (
     main,
     owner_approved_head,
     parse_updated_dependencies,
+    pr_update_risks,
     release_age_change,
     update_risks,
 )
@@ -146,12 +147,26 @@ class SupplyChainFileTest(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue(is_supply_chain_file(path))
 
+    def test_image_files_match_in_any_case(self):
+        for path in [
+            "DOCKERFILE",
+            "backend/dockerfile",
+            "app.Dockerfile",
+            "Dockerfile.dev",
+            "Containerfile",
+            "Containerfile.dev",
+            "backend/containerfile",
+        ]:
+            with self.subTest(path=path):
+                self.assertTrue(is_supply_chain_file(path))
+
     def test_source_docs_and_harness_files_are_not_supply_chain(self):
         for path in [
             "backend/src/app.py",
             "docs/decisions/ADR-ebe6-unattended-dependency-updates.md",
             ".github/workflows/ci.yml",
             "scripts/check_release_age.py",
+            "docs/dockerfile-notes.md",
         ]:
             with self.subTest(path=path):
                 self.assertFalse(is_supply_chain_file(path))
@@ -209,6 +224,14 @@ class ReleaseAgeTest(unittest.TestCase):
                 self.assertIsNotNone(
                     release_age_change("backend/pyproject.toml", self.PYPROJECT, head)
                 )
+
+    def test_any_change_to_pnpm_yarn_or_bun_settings_counts(self):
+        for path in ["pnpm-workspace.yaml", "tools/.yarnrc.yml", "backend/bunfig.toml"]:
+            with self.subTest(path=path):
+                self.assertIsNone(release_age_change(path, "a: 1\n", "a: 1\n"))
+                self.assertIsNotNone(release_age_change(path, "a: 1\n", "a: 2\n"))
+                self.assertIsNotNone(release_age_change(path, None, "a: 1\n"))
+                self.assertIsNotNone(release_age_change(path, "a: 1\n", None))
 
     def test_other_files_never_change_release_age(self):
         self.assertIsNone(release_age_change("frontend/package.json", "{}", '{"a": 1}'))
@@ -387,6 +410,9 @@ class DependabotUpdateTypeTest(unittest.TestCase):
         self.assertFalse(decide(evidence(commits=[actions])).ok)
         ref = "dependabot/github_actions/actions/checkout-7.1.0"
         self.assertTrue(decide(evidence(commits=[actions], pr_head_ref=ref)).ok)
+
+    def test_no_commits_is_a_risk_not_a_crash(self):
+        self.assertEqual(pr_update_risks(evidence(commits=[])), ["no commits"])
 
 
 class MainTest(unittest.TestCase):
