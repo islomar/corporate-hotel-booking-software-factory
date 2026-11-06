@@ -15,5 +15,6 @@ playwright-report/
 # Terraform
 .terraform/
 *.tfplan
+infra/.plans/
 *.tfstate
 *.tfstate.*

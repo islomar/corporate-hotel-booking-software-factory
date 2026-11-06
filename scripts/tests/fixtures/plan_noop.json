@@ -1,0 +1,68 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.17.1",
+  "resource_changes": [
+    {
+      "address": "terraform_data.env[\"production\"]",
+      "mode": "managed",
+      "type": "terraform_data",
+      "name": "env",
+      "index": "production",
+      "provider_name": "terraform.io/builtin/terraform",
+      "change": {
+        "actions": [
+          "no-op"
+        ],
+        "before": {
+          "id": "5",
+          "input": "production",
+          "output": "production",
+          "store": null,
+          "triggers_replace": null
+        },
+        "after": {
+          "id": "5",
+          "input": "production",
+          "output": "production",
+          "store": null,
+          "triggers_replace": null
+        },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "terraform_data.keep",
+      "mode": "managed",
+      "type": "terraform_data",
+      "name": "keep",
+      "provider_name": "terraform.io/builtin/terraform",
+      "change": {
+        "actions": [
+          "no-op"
+        ],
+        "before": {
+          "id": "1",
+          "input": "x",
+          "output": "x",
+          "store": null,
+          "triggers_replace": null
+        },
+        "after": {
+          "id": "1",
+          "input": "x",
+          "output": "x",
+          "store": null,
+          "triggers_replace": null
+        },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    }
+  ],
+  "applyable": false,
+  "complete": true,
+  "errored": false
+}
