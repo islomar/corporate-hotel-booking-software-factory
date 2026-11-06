@@ -2,12 +2,15 @@
 # Design: docs/decisions/ADR-ebe6-unattended-dependency-updates.md
 #
 # Safe: patch and minor updates of versions >= 1.0, and GitHub Actions commit bumps.
+# The required check `supply-chain` applies the same rules (update_risks in
+# scripts/check_supply_chain.py). Change both together.
 # Needs a human: majors, minors of 0.x versions (they can break the contract),
 # @playwright/test (the deploy image must move in the same PR), anything without a known
 # update type. Those PRs get the `dependencies:needs-human` label.
 #
 # Auto-merge waits only for the required checks of the `main` ruleset. This workflow
-# enables it only when that ruleset requires `backend`, `frontend` and `e2e`.
+# enables it only when that ruleset requires `backend`, `frontend`, `e2e` and
+# `supply-chain`. Supply-chain files have no code owner: `supply-chain` replaces it.
 #
 # The merge must not use GITHUB_TOKEN: events created with it start no workflow runs, so
 # CI on `main` and the deploy would never run. Auto-merge is enabled with a GitHub App
@@ -84,7 +87,7 @@ jobs:
         run: |
           required=$(gh api "repos/$REPO/rules/branches/main" \
             --jq '[.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context] | unique | join(" ")')
-          for check in backend frontend e2e; do
+          for check in backend frontend e2e supply-chain; do
             if ! grep -qw "$check" <<<"$required"; then
               echo "::warning::main does not require the '$check' check. Auto-merge stays off."
               echo "ready=false" >> "$GITHUB_OUTPUT"

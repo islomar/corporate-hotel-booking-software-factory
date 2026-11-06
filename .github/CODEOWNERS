@@ -1,4 +1,4 @@
-# Code owners for the harness and supply-chain paths. Design: ADR-ea8c, section 4.
+# Code owners for the harness paths. Design: ADR-ea8c, section 4, and ADR-ebe6.
 # The main ruleset requires code-owner review (infra/github/ruleset.tf), so a PR that
 # touches any path below needs an approval from @islomar. A GitHub App cannot be a code
 # owner. There is no `*` line: other paths need only the ruleset's normal approval.
@@ -18,15 +18,11 @@
 /docs/decisions/   @islomar
 /docs/knowledge/   @islomar
 
-# Supply chain: manifests, lockfiles, release-age settings (ADR-ebe6), images and
-# runtime pins. File-name patterns match in any directory, so a new package directory
-# is covered without editing this file.
-pyproject.toml     @islomar
-uv.lock            @islomar
-package.json       @islomar
-package-lock.json  @islomar
-.npmrc             @islomar
-Dockerfile         @islomar
-compose.yaml       @islomar
-.nvmrc             @islomar
-.python-version    @islomar
+# Supply chain. Manifests, lockfiles, images and runtime pins have no code owner: the
+# required check `supply-chain` takes the owner's place (ADR-ebe6). It passes for
+# Dependabot-only PRs and otherwise needs the owner's approval on the head commit.
+# The check itself and `.npmrc` (release-age settings and exemptions) stay owned.
+# Keep the check's own lines even if the directory lines above are narrowed later.
+.npmrc                               @islomar
+/.github/workflows/supply-chain.yml  @islomar
+/scripts/check_supply_chain.py       @islomar
