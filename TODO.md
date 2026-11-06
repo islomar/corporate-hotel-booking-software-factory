@@ -6,6 +6,7 @@
   - [Decisions pending](#decisions-pending)
   - [Open](#open)
     - [Phase 1: base](#phase-1-base)
+    - [Infrastructure and observability](#infrastructure-and-observability)
     - [Phase 2: guardrails](#phase-2-guardrails)
     - [Phase 3: skills](#phase-3-skills)
     - [Phase 4: implement workflow](#phase-4-implement-workflow)
@@ -28,9 +29,7 @@ When a task is done, tick it, move it to Done, and add the commit hash or the da
 
 ## Decisions pending
 
-- [ ] **Infrastructure as Code tool.** Proposal: Terraform with state in a GCS bucket.
-- [ ] **Observability stack.** Proposal: OpenTelemetry in the code, Google Cloud Logging, Trace and Monitoring in production, `grafana/otel-lgtm` locally.
-- [ ] **Security baseline.** Proposal: OWASP ASVS level 2 as the target, checks in CI, auth decided in the kata spec.
+- [ ] **Security baseline and authentication.** Target OWASP ASVS level 2. The app stays public: anyone can sign up. Proposal: Google Identity Platform for login, authorization by role in the app.
 - [ ] **Agent GitHub identity.** Proposal: a GitHub App installed only on this repository. Blocks the review rules on `main`.
 
 ## Open
@@ -44,6 +43,14 @@ When a task is done, tick it, move it to Done, and add the commit hash or the da
   - Budget, Cloud Run service, GitHub repository variables.
 - [ ] Review Dependabot PRs #2 (uvicorn) and #3 (jsdom 30). CI passes on both. Dependabot closed #1 and #4 under the new ignore rules.
 - [ ] Add a scrubbed export of the planning session to `docs/sessions/`, with a check that blocks private data (billing IDs, emails, local paths).
+
+### Infrastructure and observability
+
+- [ ] Create the Terraform state bucket by hand (versioned). See ADR-aae8.
+- [ ] `infra/` with Terraform; CI runs `plan` on pull requests.
+- [ ] OpenTelemetry in the backend, `grafana/otel-lgtm` in `make dev`. See ADR-c17d.
+- [ ] Uptime check, SLO and alert policies in Terraform.
+- [ ] Unattended Dependabot updates: review the PR from the Dependabot setup.
 
 ### Phase 2: guardrails
 
@@ -83,6 +90,8 @@ When a task is done, tick it, move it to Done, and add the commit hash or the da
 
 ## Done
 
+- [x] Decisions: Terraform (ADR-aae8), OpenTelemetry (ADR-c17d). 2026-11-06.
+- [x] Raw session exports stay in the user's private notes folder (the only tracking exception). Curated copies go to `docs/sessions/`. 2026-11-06.
 - [x] Walking skeleton: FastAPI health endpoint, React page, Docker, compose, Makefile, CI. Commit `6a66330`.
 - [x] GCP project, Artifact Registry, deploy and runtime service accounts, Workload Identity Federation, 5 EUR budget alert. 2026-11-05.
 - [x] First manual Cloud Run deploy with public access. 2026-11-06.
