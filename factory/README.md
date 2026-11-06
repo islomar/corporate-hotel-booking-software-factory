@@ -97,7 +97,7 @@ It exits 2, which denies the command, for:
 
 The hook is a guardrail, not a boundary: it reads the command text only. A script file that calls the API, or a URL hidden in a variable, passes.
 It matches anywhere in the command, so it also denies a commit message that quotes a denied command. Use a message file.
-A crash of the hook lets the command through (Claude Code treats exit 1 as a non-blocking error).
+An error inside the hook denies the command. If `python3` cannot start, the command goes through: Claude Code treats that as a non-blocking error.
 Sessions started in another directory do not load this hook.
 
 ## Automated PR review (shadow mode)

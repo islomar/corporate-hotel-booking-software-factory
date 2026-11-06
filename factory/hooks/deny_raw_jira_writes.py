@@ -16,8 +16,8 @@ command is denied too. Write such text to a file and pass the file.
 
 Contract (https://code.claude.com/docs/en/hooks): the tool call arrives as JSON on stdin.
 Exit 2 with the reason on stderr denies the call. Exit 0 with no output leaves the normal
-permission flow. Input that is not JSON is denied. A crash exits 1, which Claude Code treats as
-a non-blocking error: the call goes ahead. Keep this script small.
+permission flow. Input that is not JSON, or an error inside the matcher, is denied too.
+Only a hook that cannot start (no python3) exits non-2, and Claude Code then lets the call run.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ import json
 import re
 import sys
 
-READ_VERBS = {"view", "search", "list", "get", "list-watchers", "list-projects", "list-sprints"}
+READ_VERBS = {"view", "search", "list", "get"}
 READ_PREFIXES = ("list-", "get-")
 WORKITEM_GROUPS = {"comment", "attachment", "link", "watcher"}
 
@@ -93,7 +93,15 @@ def reason(command: str) -> str | None:
 
 def main() -> int:
     try:
-        event = json.loads(sys.stdin.read())
+        return _decide(sys.stdin.read())
+    except Exception as error:  # fail closed: a guardrail that crashes must not let the call run
+        print(f"Blocked: the Jira write hook failed ({type(error).__name__}).", file=sys.stderr)
+        return 2
+
+
+def _decide(raw: str) -> int:
+    try:
+        event = json.loads(raw)
     except ValueError:
         print("Blocked: the Jira write hook could not read its input.", file=sys.stderr)
         return 2

@@ -134,6 +134,14 @@ class ContractTest(unittest.TestCase):
     def test_unreadable_input_is_denied(self) -> None:
         self.assertEqual(_main("not json")[0], 2)
 
+    def test_an_error_in_the_matcher_denies(self) -> None:
+        event = {"tool_name": "Bash", "tool_input": {"command": "ls"}}
+        with mock.patch.object(hook, "reason", side_effect=IndexError("boom")):
+            code, _, err = _main(json.dumps(event))
+
+        self.assertEqual(code, 2)
+        self.assertIn("hook failed (IndexError)", err)
+
     def test_project_settings_register_the_hook_on_bash(self) -> None:
         settings = json.loads((ROOT / ".claude" / "settings.json").read_text())
         (group,) = settings["hooks"]["PreToolUse"]
