@@ -87,7 +87,8 @@ Meaning: the change is merged and deployed, but nobody has yet confirmed that it
 Meaning: the work cannot continue without the owner.
 
 - Enter: an open question, a decision, an action only the owner can do (a click in a web UI, a sudo command, a payment setting), or a gate that failed and needs judgement.
-  The ticket comment is a numbered step-by-step procedure: what to do, where (exact URL or menu path), how (each click or command).
+  The worker writes a section headed "Needs human: owner steps" in the ticket description, not in a comment, with `factory/bin/jira section`.
+  It is a numbered step-by-step procedure: what to do, where (exact URL or menu path), how (each click or command).
   It also states what not to touch, the deadline if any, and how the owner reports that it is done.
 - Leave: the owner answers or acts. The ticket goes back to the status it came from.
 - This status is the top of every notification.
