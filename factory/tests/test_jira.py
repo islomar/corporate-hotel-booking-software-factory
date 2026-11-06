@@ -187,6 +187,16 @@ class CreateTest(unittest.TestCase):
         self.assertEqual(fields["parent"], {"key": "CHB-27"})
         self.assertEqual(adf_to_text(fields["description"]), "Line one.\n\nAC1: works.")
 
+    def test_empty_summary_is_refused_before_any_request(self) -> None:
+        fake = self._fake("Epic")
+        with tempfile.NamedTemporaryFile("w") as description:
+            argv = ["create", "--parent", "CHB-27", "--summary", "  ", "--description-file", description.name]
+            code, _, err = _run(argv, fake)
+
+        self.assertEqual(code, 1)
+        self.assertIn("summary is empty", err)
+        self.assertEqual(fake.requests, [])
+
     def test_parent_must_be_an_epic(self) -> None:
         fake = self._fake("Task")
         code, _, err = self._create(fake)
@@ -198,7 +208,7 @@ class CreateTest(unittest.TestCase):
 
 class ScopeTest(unittest.TestCase):
     def test_only_chb_keys_are_accepted(self) -> None:
-        for key in ("OTHER-1", "CHB-0", "CHB-1/../../project/CHB", "chb-1"):
+        for key in ("OTHER-1", "CHB-0", "CHB-1/../../project/CHB", "chb-1", "CHB-1\n"):
             fake = FakeJira({})
             code, _, _ = _run(["comment", key, "--body-file", "-"], fake)
             self.assertEqual(code, 1, key)
@@ -279,6 +289,29 @@ class ReadCredentialsTest(unittest.TestCase):
         self.assertEqual(len(commands), 1)
 
 
+def _run_raw(argv: list[str], body: bytes) -> tuple[int, str, str]:
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = main(argv, credentials_reader=lambda: CREDENTIALS, opener_factory=lambda: lambda r: FakeResponse(body))
+    return code, out.getvalue(), err.getvalue()
+
+
+class JsonOutputTest(unittest.TestCase):
+    def test_view_json_prints_the_issue_as_jira_returns_it(self) -> None:
+        issue = {"key": "CHB-12", "fields": {"summary": "S"}}
+        code, out, _ = _run_raw(["view", "CHB-12", "--json"], json.dumps(issue).encode())
+
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out), issue)
+
+    def test_search_json_prints_the_list_of_issues(self) -> None:
+        page = {"issues": [{"key": "CHB-1", "fields": {}}], "isLast": True}
+        code, out, _ = _run_raw(["search", "project = CHB", "--json"], json.dumps(page).encode())
+
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out), page["issues"])
+
+
 class ViewTest(unittest.TestCase):
     def test_prints_status_assignee_description_and_comments(self) -> None:
         doc = text_to_adf("The description.")
@@ -315,6 +348,19 @@ class NetworkTest(unittest.TestCase):
         code = main(
             ["view", "CHB-1"], credentials_reader=lambda: CREDENTIALS, opener_factory=lambda: lambda r: FakeResponse(b"<html>")
         )
+        self.assertEqual(code, 1)
+
+    def test_json_that_is_not_an_object_is_a_jira_failure(self) -> None:
+        for body in (b"[]", b"null", b"", b"42"):
+            code, _, err = _run_raw(["search", "project = CHB"], body)
+            self.assertEqual(code, 1, body)
+            self.assertNotIn("Traceback", err, body)
+
+    def test_http_error_with_a_non_object_body_still_exits_1(self) -> None:
+        def opener(request: Any) -> FakeResponse:
+            raise urllib.error.HTTPError(request.full_url, 500, "error", {}, io.BytesIO(b"[1]"))  # type: ignore[arg-type]
+
+        code = main(["view", "CHB-1"], credentials_reader=lambda: CREDENTIALS, opener_factory=lambda: opener)
         self.assertEqual(code, 1)
 
     def test_redirects_are_refused(self) -> None:

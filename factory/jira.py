@@ -76,7 +76,8 @@ def read_secret(command: list[str], timeout: int = 60) -> str:
     if result.returncode != 0:
         raise CredentialError(f"{command[0]} exited {result.returncode} (is 1Password locked?)")
     if not value:
-        raise CredentialError(f"1Password field {command[-1] if command[-1] != '--reveal' else command[-2]} is empty")
+        field = next((arg for arg in command if arg.startswith("label=")), command[-1])
+        raise CredentialError(f"1Password field {field} is empty")
     return value
 
 
@@ -144,7 +145,7 @@ def adf_to_text(node: Any) -> str:
 
 
 def check_key(key: str) -> str:
-    if not KEY_PATTERN.match(key):
+    if not KEY_PATTERN.fullmatch(key):
         raise JiraError(f"{key!r} is not a {PROJECT} issue key ({PROJECT}-<n>)")
     return key
 
@@ -156,7 +157,8 @@ class Jira:
         self._opener = opener
         self._site = site
 
-    def request(self, method: str, path: str, body: object | None = None) -> Any:
+    def request(self, method: str, path: str, body: object | None = None, *, empty_ok: bool = False) -> dict[str, Any]:
+        """Send one request. The answer must be a JSON object, or empty where empty_ok (HTTP 204)."""
         request = urllib.request.Request(  # noqa: S310 - fixed https site
             self._site + path,
             method=method,
@@ -172,10 +174,17 @@ class Jira:
             raise JiraError(f"{method} {path}: {error.reason}") from None
         except OSError as error:  # timeouts and resets while reading the response
             raise JiraError(f"{method} {path}: {type(error).__name__}") from None
+        if not raw.strip():
+            if empty_ok:
+                return {}
+            raise JiraError(f"{method} {path}: empty response")
         try:
-            return json.loads(raw) if raw.strip() else None
+            data = json.loads(raw)
         except ValueError:
             raise JiraError(f"{method} {path}: response is not JSON") from None
+        if not isinstance(data, dict):
+            raise JiraError(f"{method} {path}: response is not a JSON object")
+        return data
 
     def myself(self) -> dict[str, Any]:
         return self.request("GET", "/rest/api/3/myself")
@@ -199,11 +208,11 @@ class Jira:
         return issues
 
     def create(self, parent: str, summary: str, description: str) -> str:
+        if not summary.strip():
+            raise JiraError("summary is empty")
         epic = self.request("GET", f"/rest/api/3/issue/{check_key(parent)}?fields=issuetype")
         if epic["fields"]["issuetype"]["name"] != "Epic":
             raise JiraError(f"parent {parent} is a {epic['fields']['issuetype']['name']}, not an Epic")
-        if not summary.strip():
-            raise JiraError("summary is empty")
         created = self.request(
             "POST",
             "/rest/api/3/issue",
@@ -228,7 +237,7 @@ class Jira:
             raise JiraError(f"{key} cannot move to {status!r}. Allowed: {', '.join(names) or 'none'}")
         target = matches[0]["to"]["name"]
         before_transition(self, key, target)
-        self.request("POST", f"/rest/api/3/issue/{key}/transitions", {"transition": {"id": matches[0]["id"]}})
+        self.request("POST", f"/rest/api/3/issue/{key}/transitions", {"transition": {"id": matches[0]["id"]}}, empty_ok=True)
         return target
 
     def comment(self, key: str, body: str) -> str:
@@ -238,7 +247,7 @@ class Jira:
         return str(created["id"])
 
     def assign(self, key: str, account_id: str) -> None:
-        self.request("PUT", f"/rest/api/3/issue/{check_key(key)}/assignee", {"accountId": account_id})
+        self.request("PUT", f"/rest/api/3/issue/{check_key(key)}/assignee", {"accountId": account_id}, empty_ok=True)
 
 
 def before_transition(jira: Jira, key: str, status: str) -> None:
@@ -253,6 +262,8 @@ def _jira_messages(error: urllib.error.HTTPError) -> str:
     try:
         data = json.loads(error.read() or b"{}")
     except (ValueError, OSError):
+        return ""
+    if not isinstance(data, dict):
         return ""
     messages = list(data.get("errorMessages", [])) + [f"{k}: {v}" for k, v in data.get("errors", {}).items()]
     return "; ".join(str(m) for m in messages)
@@ -369,7 +380,7 @@ def main(
     except JiraError as error:
         print(f"jira: {error}", file=sys.stderr)
         return EXIT_JIRA
-    except (KeyError, TypeError) as error:
+    except (KeyError, TypeError, AttributeError) as error:
         print(f"jira: unexpected response from Jira ({type(error).__name__}: {error})", file=sys.stderr)
         return EXIT_JIRA
     except UsageError as error:
