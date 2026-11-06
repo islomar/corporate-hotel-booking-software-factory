@@ -15,6 +15,8 @@ Cloud Monitoring rejects points written too often to one time series.
 Telemetry fails open: a slow or unreachable endpoint delays a response by at most
 `flush_timeout_seconds`, and after such a flush the middleware stops flushing for
 `breaker_seconds`. Spans then wait in the batch queue (dropped past 2048).
+Only the span and log export decides the breaker. A failed or slow metric export is logged by
+the SDK and retried at the next interval: it never stops trace flushing.
 One thread runs flushes, one at a time. Concurrent responses share the next pending flush,
 so a hanging endpoint never piles up threads.
 """
@@ -64,6 +66,9 @@ EXPORT_TIMEOUT_SECONDS = 1.0
 SLOW_FLUSH_SECONDS = 0.5
 BREAKER_SECONDS = 30.0
 DEFAULT_METRIC_INTERVAL_SECONDS = 60.0
+# Cloud Monitoring accepts one point per time series every 5 s and rejects the batch otherwise.
+# https://docs.cloud.google.com/monitoring/quotas
+MIN_METRIC_SPACING_SECONDS = 10.0
 HEALTH_PATH = "/api/health"
 
 _logger = logging.getLogger(__name__)
@@ -133,6 +138,8 @@ class Telemetry:
     meter_provider: MeterProvider
     logger_provider: LoggerProvider | None = None
     span_exports: FailureTrackingSpanExporter | None = None
+    # Set when the configuration cannot export metrics. The app logs it once at startup.
+    metrics_off_reason: str | None = None
     metric_interval_seconds: float = DEFAULT_METRIC_INTERVAL_SECONDS
     flush_timeout_seconds: float = FLUSH_TIMEOUT_SECONDS
     slow_flush_seconds: float = SLOW_FLUSH_SECONDS
@@ -144,7 +151,7 @@ class Telemetry:
         default_factory=lambda: ThreadPoolExecutor(max_workers=1, thread_name_prefix="otel-flush"),
         init=False,
     )
-    _pending: Future[None] | None = field(default=None, init=False)
+    _pending: Future[float] | None = field(default=None, init=False)
     _pending_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
 
     @classmethod
@@ -152,13 +159,16 @@ class Telemetry:
         cls,
         *,
         span_exporter: SpanExporter,
-        metric_reader: MetricReader,
+        metric_reader: MetricReader | None,
         version: str,
         log_exporter: LogRecordExporter | None = None,
         project_id: str | None = None,
+        platform_attributes: Mapping[str, str] | None = None,
         metric_interval_seconds: float = DEFAULT_METRIC_INTERVAL_SECONDS,
+        metrics_off_reason: str | None = None,
     ) -> Telemetry:
         attributes: dict[str, str] = {
+            **(platform_attributes or {}),
             "service.name": SERVICE_NAME,
             "service.version": version,
             # Unique per process: two revisions running at once must not write the same series.
@@ -182,9 +192,12 @@ class Telemetry:
             logger_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
         return cls(
             tracer_provider=tracer_provider,
-            meter_provider=MeterProvider(resource=resource, metric_readers=[metric_reader]),
+            meter_provider=MeterProvider(
+                resource=resource, metric_readers=[metric_reader] if metric_reader else []
+            ),
             logger_provider=logger_provider,
             span_exports=span_exports,
+            metrics_off_reason=metrics_off_reason,
             metric_interval_seconds=metric_interval_seconds,
         )
 
@@ -210,7 +223,7 @@ class Telemetry:
             return None
         return LoggingHandler(logger_provider=self.logger_provider)
 
-    def request_flush(self) -> Future[None]:
+    def request_flush(self) -> Future[float]:
         """A flush that starts after this call. Joins the pending one if it has not started."""
         with self._pending_lock:
             pending = self._pending
@@ -219,21 +232,28 @@ class Telemetry:
                 self._pending = pending
             return pending
 
-    def flush(self) -> None:
-        """Blocking export. The SDK ignores the timeout argument: callers bound the wait.
+    def flush(self) -> float:
+        """Blocking export. Returns the seconds the span and log export took.
 
+        The SDK ignores the timeout argument: callers bound the wait.
+        Raises `ExportFailedError` when the span export failed. Metric results do not count.
         Not thread-safe: run it through `request_flush`, on the flush thread.
         """
         timeout_millis = int(self.flush_timeout_seconds * 1000)
+        started = self.clock()
         self.tracer_provider.force_flush(timeout_millis)
         if self.logger_provider is not None:
             self.logger_provider.force_flush(timeout_millis)
+        span_seconds = self.clock() - started
+        span_failed = self.span_exports is not None and self.span_exports.take_failure()
         now = self.clock()
         if now - self._last_metric_flush >= self.metric_interval_seconds:
+            # Set before the export: a failing endpoint is retried once per interval, not more.
             self._last_metric_flush = now
             self.meter_provider.force_flush(timeout_millis)
-        if self.span_exports is not None and self.span_exports.take_failure():
+        if span_failed:
             raise ExportFailedError("span export failed")
+        return span_seconds
 
     def shutdown(self, timeout_seconds: float = 5.0) -> None:
         """Export what is left, on the flush thread, after any running flush."""
@@ -247,7 +267,9 @@ class Telemetry:
 
     def _shutdown_providers(self) -> None:
         # The metric reader has no timer thread, so its shutdown would not collect: flush first.
-        self.meter_provider.force_flush()
+        # Points from the last few seconds are dropped rather than rejected with the batch.
+        if self.clock() - self._last_metric_flush >= MIN_METRIC_SPACING_SECONDS:
+            self.meter_provider.force_flush()
         self.tracer_provider.shutdown()
         self.meter_provider.shutdown()
         if self.logger_provider is not None:
@@ -272,15 +294,13 @@ class FlushTelemetry:
         telemetry = self.telemetry
         if self.breaker_open:
             return
-        started = telemetry.clock()
         try:
             async with asyncio.timeout(telemetry.flush_timeout_seconds):
-                await asyncio.shield(asyncio.wrap_future(telemetry.request_flush()))
+                elapsed = await asyncio.shield(asyncio.wrap_future(telemetry.request_flush()))
         except Exception as error:
             # Includes TimeoutError. The flush thread may still run: it ends at its own timeout.
             self._open_breaker(f"failed: {error!r}")
             return
-        elapsed = telemetry.clock() - started
         if elapsed > telemetry.slow_flush_seconds:
             self._open_breaker(f"took {elapsed:.2f} s")
 
@@ -332,6 +352,29 @@ def _google_session() -> requests.Session:
     return AuthorizedSession(credentials)  # pyright: ignore[reportUnknownArgumentType]
 
 
+def cloud_run_attributes(env: Mapping[str, str]) -> dict[str, str]:
+    """Resource attributes for Cloud Run. Empty elsewhere.
+
+    telemetry.googleapis.com writes metrics to the `prometheus_target` monitored resource.
+    Its required `location` label comes from `cloud.region`: without it every point is
+    rejected with 400 "Unrecognized region or location". `cloud.platform` sets the `cluster`
+    label to `__run__`. Cloud Run sets `K_SERVICE` and `K_REVISION` but no region variable,
+    so Terraform sets `GOOGLE_CLOUD_REGION`.
+    https://docs.cloud.google.com/stackdriver/docs/reference/telemetry/v1.metrics
+    """
+    attributes: dict[str, str] = {}
+    if region := env.get("GOOGLE_CLOUD_REGION"):
+        attributes["cloud.provider"] = "gcp"
+        attributes["cloud.region"] = region
+    if service := env.get("K_SERVICE"):
+        attributes["cloud.provider"] = "gcp"
+        attributes["cloud.platform"] = "gcp_cloud_run"
+        attributes["faas.name"] = service
+        if revision := env.get("K_REVISION"):
+            attributes["faas.version"] = revision
+    return attributes
+
+
 def telemetry_from_env(env: Mapping[str, str], version: str) -> Telemetry | None:
     endpoint = env.get("OTEL_EXPORTER_OTLP_ENDPOINT", "")
     if not endpoint or env.get("OTEL_SDK_DISABLED", "").lower() == "true":
@@ -351,9 +394,18 @@ def telemetry_from_env(env: Mapping[str, str], version: str) -> Telemetry | None
     interval_millis = float(env.get("OTEL_METRIC_EXPORT_INTERVAL", "60000"))
     # No timer thread: FlushTelemetry and shutdown export metrics (see the module docstring).
     timeout = EXPORT_TIMEOUT_SECONDS
-    metric_reader = PeriodicExportingMetricReader(
-        OTLPMetricExporter(session=session, timeout=timeout), export_interval_millis=math.inf
-    )
+    platform_attributes = cloud_run_attributes(env)
+    metric_reader = None
+    metrics_off_reason = None
+    if session is not None and "cloud.region" not in platform_attributes:
+        metrics_off_reason = (
+            "Metrics are off: GOOGLE_CLOUD_REGION is not set, and telemetry.googleapis.com "
+            "rejects metrics without a location"
+        )
+    else:
+        metric_reader = PeriodicExportingMetricReader(
+            OTLPMetricExporter(session=session, timeout=timeout), export_interval_millis=math.inf
+        )
     log_exporter = None
     if env.get("OTEL_LOGS_EXPORTER") == "otlp":
         log_exporter = OTLPLogExporter(session=session, timeout=timeout)
@@ -363,5 +415,7 @@ def telemetry_from_env(env: Mapping[str, str], version: str) -> Telemetry | None
         version=version,
         log_exporter=log_exporter,
         project_id=env.get("GOOGLE_CLOUD_PROJECT"),
+        platform_attributes=platform_attributes,
         metric_interval_seconds=interval_millis / 1000,
+        metrics_off_reason=metrics_off_reason,
     )

@@ -249,9 +249,10 @@ class BlockingTelemetry(Telemetry):
     flushes: int = 0
     release: threading.Event = field(default_factory=threading.Event)
 
-    def flush(self) -> None:
+    def flush(self) -> float:
         self.flushes += 1
         self.release.wait(5)
+        return 5.0
 
 
 def test_hanging_endpoint_neither_blocks_responses_nor_piles_up_flushes(
@@ -300,9 +301,10 @@ def test_slow_flush_opens_the_breaker_until_it_expires(
     flushes: list[float] = []
 
     class SlowTelemetry(Telemetry):
-        def flush(self) -> None:
+        def flush(self) -> float:
             flushes.append(now[0])
-            now[0] += 1.0  # each flush "takes" one second
+            now[0] += 1.0
+            return 1.0  # each span flush "takes" one second
 
     created = Telemetry.create(span_exporter=spans, metric_reader=metrics, version="dev")
     telemetry = SlowTelemetry(
@@ -410,10 +412,11 @@ def test_shutdown_waits_for_a_running_flush(
     flush_started = threading.Event()
 
     class OrderedTelemetry(Telemetry):
-        def flush(self) -> None:
+        def flush(self) -> float:
             flush_started.set()
             time.sleep(0.1)
             events.append("flush")
+            return 0.1
 
         def _shutdown_providers(self) -> None:
             events.append("shutdown")
@@ -448,3 +451,124 @@ def test_uvicorn_logs_and_exceptions_become_json_lines(
     assert failed["severity"] == "ERROR"
     assert failed["message"].startswith("request failed\nTraceback")
     assert "ValueError: bad booking" in failed["message"]
+
+
+CLOUD_RUN_ENV = {
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "https://telemetry.googleapis.com",
+    "GOOGLE_CLOUD_PROJECT": "my-project",
+    "GOOGLE_CLOUD_REGION": "europe-west1",
+    # Cloud Run sets these two in every container.
+    "K_SERVICE": "chb",
+    "K_REVISION": "chb-00042-abc",
+}
+
+
+@pytest.fixture
+def no_google_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    import requests
+
+    monkeypatch.setattr("chb.telemetry._google_session", requests.Session)
+
+
+@pytest.mark.usefixtures("no_google_credentials")
+def test_cloud_run_resource_has_the_location_cloud_monitoring_requires() -> None:
+    # telemetry.googleapis.com writes metrics to the `prometheus_target` monitored resource.
+    # Its `location` label comes from `cloud.region`; without it every point is rejected with
+    # 400 "Unrecognized region or location" (CHB-103).
+    telemetry = telemetry_from_env(CLOUD_RUN_ENV, version="abc123")
+
+    assert telemetry is not None
+    try:
+        attributes = telemetry.tracer_provider.resource.attributes
+        assert attributes["cloud.region"] == "europe-west1"
+        assert attributes["cloud.provider"] == "gcp"
+        assert attributes["cloud.platform"] == "gcp_cloud_run"
+        assert attributes["faas.name"] == "chb"
+        assert attributes["faas.version"] == "chb-00042-abc"
+        assert telemetry.metrics_off_reason is None
+    finally:
+        telemetry.shutdown()
+
+
+@pytest.mark.usefixtures("no_google_credentials", "restore_logging")
+def test_google_endpoint_without_region_turns_metrics_off_with_one_warning(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    env = {k: v for k, v in CLOUD_RUN_ENV.items() if k != "GOOGLE_CLOUD_REGION"}
+
+    app = app_from_env(env)
+
+    assert isinstance(app, FlushTelemetry)
+    try:
+        assert app.telemetry.metrics_off_reason is not None
+        assert TestClient(app).get("/api/health").status_code == 200
+        warnings = [
+            json.loads(line) for line in capsys.readouterr().out.splitlines() if '"WARNING"' in line
+        ]
+        assert len(warnings) == 1
+        assert "GOOGLE_CLOUD_REGION" in warnings[0]["message"]
+    finally:
+        app.telemetry.shutdown()
+
+
+def test_failing_metric_export_does_not_stop_trace_flushing(spans: InMemorySpanExporter) -> None:
+    now = [0.0]
+
+    class SlowRejectingExporter(MetricExporter):
+        """Like telemetry.googleapis.com answering 400 after most of a second."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        def export(
+            self, metrics_data: MetricsData, timeout_millis: float = 10_000, **kwargs: object
+        ) -> MetricExportResult:
+            self.calls += 1
+            now[0] += 0.9
+            return MetricExportResult.FAILURE
+
+        def force_flush(self, timeout_millis: float = 10_000) -> bool:
+            return True
+
+        def shutdown(self, timeout_millis: float = 30_000, **kwargs: object) -> None:
+            pass
+
+    exporter = SlowRejectingExporter()
+    reader = PeriodicExportingMetricReader(exporter, export_interval_millis=math.inf)
+    telemetry = Telemetry.create(
+        span_exporter=spans, metric_reader=reader, version="dev", metric_interval_seconds=60
+    )
+    telemetry.clock = lambda: now[0]
+    app = telemetry.wrap(create_app(telemetry=telemetry))
+    client = TestClient(app)
+
+    client.get("/api/openapi.json")
+    now[0] = 5.0
+    client.get("/api/openapi.json")
+
+    assert exporter.calls == 1
+    assert not app.breaker_open
+    # Both requests' spans were exported before their responses: no breaker skipped a flush.
+    assert len(spans.get_finished_spans()) == 2
+
+
+def test_shutdown_skips_metrics_written_moments_ago(spans: InMemorySpanExporter) -> None:
+    # Cloud Monitoring rejects a second point within 5 s on one time series (400
+    # FAILED_PRECONDITION "written more frequently than the maximum sampling period").
+    now = [0.0]
+    exports: list[float] = []
+
+    class CountingReader(InMemoryMetricReader):
+        def force_flush(self, timeout_millis: float = 10_000) -> bool:
+            exports.append(now[0])
+            return True
+
+    telemetry = Telemetry.create(span_exporter=spans, metric_reader=CountingReader(), version="dev")
+    telemetry.clock = lambda: now[0]
+    telemetry.flush()
+    now[0] = 3.0
+
+    telemetry.shutdown()
+
+    assert exports == [0.0]
