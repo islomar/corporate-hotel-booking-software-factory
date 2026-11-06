@@ -14,7 +14,9 @@ Found on 2026-11-06 while setting up the dependency cooldown (ADR-ebe6).
 - `uv sync --locked` and `uv sync --frozen` accepted a `uv.lock` with uploads inside the `exclude-newer` window.
 - npm reads `min-release-age` in days, as an integer. `min-release-age=7d` fails with `Invalid time value`.
 - npm older than 11.10 ignores the setting and prints `Unknown project config "min-release-age"`.
-- `uv.lock` stores a relative `exclude-newer` as `exclude-newer-span = "P7D"`. `uv lock --check` stays valid as days pass.
+- `uv.lock` stores a relative `exclude-newer` as `exclude-newer-span = "P7D"`.
+  `uv lock --check` passed again after the cutoff moved.
+  Checked over seconds, not days: the cutoff only moves forward and the locked uploads stay behind it.
 
 Rule: CI checks every lockfile change with `scripts/check_release_age.py`.
 The install commands do not.
