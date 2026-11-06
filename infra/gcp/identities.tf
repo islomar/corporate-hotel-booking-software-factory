@@ -72,3 +72,18 @@ resource "google_service_account_iam_member" "github_main_impersonates_deployer"
   role               = "roles/iam.workloadIdentityUser"
   member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.repository/${var.github_repository}"
 }
+
+# Telemetry from the app to Google's OTLP endpoint, telemetry.googleapis.com (CHB-15, ADR-c17d).
+# Roles from https://cloud.google.com/stackdriver/docs/instrumentation/migrate-to-otlp-endpoints.
+# Logs need no role: Cloud Run collects stdout itself.
+resource "google_project_iam_member" "runtime_traces_writer" {
+  project = var.project_id
+  role    = "roles/telemetry.tracesWriter"
+  member  = google_service_account.runtime.member
+}
+
+resource "google_project_iam_member" "runtime_metric_writer" {
+  project = var.project_id
+  role    = "roles/monitoring.metricWriter"
+  member  = google_service_account.runtime.member
+}

@@ -85,8 +85,8 @@ updates:
     versioning-strategy: increase
     cooldown: { default-days: 7, semver-major-days: 14 }
     groups:
-      # Always needs a human: the Playwright image in .github/workflows/deploy.yml must
-      # move in the same PR. `make check` and the e2e job fail until it does.
+      # Always needs a human: the Playwright images in .github/workflows/ci.yml and
+      # deploy.yml must move in the same PR. `make check` and the e2e job fail until it does.
       playwright:
         patterns: ["@playwright/test", playwright, playwright-core]
       e2e:

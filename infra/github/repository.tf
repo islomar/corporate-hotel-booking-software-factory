@@ -2,7 +2,9 @@ locals {
   repository = "corporate-hotel-booking-software-factory"
   # GitHub Actions. Pinning checks to it stops any other app from satisfying them.
   github_actions_app_id = 15368
-  required_checks       = ["backend", "frontend", "e2e"]
+  # Dependabot, from `gh api /apps/dependabot --jq .id`.
+  dependabot_app_id = 29110
+  required_checks   = ["backend", "frontend", "e2e", "supply-chain"]
 
   variables = {
     APP_URL          = "https://chb-1027266991110.europe-west1.run.app"
