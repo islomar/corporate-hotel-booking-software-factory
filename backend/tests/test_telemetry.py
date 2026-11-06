@@ -23,7 +23,7 @@ from opentelemetry.sdk.trace.export import SpanExportResult
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from chb.app import app_from_env, create_app
-from chb.logs import JsonFormatter
+from chb.logs import JsonFormatter, configure_logging
 from chb.telemetry import FlushTelemetry, Telemetry, telemetry_from_env, uses_google_auth
 
 
@@ -396,4 +396,55 @@ def test_local_rules_decide_sampling_whatever_the_caller_says(
 def test_production_entry_point_flushes_at_the_asgi_edge() -> None:
     app = app_from_env({"OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:1"})
 
-    assert isinstance(app, FlushTelemetry)
+    try:
+        assert isinstance(app, FlushTelemetry)
+    finally:
+        if isinstance(app, FlushTelemetry):
+            app.telemetry.shutdown()
+
+
+def test_shutdown_waits_for_a_running_flush(
+    spans: InMemorySpanExporter, metrics: InMemoryMetricReader
+) -> None:
+    events: list[str] = []
+    flush_started = threading.Event()
+
+    class OrderedTelemetry(Telemetry):
+        def flush(self) -> None:
+            flush_started.set()
+            time.sleep(0.1)
+            events.append("flush")
+
+        def _shutdown_providers(self) -> None:
+            events.append("shutdown")
+
+    created = Telemetry.create(span_exporter=spans, metric_reader=metrics, version="dev")
+    telemetry = OrderedTelemetry(
+        tracer_provider=created.tracer_provider, meter_provider=created.meter_provider
+    )
+
+    telemetry.request_flush()
+    flush_started.wait(5)
+    telemetry.shutdown()
+
+    assert events == ["flush", "shutdown"]
+
+
+@pytest.mark.usefixtures("restore_logging")
+def test_uvicorn_logs_and_exceptions_become_json_lines(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    configure_logging("my-project", [])
+
+    logging.getLogger("uvicorn.error").info("Started server process")
+    try:
+        raise ValueError("bad booking")
+    except ValueError:
+        logging.getLogger("chb.test").exception("request failed")
+
+    started, failed = (json.loads(line) for line in capsys.readouterr().out.splitlines())
+    assert started["logger"] == "uvicorn.error"
+    assert started["message"] == "Started server process"
+    assert failed["severity"] == "ERROR"
+    assert failed["message"].startswith("request failed\nTraceback")
+    assert "ValueError: bad booking" in failed["message"]

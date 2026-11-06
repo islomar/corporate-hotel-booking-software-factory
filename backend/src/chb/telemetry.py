@@ -139,6 +139,13 @@ class Telemetry:
     breaker_seconds: float = BREAKER_SECONDS
     clock: Callable[[], float] = time.monotonic
     _last_metric_flush: float = field(default=-math.inf, init=False)
+    # One thread runs every flush and the final shutdown, so they never overlap.
+    _executor: ThreadPoolExecutor = field(
+        default_factory=lambda: ThreadPoolExecutor(max_workers=1, thread_name_prefix="otel-flush"),
+        init=False,
+    )
+    _pending: Future[None] | None = field(default=None, init=False)
+    _pending_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
 
     @classmethod
     def create(
@@ -203,10 +210,19 @@ class Telemetry:
             return None
         return LoggingHandler(logger_provider=self.logger_provider)
 
+    def request_flush(self) -> Future[None]:
+        """A flush that starts after this call. Joins the pending one if it has not started."""
+        with self._pending_lock:
+            pending = self._pending
+            if pending is None or pending.running() or pending.done():
+                pending = self._executor.submit(self.flush)
+                self._pending = pending
+            return pending
+
     def flush(self) -> None:
         """Blocking export. The SDK ignores the timeout argument: callers bound the wait.
 
-        Not thread-safe: FlushTelemetry calls it from its single flush thread.
+        Not thread-safe: run it through `request_flush`, on the flush thread.
         """
         timeout_millis = int(self.flush_timeout_seconds * 1000)
         self.tracer_provider.force_flush(timeout_millis)
@@ -219,7 +235,17 @@ class Telemetry:
         if self.span_exports is not None and self.span_exports.take_failure():
             raise ExportFailedError("span export failed")
 
-    def shutdown(self) -> None:
+    def shutdown(self, timeout_seconds: float = 5.0) -> None:
+        """Export what is left, on the flush thread, after any running flush."""
+        try:
+            self._executor.submit(self._shutdown_providers).result(timeout=timeout_seconds)
+        except TimeoutError:
+            # A flush hangs on the endpoint. The process is exiting: give up on the rest.
+            _logger.warning("Telemetry shutdown timed out after %.0f s", timeout_seconds)
+        finally:
+            self._executor.shutdown(wait=False, cancel_futures=True)
+
+    def _shutdown_providers(self) -> None:
         # The metric reader has no timer thread, so its shutdown would not collect: flush first.
         self.meter_provider.force_flush()
         self.tracer_provider.shutdown()
@@ -236,22 +262,11 @@ class FlushTelemetry:
         self.telemetry = telemetry
         self._lock = threading.Lock()
         self._skip_until = -math.inf
-        self._flusher = ThreadPoolExecutor(max_workers=1, thread_name_prefix="otel-flush")
-        self._pending: Future[None] | None = None
 
     @property
     def breaker_open(self) -> bool:
         with self._lock:
             return self.telemetry.clock() < self._skip_until
-
-    def _request_flush(self) -> Future[None]:
-        """A flush that starts after this call. Joins the pending one if it has not started."""
-        with self._lock:
-            pending = self._pending
-            if pending is None or pending.running() or pending.done():
-                pending = self._flusher.submit(self.telemetry.flush)
-                self._pending = pending
-            return pending
 
     async def _flush(self) -> None:
         telemetry = self.telemetry
@@ -260,7 +275,7 @@ class FlushTelemetry:
         started = telemetry.clock()
         try:
             async with asyncio.timeout(telemetry.flush_timeout_seconds):
-                await asyncio.shield(asyncio.wrap_future(self._request_flush()))
+                await asyncio.shield(asyncio.wrap_future(telemetry.request_flush()))
         except Exception as error:
             # Includes TimeoutError. The flush thread may still run: it ends at its own timeout.
             self._open_breaker(f"failed: {error!r}")
