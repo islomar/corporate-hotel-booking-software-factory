@@ -15,15 +15,19 @@ Cloud Monitoring rejects points written too often to one time series.
 Telemetry fails open: a slow or unreachable endpoint delays a response by at most
 `flush_timeout_seconds`, and after such a flush the middleware stops flushing for
 `breaker_seconds`. Spans then wait in the batch queue (dropped past 2048).
+One thread runs flushes, one at a time. Concurrent responses share the next pending flush,
+so a hanging endpoint never piles up threads.
 """
 
 import asyncio
 import logging
 import math
 import os
+import threading
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
@@ -49,11 +53,6 @@ from opentelemetry.trace import Link, SpanKind, TraceState
 from opentelemetry.util.types import Attributes
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-# Stable HTTP semantic conventions: `http.server.request.duration` with `http.route`.
-# The old default labels metrics with the raw path, one time series per URL.
-# Read once, when the first app is instrumented.
-os.environ.setdefault("OTEL_SEMCONV_STABILITY_OPT_IN", "http")
-
 SERVICE_NAME = "chb"
 # Upper bound on the latency a flush adds to one response.
 FLUSH_TIMEOUT_SECONDS = 2.0
@@ -71,7 +70,11 @@ _logger = logging.getLogger(__name__)
 
 
 class DropHealthChecks(Sampler):
-    """No traces for health checks. Their request metrics are still recorded."""
+    """No traces for health checks. Their request metrics are still recorded.
+
+    Also used for remote parents: the caller's sampled flag in `traceparent` does not decide.
+    The span keeps the caller's trace ID.
+    """
 
     def should_sample(
         self,
@@ -103,15 +106,18 @@ class FailureTrackingSpanExporter(SpanExporter):
     def __init__(self, exporter: SpanExporter) -> None:
         self._exporter = exporter
         self._failed = False
+        self._lock = threading.Lock()
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
         result = self._exporter.export(spans)
         if result is not SpanExportResult.SUCCESS:
-            self._failed = True
+            with self._lock:
+                self._failed = True
         return result
 
     def take_failure(self) -> bool:
-        failed, self._failed = self._failed, False
+        with self._lock:
+            failed, self._failed = self._failed, False
         return failed
 
     def shutdown(self) -> None:
@@ -154,7 +160,13 @@ class Telemetry:
         if project_id:
             attributes["gcp.project_id"] = project_id
         resource = Resource.create(attributes)
-        tracer_provider = TracerProvider(resource=resource, sampler=ParentBased(DropHealthChecks()))
+        local_rules = DropHealthChecks()
+        sampler = ParentBased(
+            root=local_rules,
+            remote_parent_sampled=local_rules,
+            remote_parent_not_sampled=local_rules,
+        )
+        tracer_provider = TracerProvider(resource=resource, sampler=sampler)
         span_exports = FailureTrackingSpanExporter(span_exporter)
         tracer_provider.add_span_processor(BatchSpanProcessor(span_exports))
         logger_provider = None
@@ -170,6 +182,10 @@ class Telemetry:
         )
 
     def instrument(self, app: FastAPI) -> None:
+        # Stable HTTP semantic conventions: `http.server.request.duration` with `http.route`.
+        # The old default labels metrics with the raw path, one time series per URL.
+        # The instrumentation reads this variable once per process, at its first use.
+        os.environ.setdefault("OTEL_SEMCONV_STABILITY_OPT_IN", "http")
         FastAPIInstrumentor.instrument_app(
             app,
             tracer_provider=self.tracer_provider,
@@ -177,13 +193,10 @@ class Telemetry:
             # One span per request, without a child span per ASGI message.
             exclude_spans=["receive", "send"],
         )
-        # Wrap the instrumented stack, so the flush runs after the server span has ended.
-        build_instrumented_stack = app.build_middleware_stack
 
-        def build_middleware_stack() -> ASGIApp:
-            return FlushTelemetry(build_instrumented_stack(), self)
-
-        app.build_middleware_stack = build_middleware_stack  # type: ignore[method-assign]
+    def wrap(self, app: ASGIApp) -> FlushTelemetry:
+        """The ASGI entry point: outside the app, so the server span has ended at flush time."""
+        return FlushTelemetry(app, self)
 
     def log_handler(self) -> logging.Handler | None:
         if self.logger_provider is None:
@@ -191,17 +204,20 @@ class Telemetry:
         return LoggingHandler(logger_provider=self.logger_provider)
 
     def flush(self) -> None:
-        """Blocking export. The SDK ignores the timeout argument: callers bound the wait."""
+        """Blocking export. The SDK ignores the timeout argument: callers bound the wait.
+
+        Not thread-safe: FlushTelemetry calls it from its single flush thread.
+        """
         timeout_millis = int(self.flush_timeout_seconds * 1000)
         self.tracer_provider.force_flush(timeout_millis)
-        if self.span_exports is not None and self.span_exports.take_failure():
-            raise ExportFailedError("span export failed")
         if self.logger_provider is not None:
             self.logger_provider.force_flush(timeout_millis)
         now = self.clock()
         if now - self._last_metric_flush >= self.metric_interval_seconds:
             self._last_metric_flush = now
             self.meter_provider.force_flush(timeout_millis)
+        if self.span_exports is not None and self.span_exports.take_failure():
+            raise ExportFailedError("span export failed")
 
     def shutdown(self) -> None:
         # The metric reader has no timer thread, so its shutdown would not collect: flush first.
@@ -218,26 +234,47 @@ class FlushTelemetry:
     def __init__(self, app: ASGIApp, telemetry: Telemetry) -> None:
         self.app = app
         self.telemetry = telemetry
+        self._lock = threading.Lock()
         self._skip_until = -math.inf
+        self._flusher = ThreadPoolExecutor(max_workers=1, thread_name_prefix="otel-flush")
+        self._pending: Future[None] | None = None
+
+    @property
+    def breaker_open(self) -> bool:
+        with self._lock:
+            return self.telemetry.clock() < self._skip_until
+
+    def _request_flush(self) -> Future[None]:
+        """A flush that starts after this call. Joins the pending one if it has not started."""
+        with self._lock:
+            pending = self._pending
+            if pending is None or pending.running() or pending.done():
+                pending = self._flusher.submit(self.telemetry.flush)
+                self._pending = pending
+            return pending
 
     async def _flush(self) -> None:
         telemetry = self.telemetry
-        started = telemetry.clock()
-        if started < self._skip_until:
+        if self.breaker_open:
             return
+        started = telemetry.clock()
         try:
             async with asyncio.timeout(telemetry.flush_timeout_seconds):
-                await asyncio.to_thread(telemetry.flush)
+                await asyncio.shield(asyncio.wrap_future(self._request_flush()))
         except Exception as error:
-            # Includes TimeoutError. The export thread may still run: it ends at its own timeout.
-            self._open_breaker(started, f"failed: {error!r}")
+            # Includes TimeoutError. The flush thread may still run: it ends at its own timeout.
+            self._open_breaker(f"failed: {error!r}")
             return
         elapsed = telemetry.clock() - started
         if elapsed > telemetry.slow_flush_seconds:
-            self._open_breaker(started, f"took {elapsed:.2f} s")
+            self._open_breaker(f"took {elapsed:.2f} s")
 
-    def _open_breaker(self, started: float, reason: str) -> None:
-        self._skip_until = started + self.telemetry.breaker_seconds
+    def _open_breaker(self, reason: str) -> None:
+        with self._lock:
+            now = self.telemetry.clock()
+            if now < self._skip_until:
+                return  # another response opened it: one warning is enough
+            self._skip_until = now + self.telemetry.breaker_seconds
         _logger.warning(
             "Telemetry flush %s; responses skip flushing for %.0f s",
             reason,

@@ -24,7 +24,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 from chb.app import app_from_env, create_app
 from chb.logs import JsonFormatter
-from chb.telemetry import Telemetry, telemetry_from_env, uses_google_auth
+from chb.telemetry import FlushTelemetry, Telemetry, telemetry_from_env, uses_google_auth
 
 
 @pytest.fixture
@@ -57,7 +57,7 @@ def log_lines() -> Iterator[io.StringIO]:
 def test_request_produces_a_span_with_the_route(
     telemetry: Telemetry, spans: InMemorySpanExporter
 ) -> None:
-    client = TestClient(create_app(telemetry=telemetry))
+    client = TestClient(telemetry.wrap(create_app(telemetry=telemetry)))
 
     client.get("/api/openapi.json")
 
@@ -78,7 +78,7 @@ def test_log_line_during_a_request_carries_the_trace_id(
     def log_something() -> None:  # pyright: ignore[reportUnusedFunction]
         logging.getLogger("chb.test").warning("hello")
 
-    TestClient(app).get("/api/log-something")
+    TestClient(telemetry.wrap(app)).get("/api/log-something")
 
     server_span = next(s for s in spans.get_finished_spans() if s.parent is None)
     assert server_span.context is not None
@@ -95,7 +95,7 @@ def test_log_line_during_a_request_carries_the_trace_id(
 def test_request_records_duration_metric_by_route(
     telemetry: Telemetry, metrics: InMemoryMetricReader
 ) -> None:
-    client = TestClient(create_app(telemetry=telemetry))
+    client = TestClient(telemetry.wrap(create_app(telemetry=telemetry)))
 
     client.get("/api/health")
 
@@ -116,7 +116,7 @@ def test_spans_are_flushed_before_the_response_is_released(
     telemetry: Telemetry, spans: InMemorySpanExporter
 ) -> None:
     exported_when_body_sent: list[int] = []
-    app = create_app(telemetry=telemetry)
+    app = telemetry.wrap(create_app(telemetry=telemetry))
 
     async def asgi(scope: dict[str, object], receive: object, send: object) -> None:
         async def recording_send(message: dict[str, object]) -> None:
@@ -134,7 +134,7 @@ def test_spans_are_flushed_before_the_response_is_released(
 def test_health_checks_are_not_traced_but_still_counted(
     telemetry: Telemetry, spans: InMemorySpanExporter, metrics: InMemoryMetricReader
 ) -> None:
-    TestClient(create_app(telemetry=telemetry)).get("/api/health")
+    TestClient(telemetry.wrap(create_app(telemetry=telemetry))).get("/api/health")
 
     assert spans.get_finished_spans() == ()
     data = metrics.get_metrics_data()
@@ -254,7 +254,7 @@ class BlockingTelemetry(Telemetry):
         self.release.wait(5)
 
 
-def test_hanging_endpoint_delays_a_response_by_at_most_the_timeout(
+def test_hanging_endpoint_neither_blocks_responses_nor_piles_up_flushes(
     spans: InMemorySpanExporter, metrics: InMemoryMetricReader
 ) -> None:
     created = Telemetry.create(span_exporter=spans, metric_reader=metrics, version="dev")
@@ -263,30 +263,34 @@ def test_hanging_endpoint_delays_a_response_by_at_most_the_timeout(
         meter_provider=created.meter_provider,
         flush_timeout_seconds=0.2,
     )
-    app = create_app(telemetry=telemetry)
+    app = telemetry.wrap(create_app(telemetry=telemetry))
 
-    async def timed_get() -> tuple[int, float]:
-        # Measured inside one event loop, as under uvicorn: the hung export thread keeps
-        # running, but the response does not wait for it.
+    async def get() -> int:
         transport = httpx2.ASGITransport(app=app)
         async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
-            started = time.monotonic()
-            response = await client.get("/api/openapi.json")
-            return response.status_code, time.monotonic() - started
+            return (await client.get("/api/openapi.json")).status_code
 
-    async def two_requests() -> list[tuple[int, float]]:
+    async def scenario() -> tuple[list[int], list[int], int, bool]:
+        # One event loop, as under uvicorn: the hung flush thread keeps running.
         try:
-            return [await timed_get(), await timed_get()]
+            started = time.monotonic()
+            concurrent = await asyncio.gather(*(get() for _ in range(10)))
+            seconds = time.monotonic() - started
+            after_breaker = [await get()]
+            flushes = telemetry.flushes
+            return concurrent, after_breaker, flushes, seconds < 3
         finally:
             telemetry.release.set()
 
-    (first_status, first_seconds), (second_status, second_seconds) = asyncio.run(two_requests())
+    concurrent, after_breaker, flushes, within_bound = asyncio.run(scenario())
 
-    assert first_status == second_status == 200
-    assert 0.2 <= first_seconds < 1
-    # The breaker is open: the second response does not wait for a flush.
-    assert second_seconds < 0.1
-    assert telemetry.flushes == 1
+    assert concurrent == [200] * 10
+    assert after_breaker == [200]
+    # Ten responses shared one flush thread: no thread per request.
+    assert flushes == 1
+    assert app.breaker_open
+    # The timeout is 0.2 s. A generous bound: the responses did not wait for the hung flush.
+    assert within_bound
 
 
 def test_slow_flush_opens_the_breaker_until_it_expires(
@@ -307,7 +311,7 @@ def test_slow_flush_opens_the_breaker_until_it_expires(
         breaker_seconds=30,
     )
     telemetry.clock = lambda: now[0]
-    client = TestClient(create_app(telemetry=telemetry))
+    client = TestClient(telemetry.wrap(create_app(telemetry=telemetry)))
 
     for t in (0.0, 10.0, 29.0, 31.0):
         now[0] = t
@@ -331,7 +335,7 @@ class FailingExporter(InMemorySpanExporter):
 def test_fast_export_failure_opens_the_breaker(metrics: InMemoryMetricReader) -> None:
     exporter = FailingExporter()
     telemetry = Telemetry.create(span_exporter=exporter, metric_reader=metrics, version="dev")
-    client = TestClient(create_app(telemetry=telemetry))
+    client = TestClient(telemetry.wrap(create_app(telemetry=telemetry)))
 
     for _ in range(3):
         assert client.get("/api/openapi.json").status_code == 200
@@ -365,3 +369,31 @@ def test_shutdown_exports_metrics_not_yet_exported(spans: InMemorySpanExporter) 
     telemetry.shutdown()
 
     assert len(exported) == 1
+
+
+def _traceparent(sampled: bool) -> str:
+    return f"00-{'ab' * 16}-{'cd' * 8}-{'01' if sampled else '00'}"
+
+
+@pytest.mark.parametrize("sampled", [True, False])
+def test_local_rules_decide_sampling_whatever_the_caller_says(
+    telemetry: Telemetry, spans: InMemorySpanExporter, sampled: bool
+) -> None:
+    client = TestClient(telemetry.wrap(create_app(telemetry=telemetry)))
+    headers = {"traceparent": _traceparent(sampled)}
+
+    client.get("/api/openapi.json", headers=headers)
+    client.get("/api/health", headers=headers)
+
+    [server_span] = spans.get_finished_spans()
+    assert server_span.name == "GET /api/openapi.json"
+    assert server_span.context is not None
+    # Same trace as the caller, so Cloud Trace joins it with the Cloud Run frontend spans.
+    assert format(server_span.context.trace_id, "032x") == "ab" * 16
+
+
+@pytest.mark.usefixtures("restore_logging")
+def test_production_entry_point_flushes_at_the_asgi_edge() -> None:
+    app = app_from_env({"OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:1"})
+
+    assert isinstance(app, FlushTelemetry)

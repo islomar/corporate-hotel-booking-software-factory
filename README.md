@@ -77,14 +77,23 @@ Local: open <http://localhost:3000> (no login), then Explore.
 The `lgtm` container keeps data in memory: `make down` discards it.
 
 Production: each JSON log line carries `logging.googleapis.com/trace` and `logging.googleapis.com/spanId`, so Cloud Logging links it to its trace in Cloud Trace.
+Cloud Logging moves these fields to the entry's `trace`, `spanId` and `traceSampled`. Health-check lines have `traceSampled: false` and no trace.
+To find a traced request:
+
+```sh
+gcloud logging read 'resource.labels.service_name="chb" AND jsonPayload.message:"GET /api/openapi.json" AND traceSampled=true' --limit 1 --format=json
+```
+
 Metrics appear in Cloud Monitoring as Prometheus metrics, with names that start with `prometheus.googleapis.com/http_server_request_duration_seconds`.
 
 Cloud Run throttles CPU after the response goes out.
 The backend holds back the last chunk of each response until it has exported the spans of that request.
 It exports metrics from the same place, at most once a minute.
-A flush waits at most 2 s. After a flush that fails or takes over 0.5 s, responses skip flushing for 30 s.
+One thread runs flushes, one at a time; concurrent responses share the next flush.
+A response waits at most 2 s for a flush. After a flush that fails or takes over 0.5 s, responses skip flushing for 30 s.
 If telemetry setup fails at startup, the app logs one warning and runs without export.
-Health checks (`/api/health`) produce request metrics but no traces.
+The backend decides sampling itself: health checks (`/api/health`) get request metrics but no traces, every other request is traced.
+The sampled flag in an incoming `traceparent` header is ignored; its trace ID is kept.
 
 ## Layout
 

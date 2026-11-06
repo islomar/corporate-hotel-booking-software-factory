@@ -9,6 +9,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.types import ASGIApp
 
 from chb.logs import configure_logging
 from chb.telemetry import Telemetry, telemetry_from_env
@@ -51,7 +52,7 @@ def create_app(static_dir: Path | None = None, telemetry: Telemetry | None = Non
     return app
 
 
-def app_from_env(env: Mapping[str, str]) -> FastAPI:
+def app_from_env(env: Mapping[str, str]) -> ASGIApp:
     """The production app. Telemetry fails open: without it the app still starts and serves."""
     error: Exception | None = None
     try:
@@ -63,7 +64,8 @@ def app_from_env(env: Mapping[str, str]) -> FastAPI:
     if error is not None:
         logger.warning("Telemetry is off: setup failed: %r", error)
     static_dir = env.get("STATIC_DIR")
-    return create_app(Path(static_dir) if static_dir else None, telemetry)
+    fastapi_app = create_app(Path(static_dir) if static_dir else None, telemetry)
+    return telemetry.wrap(fastapi_app) if telemetry is not None else fastapi_app
 
 
 app = app_from_env(os.environ)
