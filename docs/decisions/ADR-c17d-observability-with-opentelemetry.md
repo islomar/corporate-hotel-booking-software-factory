@@ -27,7 +27,7 @@ The agent must read production telemetry from a CLI: the `validating` step and t
   Uptime check, SLO and alert policies are in Terraform.
 - Local: `make dev` runs the `grafana/otel-lgtm` container. Same instrumentation, local Grafana.
 - Cloud Run throttles CPU between requests. The app flushes telemetry per request instead of paying for always-allocated CPU.
-- Factory telemetry stays separate from app telemetry: Claude Code's OpenTelemetry export and the orchestrator's per-ticket data go to the local Grafana. Evals use it.
+- Factory telemetry stays separate from app telemetry: Claude Code's OpenTelemetry export and the orchestrator's per-ticket data go to the local Grafana. The evals use it.
 
 ## Alternatives rejected
 
