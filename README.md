@@ -82,6 +82,9 @@ Metrics appear in Cloud Monitoring as Prometheus metrics, with names that start 
 Cloud Run throttles CPU after the response goes out.
 The backend holds back the last chunk of each response until it has exported the spans of that request.
 It exports metrics from the same place, at most once a minute.
+A flush waits at most 2 s. After a flush that fails or takes over 0.5 s, responses skip flushing for 30 s.
+If telemetry setup fails at startup, the app logs one warning and runs without export.
+Health checks (`/api/health`) produce request metrics but no traces.
 
 ## Layout
 

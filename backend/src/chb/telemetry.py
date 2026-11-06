@@ -11,6 +11,10 @@ Cloud Run throttles CPU once a response is sent, so background export threads ma
 `FlushTelemetry` holds back the last chunk of each response until the request's spans are
 exported. Metrics are flushed from the same place, at most once per export interval, because
 Cloud Monitoring rejects points written too often to one time series.
+
+Telemetry fails open: a slow or unreachable endpoint delays a response by at most
+`flush_timeout_seconds`, and after such a flush the middleware stops flushing for
+`breaker_seconds`. Spans then wait in the batch queue (dropped past 2048).
 """
 
 import asyncio
@@ -19,12 +23,13 @@ import math
 import os
 import time
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
 import requests
 from fastapi import FastAPI
+from opentelemetry.context import Context
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor, LogRecordExporter
@@ -33,6 +38,15 @@ from opentelemetry.sdk.metrics.export import MetricReader, PeriodicExportingMetr
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
+from opentelemetry.sdk.trace.sampling import (
+    ALWAYS_ON,
+    Decision,
+    ParentBased,
+    Sampler,
+    SamplingResult,
+)
+from opentelemetry.trace import Link, SpanKind, TraceState
+from opentelemetry.util.types import Attributes
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 # Stable HTTP semantic conventions: `http.server.request.duration` with `http.route`.
@@ -42,8 +56,41 @@ os.environ.setdefault("OTEL_SEMCONV_STABILITY_OPT_IN", "http")
 
 SERVICE_NAME = "chb"
 # Upper bound on the latency a flush adds to one response.
-FLUSH_TIMEOUT_MILLIS = 2_000
+FLUSH_TIMEOUT_SECONDS = 2.0
+# Per OTLP request, retries included. Below the flush timeout, so one export can finish.
+EXPORT_TIMEOUT_SECONDS = 1.0
+# A healthy export takes milliseconds. A flush slower than this, or one that fails, stops
+# flushing for BREAKER_SECONDS: an endpoint that refuses connections makes the exporter retry
+# until its timeout on every request.
+SLOW_FLUSH_SECONDS = 0.5
+BREAKER_SECONDS = 30.0
 DEFAULT_METRIC_INTERVAL_SECONDS = 60.0
+HEALTH_PATH = "/api/health"
+
+_logger = logging.getLogger(__name__)
+
+
+class DropHealthChecks(Sampler):
+    """No traces for health checks. Their request metrics are still recorded."""
+
+    def should_sample(
+        self,
+        parent_context: Context | None,
+        trace_id: int,
+        name: str,
+        kind: SpanKind | None = None,
+        attributes: Attributes = None,
+        links: Sequence[Link] | None = None,
+        trace_state: TraceState | None = None,
+    ) -> SamplingResult:
+        if attributes is not None and attributes.get("url.path") == HEALTH_PATH:
+            return SamplingResult(Decision.DROP)
+        return ALWAYS_ON.should_sample(
+            parent_context, trace_id, name, kind, attributes, links, trace_state
+        )
+
+    def get_description(self) -> str:
+        return "DropHealthChecks"
 
 
 @dataclass
@@ -52,6 +99,9 @@ class Telemetry:
     meter_provider: MeterProvider
     logger_provider: LoggerProvider | None = None
     metric_interval_seconds: float = DEFAULT_METRIC_INTERVAL_SECONDS
+    flush_timeout_seconds: float = FLUSH_TIMEOUT_SECONDS
+    slow_flush_seconds: float = SLOW_FLUSH_SECONDS
+    breaker_seconds: float = BREAKER_SECONDS
     clock: Callable[[], float] = time.monotonic
     _last_metric_flush: float = field(default=-math.inf, init=False)
 
@@ -75,7 +125,7 @@ class Telemetry:
         if project_id:
             attributes["gcp.project_id"] = project_id
         resource = Resource.create(attributes)
-        tracer_provider = TracerProvider(resource=resource)
+        tracer_provider = TracerProvider(resource=resource, sampler=ParentBased(DropHealthChecks()))
         tracer_provider.add_span_processor(BatchSpanProcessor(span_exporter))
         logger_provider = None
         if log_exporter is not None:
@@ -90,7 +140,11 @@ class Telemetry:
 
     def instrument(self, app: FastAPI) -> None:
         FastAPIInstrumentor.instrument_app(
-            app, tracer_provider=self.tracer_provider, meter_provider=self.meter_provider
+            app,
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+            # One span per request, without a child span per ASGI message.
+            exclude_spans=["receive", "send"],
         )
         # Wrap the instrumented stack, so the flush runs after the server span has ended.
         build_instrumented_stack = app.build_middleware_stack
@@ -106,13 +160,15 @@ class Telemetry:
         return LoggingHandler(logger_provider=self.logger_provider)
 
     def flush(self) -> None:
-        self.tracer_provider.force_flush(FLUSH_TIMEOUT_MILLIS)
+        """Blocking export. The SDK ignores the timeout argument: callers bound the wait."""
+        timeout_millis = int(self.flush_timeout_seconds * 1000)
+        self.tracer_provider.force_flush(timeout_millis)
         if self.logger_provider is not None:
-            self.logger_provider.force_flush(FLUSH_TIMEOUT_MILLIS)
+            self.logger_provider.force_flush(timeout_millis)
         now = self.clock()
         if now - self._last_metric_flush >= self.metric_interval_seconds:
             self._last_metric_flush = now
-            self.meter_provider.force_flush(FLUSH_TIMEOUT_MILLIS)
+            self.meter_provider.force_flush(timeout_millis)
 
     def shutdown(self) -> None:
         self.tracer_provider.shutdown()
@@ -127,6 +183,31 @@ class FlushTelemetry:
     def __init__(self, app: ASGIApp, telemetry: Telemetry) -> None:
         self.app = app
         self.telemetry = telemetry
+        self._skip_until = -math.inf
+
+    async def _flush(self) -> None:
+        telemetry = self.telemetry
+        started = telemetry.clock()
+        if started < self._skip_until:
+            return
+        try:
+            async with asyncio.timeout(telemetry.flush_timeout_seconds):
+                await asyncio.to_thread(telemetry.flush)
+        except Exception as error:
+            # Includes TimeoutError. The export thread may still run: it ends at its own timeout.
+            self._open_breaker(started, f"failed: {error!r}")
+            return
+        elapsed = telemetry.clock() - started
+        if elapsed > telemetry.slow_flush_seconds:
+            self._open_breaker(started, f"took {elapsed:.2f} s")
+
+    def _open_breaker(self, started: float, reason: str) -> None:
+        self._skip_until = started + self.telemetry.breaker_seconds
+        _logger.warning(
+            "Telemetry flush %s; responses skip flushing for %.0f s",
+            reason,
+            self.telemetry.breaker_seconds,
+        )
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -143,7 +224,7 @@ class FlushTelemetry:
         try:
             await self.app(scope, receive, holding_send)
         finally:
-            await asyncio.to_thread(self.telemetry.flush)
+            await self._flush()
             for message in held:
                 await send(message)
 
@@ -182,21 +263,18 @@ def telemetry_from_env(env: Mapping[str, str], version: str) -> Telemetry | None
     session = _google_session() if uses_google_auth(endpoint) else None
     interval_millis = float(env.get("OTEL_METRIC_EXPORT_INTERVAL", "60000"))
     # No timer thread: FlushTelemetry and shutdown export metrics (see the module docstring).
+    timeout = EXPORT_TIMEOUT_SECONDS
     metric_reader = PeriodicExportingMetricReader(
-        OTLPMetricExporter(session=session), export_interval_millis=math.inf
+        OTLPMetricExporter(session=session, timeout=timeout), export_interval_millis=math.inf
     )
     log_exporter = None
     if env.get("OTEL_LOGS_EXPORTER") == "otlp":
-        log_exporter = OTLPLogExporter(session=session)
+        log_exporter = OTLPLogExporter(session=session, timeout=timeout)
     return Telemetry.create(
-        span_exporter=OTLPSpanExporter(session=session),
+        span_exporter=OTLPSpanExporter(session=session, timeout=timeout),
         metric_reader=metric_reader,
         version=version,
         log_exporter=log_exporter,
         project_id=env.get("GOOGLE_CLOUD_PROJECT"),
         metric_interval_seconds=interval_millis / 1000,
     )
-
-
-def project_id_from_env() -> str | None:
-    return os.environ.get("GOOGLE_CLOUD_PROJECT") or None

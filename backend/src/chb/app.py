@@ -1,7 +1,8 @@
 """FastAPI application: the JSON API under /api and, in production, the built frontend."""
 
+import logging
 import os
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -10,7 +11,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from chb.logs import configure_logging
-from chb.telemetry import Telemetry, project_id_from_env, telemetry_from_env
+from chb.telemetry import Telemetry, telemetry_from_env
+
+logger = logging.getLogger(__name__)
 
 
 class Health(BaseModel):
@@ -48,16 +51,19 @@ def create_app(static_dir: Path | None = None, telemetry: Telemetry | None = Non
     return app
 
 
-def _static_dir_from_env() -> Path | None:
-    value = os.environ.get("STATIC_DIR")
-    return Path(value) if value else None
-
-
-def _app_from_env() -> FastAPI:
-    telemetry = telemetry_from_env(os.environ, version=os.environ.get("APP_VERSION", "dev"))
+def app_from_env(env: Mapping[str, str]) -> FastAPI:
+    """The production app. Telemetry fails open: without it the app still starts and serves."""
+    error: Exception | None = None
+    try:
+        telemetry = telemetry_from_env(env, version=env.get("APP_VERSION", "dev"))
+    except Exception as exc:
+        telemetry, error = None, exc
     log_handler = telemetry.log_handler() if telemetry is not None else None
-    configure_logging(project_id_from_env(), [log_handler] if log_handler else [])
-    return create_app(_static_dir_from_env(), telemetry)
+    configure_logging(env.get("GOOGLE_CLOUD_PROJECT"), [log_handler] if log_handler else [])
+    if error is not None:
+        logger.warning("Telemetry is off: setup failed: %r", error)
+    static_dir = env.get("STATIC_DIR")
+    return create_app(Path(static_dir) if static_dir else None, telemetry)
 
 
-app = _app_from_env()
+app = app_from_env(os.environ)
