@@ -1,0 +1,27 @@
+# Trigger for the automated PR review (ADR-ea8c, CHB-93).
+#
+# This workflow does nothing. Its completed run starts review.yml through `workflow_run`,
+# and review.yml always runs from main.
+#
+# On `pull_request`, GitHub runs the PR's own copy of this file. A branch can change it freely,
+# so review.yml trusts nothing it reports: it reads the PR number and head SHA from the
+# workflow_run payload and checks them against the GitHub API.
+# Keep this file empty: no secrets, no permissions, no checkout, no PR text in `run:`.
+name: Review trigger
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  # Not named `review`: Actions posts a check under the job name, which would shadow the App's check.
+  record-pr:
+    name: record-pr
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Hand over to the Review workflow
+        run: echo "The Review workflow (workflow_run, from main) scores this PR."

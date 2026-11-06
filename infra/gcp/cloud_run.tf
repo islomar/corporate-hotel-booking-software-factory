@@ -34,6 +34,12 @@ resource "google_cloud_run_v2_service" "chb" {
         name  = "GOOGLE_CLOUD_PROJECT"
         value = var.project_id
       }
+      # Cloud Monitoring rejects OTLP metrics without a location: the backend maps this
+      # to the `cloud.region` resource attribute (CHB-103). Cloud Run sets no region variable.
+      env {
+        name  = "GOOGLE_CLOUD_REGION"
+        value = var.region
+      }
 
       ports {
         name           = "http1"
