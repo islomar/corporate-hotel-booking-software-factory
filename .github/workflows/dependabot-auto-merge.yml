@@ -106,14 +106,18 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
 
-      - name: Approve and enable auto-merge (squash)
+      - id: automerge
+        name: Approve and enable auto-merge (squash)
         if: steps.app-token.outputs.token != ''
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          gh pr review --approve "$PR_URL"
-          gh pr merge --auto --squash "$PR_URL"
-          gh pr edit "$PR_URL" --add-label "dependencies:auto-merge" || echo "::warning::label missing in the repository"
+          if gh pr review --approve "$PR_URL" && gh pr merge --auto --squash "$PR_URL"; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            gh pr edit "$PR_URL" --add-label "dependencies:auto-merge" || echo "::warning::label missing in the repository"
+          else
+            echo "::warning::could not enable auto-merge. Check the 'allow auto-merge' setting and the App permissions."
+          fi
 
       - name: Turn auto-merge off for an unsafe update
         if: steps.decide.outputs.safe == 'false' && env.HAS_APP == 'true'
@@ -139,9 +143,9 @@ jobs:
           gh pr edit "$PR_URL" --add-label "dependencies:needs-human" || echo "::warning::label missing in the repository"
 
       - name: Label a safe update that waits for a human merge
-        if: steps.decide.outputs.safe == 'true' && steps.app-token.outputs.token == ''
+        if: steps.decide.outputs.safe == 'true' && steps.automerge.outputs.enabled != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          echo "::notice::Safe update. Auto-merge needs the GitHub App and the main ruleset; merge by hand."
+          echo "::notice::Safe update. Auto-merge is off (App, ruleset or repository setting missing); merge by hand."
           gh pr edit "$PR_URL" --add-label "dependencies:safe" || echo "::warning::label missing in the repository"

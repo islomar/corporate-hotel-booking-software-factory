@@ -29,6 +29,9 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --locked
+      - name: Unit tests of the dependency check scripts
+        working-directory: .
+        run: python3 -I -m unittest discover -s scripts/tests
       - name: Release age (uv.lock upload times against exclude-newer)
         run: python3 -I ../scripts/check_release_age.py uv.lock
       - run: uv run --locked ruff format --check .
