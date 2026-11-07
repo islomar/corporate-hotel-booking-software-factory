@@ -11,6 +11,8 @@ Usage:
   factory/bin/jira rank CHB-12 [CHB-13 ...] --before CHB-9 | --after CHB-9
   factory/bin/jira section CHB-12 --heading TEXT --body-file FILE
   factory/bin/jira priority CHB-12 High|Medium|Low
+  factory/bin/jira description CHB-12 --file FILE        (replaces the whole description)
+  factory/bin/jira edit-comment CHB-12 10071 --body-file FILE
 
 The account email and API token are read from the 1Password item chb-jira-claude.api-token
 (fields username and credential, vault chb-factory) on every call, with one `op` call that
@@ -24,8 +26,11 @@ Tasks under a CHB Epic, and has no delete, no project, board, workflow or permis
 writes, and no raw request command. Do not add one. `rank` changes only the rank of
 issues. `section` writes only the description field, and changes only one section of it.
 `priority` writes only the priority field, and only High, Medium or Low (docs/process/priorities.md).
+`description` writes only the description field. `edit-comment` changes one comment body.
 
-In a description, comment or section body, a line "## Heading" (1 to 6 #) becomes a heading.
+Descriptions, comments and section bodies are Markdown: headings, bullet and numbered lists,
+`code`, **bold** and links render in Jira (text_to_adf). CHB-<n> links to the ticket, and
+"PR #<n>" or "(#<n>" links to the pull request.
 
 Exit codes:
   0  done
@@ -75,6 +80,15 @@ URL_PATTERN = re.compile(r"https?://[^\s<>()]*[^\s<>().,;:!?'\"]")
 SEARCH_FIELDS = ["summary", "status", "assignee", "issuetype", "parent", "priority"]
 PRIORITIES = ("High", "Medium", "Low")  # Highest and Lowest exist in Jira but CHB does not use them
 HEADING_PATTERN = re.compile(r"^(#{1,6}) +(\S.*?)\s*$")
+BULLET_PATTERN = re.compile(r"^- (?P<text>.*)$")
+ORDERED_PATTERN = re.compile(r"^([1-9][0-9]*)\. (?P<text>.*)$")
+PULL_URL = "https://github.com/islomar/corporate-hotel-booking-software-factory/pull/"
+REFERENCE_PATTERN = re.compile(
+    URL_PATTERN.pattern
+    + rf"|(?<![\w-])(?P<key>{PROJECT}-[1-9][0-9]*)(?![\w-])"
+    + r"|(?:\bPR |(?<=\())#(?P<pr>[1-9][0-9]*)\b"
+)
+INLINE_PATTERN = re.compile(r"`(?P<code>[^`]+)`|\*\*(?P<bold>[^*]+)\*\*")
 RANK_LIMIT = 50  # issues per rank request, the Jira Software limit
 BOARD_ID = 2  # the CHB board; its column configuration holds the WIP limits
 IN_PROGRESS = "In Progress"
@@ -176,10 +190,13 @@ def default_opener() -> Opener:
     return lambda request: opener.open(request, timeout=30)
 
 
-def text_to_adf(text: str, *, bullets: bool = False) -> dict[str, Any]:
-    """Plain text to an Atlassian Document. Blank lines split paragraphs, URLs become links.
+def text_to_adf(text: str) -> dict[str, Any]:
+    """Markdown text to an Atlassian Document (CHB-129).
 
-    With bullets, consecutive lines that start with "- " become a bullet list.
+    Blank lines split blocks. A line "## Title" (1 to 6 #) is a heading. Lines that start with
+    "- " form a bullet list, lines that start with "1. " an ordered list; an indented line after
+    a list item continues that item. Inline: `code`, **bold**, and URLs become links.
+    Other lines are paragraphs, one hard break per line.
     """
     blocks: list[dict[str, Any]] = []
     for lines in _blocks(text):
@@ -188,27 +205,54 @@ def text_to_adf(text: str, *, bullets: bool = False) -> dict[str, Any]:
             level, title = heading.groups()
             blocks.append({"type": "heading", "attrs": {"level": len(level)}, "content": _inline(title)})
             continue
-        if not bullets:
-            blocks.append(_paragraph(lines))
-            continue
-        run: list[str] = []
-        items: list[str] = []
-        for line in lines:
-            if line.startswith("- "):
-                if run:
-                    blocks.append(_paragraph(run))
-                    run = []
-                items.append(line[2:])
-            else:
-                if items:
-                    blocks.append(_bullet_list(items))
-                    items = []
-                run.append(line)
-        if run:
-            blocks.append(_paragraph(run))
-        if items:
-            blocks.append(_bullet_list(items))
+        blocks.extend(_block_nodes(lines))
     return {"type": "doc", "version": 1, "content": blocks}
+
+
+def _block_nodes(lines: list[str]) -> list[dict[str, Any]]:
+    """Split one block into paragraphs and lists, in order."""
+    nodes: list[dict[str, Any]] = []
+    run: list[str] = []
+    kind = ""  # "bullet" or "ordered" while a list is open
+    first_number = 1
+    items: list[list[str]] = []
+
+    def close() -> None:
+        nonlocal run, items, kind
+        if run:
+            nodes.append(_paragraph(run))
+            run = []
+        if items:
+            nodes.append(_list(kind, items, first_number))
+            items = []
+        kind = ""
+
+    for line in lines:
+        bullet = BULLET_PATTERN.match(line)
+        numbered = ORDERED_PATTERN.match(line)
+        if bullet or numbered:
+            new_kind = "bullet" if bullet else "ordered"
+            if run or kind != new_kind:
+                close()
+            if not items and numbered:
+                first_number = int(numbered.group(1))
+            kind = new_kind
+            items.append([(bullet or numbered).group("text")])  # type: ignore[union-attr]
+        elif items and line[:1].isspace():
+            items[-1].append(line.strip())
+        else:
+            if items:
+                close()
+            run.append(line)
+    close()
+    return nodes
+
+
+def _list(kind: str, items: list[list[str]], first_number: int) -> dict[str, Any]:
+    content = [{"type": "listItem", "content": [_paragraph(item)]} for item in items]
+    if kind == "ordered":
+        return {"type": "orderedList", "attrs": {"order": first_number}, "content": content}
+    return {"type": "bulletList", "content": content}
 
 
 def _blocks(text: str) -> list[list[str]]:
@@ -229,6 +273,12 @@ def _blocks(text: str) -> list[list[str]]:
     return blocks
 
 
+def check_comment_id(comment_id: str) -> str:
+    if not re.fullmatch(r"[1-9][0-9]*", comment_id):
+        raise UsageError(f"comment id must be a number, got {comment_id!r}")
+    return comment_id
+
+
 def check_priority(priority: str) -> str:
     if priority not in PRIORITIES:
         raise UsageError(f"priority must be one of {', '.join(PRIORITIES)}, got {priority!r}")
@@ -244,22 +294,48 @@ def _paragraph(lines: list[str]) -> dict[str, Any]:
     return {"type": "paragraph", "content": content}
 
 
-def _bullet_list(items: list[str]) -> dict[str, Any]:
-    return {"type": "bulletList", "content": [{"type": "listItem", "content": [_paragraph([item])]} for item in items]}
-
-
 def _inline(line: str) -> list[dict[str, Any]]:
+    """`code` and **bold** spans, then links in the plain parts."""
     nodes: list[dict[str, Any]] = []
     position = 0
-    for match in URL_PATTERN.finditer(line):
+    for match in INLINE_PATTERN.finditer(line):
+        if match.start() > position:
+            nodes.extend(_links(line[position : match.start()]))
+        code, bold = match.group("code"), match.group("bold")
+        if code is not None:
+            nodes.append({"type": "text", "text": code, "marks": [{"type": "code"}]})
+        else:
+            nodes.append({"type": "text", "text": bold, "marks": [{"type": "strong"}]})
+        position = match.end()
+    if position < len(line):
+        nodes.extend(_links(line[position:]))
+    return nodes
+
+
+def _links(line: str) -> list[dict[str, Any]]:
+    """URLs, CHB keys and PR references ("PR #44", "(#44") become links."""
+    nodes: list[dict[str, Any]] = []
+    position = 0
+    for match in REFERENCE_PATTERN.finditer(line):
         if match.start() > position:
             nodes.append({"type": "text", "text": line[position : match.start()]})
-        url = match.group(0)
-        nodes.append({"type": "text", "text": url, "marks": [{"type": "link", "attrs": {"href": url}}]})
+        text = match.group(0)
+        if match.group("key"):
+            href = f"{SITE}/browse/{text}"
+        elif match.group("pr"):
+            href = f"{PULL_URL}{match.group('pr')}"
+        else:
+            href = text
+        nodes.append({"type": "text", "text": text, "marks": [{"type": "link", "attrs": {"href": href}}]})
         position = match.end()
     if position < len(line):
         nodes.append({"type": "text", "text": line[position:]})
     return nodes
+
+
+def _indent(item: str, width: int) -> str:
+    """Indent the continuation lines of a list item, so text_to_adf reads them back into the item."""
+    return item.replace("\n", "\n" + " " * width)
 
 
 def adf_to_text(node: Any) -> str:
@@ -267,16 +343,26 @@ def adf_to_text(node: Any) -> str:
         return ""
     kind = node.get("type")
     if kind == "text":
-        return str(node.get("text", ""))
+        text = str(node.get("text", ""))
+        marks = {mark.get("type") for mark in node.get("marks", []) if isinstance(mark, dict)}
+        if "code" in marks:
+            return f"`{text}`"
+        return f"**{text}**" if "strong" in marks else text
     if kind == "hardBreak":
         return "\n"
     if kind == "bulletList":
         items = (adf_to_text(item).strip("\n") for item in node.get("content", []))
-        return "".join(f"- {item}\n" for item in items) + "\n"
+        return "".join(f"- {_indent(item, 2)}\n" for item in items) + "\n"
+    if kind == "orderedList":
+        start = node.get("attrs", {}).get("order", 1)
+        items = (adf_to_text(item).strip("\n") for item in node.get("content", []))
+        return "".join(f"{n}. {_indent(item, len(str(n)) + 2)}\n" for n, item in enumerate(items, start)) + "\n"
     inner = "".join(adf_to_text(child) for child in node.get("content", []))
     if kind == "doc":
         return inner.strip("\n")
-    if kind in {"paragraph", "heading", "codeBlock", "listItem", "blockquote", "rule"}:
+    if kind == "heading":
+        return "#" * _level(node) + " " + inner.strip("\n") + "\n\n"
+    if kind in {"paragraph", "codeBlock", "listItem", "blockquote", "rule"}:
         return inner.rstrip("\n") + "\n\n"
     return inner
 
@@ -299,9 +385,9 @@ def replace_section(description: dict[str, Any] | None, heading: str, body: str)
     content: list[Any] = list(doc.get("content", [])) if doc else []
     new = [
         {"type": "heading", "attrs": {"level": 2}, "content": [{"type": "text", "text": heading}]},
-        *text_to_adf(body, bullets=True)["content"],
+        *text_to_adf(body)["content"],
     ]
-    starts = [i for i, node in enumerate(content) if _is_heading(node) and adf_to_text(node).strip() == heading]
+    starts = [i for i, node in enumerate(content) if _is_heading(node) and _heading_text(node) == heading]
     if len(starts) > 1:
         raise JiraError(f"the description has {len(starts)} sections headed {heading!r}; fix it by hand")
     if not starts:
@@ -335,6 +421,11 @@ def check_rank_input(keys: list[str], anchor: str) -> None:
         raise UsageError(f"rank takes 1 to {RANK_LIMIT} issues, got {len(keys)}")
     if len(set(keys)) != len(keys) or anchor in keys:
         raise UsageError("each issue may appear once, and not as its own anchor")
+
+
+def _heading_text(node: dict[str, Any]) -> str:
+    """The text of a heading, without the "## " that adf_to_text puts in front."""
+    return "".join(adf_to_text(child) for child in node.get("content", [])).strip()
 
 
 def _is_heading(node: Any) -> bool:
@@ -488,6 +579,20 @@ class Jira:
         body = {"fields": {"priority": {"name": check_priority(priority)}}}
         self.request("PUT", f"/rest/api/3/issue/{check_key(key)}", body, empty_ok=True)
 
+    def edit_comment(self, key: str, comment_id: str, body: str) -> None:
+        """Replace the body of one comment (Jira lets an account edit only its own comments)."""
+        if not body.strip():
+            raise UsageError("comment body is empty")
+        path = f"/rest/api/3/issue/{check_key(key)}/comment/{check_comment_id(comment_id)}"
+        self.request("PUT", path, {"body": text_to_adf(body)})
+
+    def set_description(self, key: str, text: str) -> None:
+        """Replace the whole description with the Markdown text."""
+        if not text.strip():
+            raise UsageError("description is empty")
+        body = {"fields": {"description": text_to_adf(text)}}
+        self.request("PUT", f"/rest/api/3/issue/{check_key(key)}", body, empty_ok=True)
+
     def set_section(self, key: str, heading: str, body: str) -> bool:
         """Set one section of the description. Return False when it already had that content."""
         check_key(key)
@@ -579,7 +684,7 @@ def has_section(description: Any, heading: str) -> bool:
     """True when the description has a top-level heading with exactly this text and text under it."""
     content = description.get("content", []) if isinstance(description, dict) else []
     for start, node in enumerate(content):
-        if not (_is_heading(node) and adf_to_text(node).strip() == heading):
+        if not (_is_heading(node) and _heading_text(node) == heading):
             continue
         level = _level(node)
         for following in content[start + 1 :]:
@@ -687,6 +792,15 @@ def _parser() -> argparse.ArgumentParser:
     section.add_argument("--heading", required=True)
     section.add_argument("--body-file", required=True)
 
+    edit_comment = commands.add_parser("edit-comment", help="replace the body of one of the agent's comments")
+    edit_comment.add_argument("key")
+    edit_comment.add_argument("comment_id")
+    edit_comment.add_argument("--body-file", required=True)
+
+    description = commands.add_parser("description", help="replace the whole description with a Markdown file")
+    description.add_argument("key")
+    description.add_argument("--file", required=True)
+
     priority = commands.add_parser("priority", help="set the priority: High, Medium or Low")
     priority.add_argument("key")
     priority.add_argument("priority", choices=PRIORITIES)
@@ -727,6 +841,12 @@ def run(args: argparse.Namespace, jira: Jira) -> None:
     elif args.command == "section":
         changed = jira.set_section(args.key, args.heading, args.body)
         print(f"{args.key} section {args.heading!r} {'set' if changed else 'unchanged'}")
+    elif args.command == "edit-comment":
+        jira.edit_comment(args.key, args.comment_id, args.text)
+        print(f"{args.key} comment {args.comment_id} updated")
+    elif args.command == "description":
+        jira.set_description(args.key, args.text)
+        print(f"{args.key} description set")
     elif args.command == "priority":
         jira.set_priority(args.key, args.priority)
         print(f"{args.key} priority {args.priority}")
@@ -751,6 +871,13 @@ def main(
         if args.command == "section":
             args.body = _read_text(args.body_file)
             check_section_input(args.heading, args.body)
+        if args.command == "edit-comment":
+            check_comment_id(args.comment_id)
+            args.text = _read_text(args.body_file)
+        if args.command == "description":
+            args.text = _read_text(args.file)
+            if not args.text.strip():
+                raise UsageError("description is empty")
         jira = Jira(*credentials_reader(), opener_factory())
         run(args, jira)
     except CredentialError as error:
