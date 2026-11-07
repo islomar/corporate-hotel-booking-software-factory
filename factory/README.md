@@ -36,6 +36,7 @@ It never reaches the parent shell, the command that as-agent runs, a file or the
 Without the token (keyring locked, item absent, `secret-tool` missing) or when `op` fails (token expired or revoked), `jira` exits 3 and `as-agent` exits 3 and runs nothing.
 Neither falls back to the owner's desktop 1Password: that would bring back the pop-ups and the owner's full 1Password rights.
 The agent stops and reports.
+`AGENT_APP_KEY_COMMAND` replaces the `op` call of as-agent with another command, as an explicit opt-in. That command never gets the service account token.
 
 The pop-up was also a human check on every read. Without it, any process that runs as the owner's user while the keyring is unlocked can read the two items in `chb-factory`, and nothing else.
 

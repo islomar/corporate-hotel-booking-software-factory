@@ -17,8 +17,9 @@ The token never reaches stdout. Only the command's own output does.
 
 Environment overrides:
 - AGENT_APP_CLIENT_ID: the App's client ID (public).
-- AGENT_APP_KEY_COMMAND: command that prints the private key. It also runs with the
-  service account token in its environment.
+- AGENT_APP_KEY_COMMAND: command that prints the private key, instead of the default
+  `op` call. It runs without the service account token: an explicit opt-in to another
+  key source, for example the owner's desktop 1Password (with its pop-up).
 """
 
 from __future__ import annotations
@@ -127,26 +128,30 @@ def read_private_key(
     token_reader: Callable[[], str] = op_service_account.read_token,
     run: Callable[..., Any] = subprocess.run,
 ) -> bytes:
-    """The App key, from `key_command` run with the service account token in its environment only."""
+    """The App key, from the default `op` call run with the service account token in its environment only."""
     try:
-        env = op_service_account.op_env(base_env, token_reader())
+        key = op_service_account.run_op(key_command, base_env, token_reader, run)
     except op_service_account.ServiceAccountError as error:
         raise AppKeyError(str(error)) from None
+    if not key.strip():
+        raise AppKeyError(f"{key_command[0]} printed no key")
+    return key
+
+
+def read_private_key_with_override(
+    command: str, base_env: Mapping[str, str], run: Callable[..., Any] = subprocess.run
+) -> bytes:
+    """The App key from AGENT_APP_KEY_COMMAND. It never gets the service account token."""
+    argv = shlex.split(command)
+    env = {k: v for k, v in base_env.items() if k != op_service_account.TOKEN_VARIABLE}
     try:
         result = run(
-            key_command,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            timeout=KEY_TIMEOUT_SECONDS,
-            check=False,
-            env=env,
+            argv, stdin=subprocess.DEVNULL, capture_output=True, timeout=KEY_TIMEOUT_SECONDS, check=False, env=env
         )
     except (OSError, subprocess.TimeoutExpired) as error:
-        raise AppKeyError(f"could not run {key_command[0]}: {type(error).__name__}") from None
-    if result.returncode != 0:
-        raise AppKeyError(f"{key_command[0]} exited {result.returncode} (service account token expired or revoked?)")
-    if not result.stdout.strip():
-        raise AppKeyError(f"{key_command[0]} printed no key")
+        raise AppKeyError(f"could not run {argv[0]}: {type(error).__name__}") from None
+    if result.returncode != 0 or not result.stdout.strip():
+        raise AppKeyError(f"AGENT_APP_KEY_COMMAND exited {result.returncode} or printed no key")
     return result.stdout
 
 
@@ -166,9 +171,12 @@ def main(argv: list[str]) -> int:
     if not argv:
         print(__doc__, file=sys.stderr)
         return 2
-    key_command = shlex.split(os.environ.get("AGENT_APP_KEY_COMMAND", KEY_COMMAND))
+    override = os.environ.get("AGENT_APP_KEY_COMMAND")
     try:
-        private_key = read_private_key(key_command, os.environ)
+        if override:
+            private_key = read_private_key_with_override(override, os.environ)
+        else:
+            private_key = read_private_key(shlex.split(KEY_COMMAND), os.environ)
     except AppKeyError as error:
         print(f"as-agent: no App key: {error}. STOP: do not use another identity. Report to the owner.", file=sys.stderr)
         return EXIT_NO_KEY

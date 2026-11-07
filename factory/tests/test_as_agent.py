@@ -8,7 +8,15 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from as_agent import KEY_COMMAND, AppKeyError, agent_env, jwt_signing_input, noreply_email, read_private_key
+from as_agent import (
+    KEY_COMMAND,
+    AppKeyError,
+    agent_env,
+    jwt_signing_input,
+    noreply_email,
+    read_private_key,
+    read_private_key_with_override,
+)
 from op_service_account import ServiceAccountError
 
 
@@ -103,6 +111,24 @@ class ReadPrivateKeyTest(unittest.TestCase):
     def test_missing_op_is_an_error(self) -> None:
         with self.assertRaises(AppKeyError):
             read_private_key(["/nonexistent/op"], {}, token_reader=lambda: "ops_fake")
+
+
+class KeyCommandOverrideTest(unittest.TestCase):
+    def test_the_override_never_gets_the_service_account_token(self) -> None:
+        run = _runner()
+
+        key = read_private_key_with_override("my-key --name k", {"PATH": "/bin", "OP_SERVICE_ACCOUNT_TOKEN": "ops_x"}, run)
+
+        self.assertEqual(key, b"-----BEGIN KEY-----\n")
+        (call,) = run.calls
+        self.assertEqual(call["command"], ["my-key", "--name", "k"])
+        self.assertEqual(call["env"], {"PATH": "/bin"})
+
+    def test_a_failing_override_is_an_error_without_output(self) -> None:
+        for run in (_runner(returncode=1, stdout=b"secret"), _runner(stdout=b"")):
+            with self.assertRaises(AppKeyError) as caught:
+                read_private_key_with_override("my-key", {}, run)
+            self.assertNotIn("secret", str(caught.exception))
 
 
 class NoreplyEmailTest(unittest.TestCase):

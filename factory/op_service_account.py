@@ -22,6 +22,7 @@ TOKEN_VARIABLE = "OP_SERVICE_ACCOUNT_TOKEN"
 # A Connect server in the environment takes precedence over the service account in `op`.
 DROPPED_VARIABLES = ("OP_CONNECT_HOST", "OP_CONNECT_TOKEN")
 TIMEOUT_SECONDS = 30  # a locked keyring can open an unlock dialog and wait
+OP_TIMEOUT_SECONDS = 60
 
 Runner = Callable[..., Any]
 
@@ -59,3 +60,26 @@ def op_env(base: Mapping[str, str], token: str) -> dict[str, str]:
     env = {key: value for key, value in base.items() if key not in DROPPED_VARIABLES}
     env[TOKEN_VARIABLE] = token
     return env
+
+
+def run_op(
+    command: list[str],
+    base_env: Mapping[str, str],
+    token_reader: Callable[[], str] = read_token,
+    run: Runner = subprocess.run,
+    timeout: int = OP_TIMEOUT_SECONDS,
+) -> bytes:
+    """Stdout of `command` (an `op` call) run with the token in its environment only.
+
+    Reads the token first: without it, `command` never runs. No error message holds output.
+    """
+    env = op_env(base_env, token_reader())
+    try:
+        result = run(command, stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout, check=False, env=env)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ServiceAccountError(f"could not run {command[0]}: {type(error).__name__}") from None
+    if result.returncode != 0:
+        raise ServiceAccountError(
+            f"{command[0]} exited {result.returncode} (service account token expired or revoked?)"
+        )
+    return result.stdout

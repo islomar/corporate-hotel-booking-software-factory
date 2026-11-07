@@ -120,24 +120,14 @@ class Move:
 
 def read_secret(
     command: list[str],
-    timeout: int = 60,
     token_reader: Callable[[], str] = op_service_account.read_token,
     run: Callable[..., Any] = subprocess.run,
 ) -> str:
     """Output of `op` run with the service account token in its environment only."""
     try:
-        env = op_service_account.op_env(os.environ, token_reader())
+        return op_service_account.run_op(command, os.environ, token_reader, run).decode()
     except op_service_account.ServiceAccountError as error:
         raise CredentialError(str(error)) from None
-    try:
-        result = run(  # noqa: S603 - fixed command
-            command, stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout, check=False, env=env
-        )
-    except (OSError, subprocess.TimeoutExpired) as error:
-        raise CredentialError(f"could not run {command[0]}: {type(error).__name__}") from None
-    if result.returncode != 0:
-        raise CredentialError(f"{command[0]} exited {result.returncode} (service account token expired or revoked?)")
-    return result.stdout.decode()
 
 
 def parse_credentials(output: str) -> tuple[str, str]:

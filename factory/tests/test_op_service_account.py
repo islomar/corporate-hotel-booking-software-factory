@@ -6,7 +6,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from op_service_account import KEYRING_LOOKUP, ServiceAccountError, op_env, read_token
+from op_service_account import KEYRING_LOOKUP, ServiceAccountError, op_env, read_token, run_op
 
 FAKE_TOKEN = "ops_fake-token-for-tests"
 
@@ -71,6 +71,33 @@ class OpEnvTest(unittest.TestCase):
         env = op_env({"OP_CONNECT_HOST": "h", "OP_CONNECT_TOKEN": "t", "PATH": "/bin"}, FAKE_TOKEN)
 
         self.assertEqual(sorted(env), ["OP_SERVICE_ACCOUNT_TOKEN", "PATH"])
+
+
+class RunOpTest(unittest.TestCase):
+    def test_runs_the_command_with_the_token_in_its_environment_only(self) -> None:
+        run = _runner(stdout=b"value")
+
+        self.assertEqual(run_op(["op", "x"], {"PATH": "/bin"}, lambda: FAKE_TOKEN, run), b"value")
+        (command, kwargs), = run.calls
+        self.assertEqual(command, ["op", "x"])
+        self.assertEqual(kwargs["env"], {"PATH": "/bin", "OP_SERVICE_ACCOUNT_TOKEN": FAKE_TOKEN})
+        self.assertEqual(kwargs["stdin"], subprocess.DEVNULL)
+        self.assertGreater(kwargs["timeout"], 0)
+
+    def test_without_a_token_the_command_never_runs(self) -> None:
+        def no_token() -> str:
+            raise ServiceAccountError("no token")
+
+        run = _runner()
+        with self.assertRaises(ServiceAccountError):
+            run_op(["op"], {}, no_token, run)
+        self.assertEqual(run.calls, [])
+
+    def test_failing_or_missing_op_is_an_error_without_output(self) -> None:
+        for run in (_runner(returncode=1, stdout=b"secret"), _runner(error=FileNotFoundError("op"))):
+            with self.assertRaises(ServiceAccountError) as caught:
+                run_op(["op"], {}, lambda: FAKE_TOKEN, run)
+            self.assertNotIn("secret", str(caught.exception))
 
 
 class EntryPointTest(unittest.TestCase):

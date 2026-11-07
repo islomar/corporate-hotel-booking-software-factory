@@ -570,10 +570,11 @@ class ReadSecretTest(unittest.TestCase):
     def test_op_gets_the_service_account_token_in_its_own_environment_only(self) -> None:
         run = _completed(0, b"out\n")
 
-        self.assertEqual(read_secret(["op", "x"], token_reader=lambda: "ops_fake", run=run), "out\n")
+        with mock.patch.dict(jira.os.environ, {"PATH": "/bin"}, clear=True):
+            self.assertEqual(read_secret(["op", "x"], token_reader=lambda: "ops_fake", run=run), "out\n")
+            self.assertEqual(dict(jira.os.environ), {"PATH": "/bin"})
         (call,) = run.calls
-        self.assertEqual(call["env"]["OP_SERVICE_ACCOUNT_TOKEN"], "ops_fake")
-        self.assertNotIn("OP_SERVICE_ACCOUNT_TOKEN", jira.os.environ)
+        self.assertEqual(call["env"], {"PATH": "/bin", "OP_SERVICE_ACCOUNT_TOKEN": "ops_fake"})
 
     def test_no_token_in_the_keyring_is_a_credential_error_and_op_never_runs(self) -> None:
         def no_token() -> str:
