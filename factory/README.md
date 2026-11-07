@@ -9,6 +9,7 @@
   - [Acting in Jira as the agent](#acting-in-jira-as-the-agent)
     - [Board rules on transition](#board-rules-on-transition)
     - [Hook against raw Jira writes](#hook-against-raw-jira-writes)
+  - [Hook: commands for the owner work from any folder](#hook-commands-for-the-owner-work-from-any-folder)
   - [Automated PR review (shadow mode)](#automated-pr-review-shadow-mode)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -141,6 +142,22 @@ The hook is a guardrail, not a boundary: it reads the command text only. A scrip
 It matches anywhere in the command, so it also denies a commit message that quotes a denied command. Use a message file.
 An error inside the hook denies the command. If `python3` cannot start, the command goes through: Claude Code treats that as a non-blocking error.
 Sessions started in another directory do not load this hook.
+
+## Hook: commands for the owner work from any folder
+
+`.claude/settings.json` runs `factory/hooks/check_owner_commands.py` when the agent finishes a reply (Stop hook, CHB-126).
+On 2026-11-07 the agent gave the owner `cp <backup> .git/config`. The owner ran it from another repository's folder, and that repository's config was overwritten.
+
+The hook reads the shell code blocks of the reply (no language, or `sh`, `bash`, `shell`, `zsh`, `console`). It sends the agent back to rewrite a command that depends on the current folder:
+
+- `git` or `make` without `-C`, or a `cd` to a relative folder;
+- a program called by a relative path, such as `factory/bin/jira`;
+- `cp`, `mv`, `rm`, `ln`, `tee`, `touch`, `mkdir`, `chmod`, `chown`, `truncate`, `install`, `rsync`, `rmdir`, `sed -i`, `>` or `>>` with a relative path.
+
+These pass: a command after `cd /absolute/folder` in the same block, a line that starts with `!` (Claude Code runs it in the session folder), inline code, and any block in another language.
+Put a block that you do not want pasted in a `text` block.
+
+The hook blocks once per reply and never on bad input, so it cannot loop. Like the Jira hook, it is a guardrail that reads text only.
 
 ## Automated PR review (shadow mode)
 
