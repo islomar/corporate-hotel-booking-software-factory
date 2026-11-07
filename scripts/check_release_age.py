@@ -13,6 +13,13 @@ Exemptions (for a fresh security fix) use the package managers' own settings:
 `exclude-newer-package = { <name> = false }` in pyproject.toml and
 `min-release-age-exclude[]=<name>` in .npmrc.
 
+npm security fixes (CHB-95): Dependabot ignores `min-release-age` for security updates, so a
+fix can be younger than the window. A too-new npm entry passes when it is the package of an
+open Dependabot alert on the same manifest, at or above the alert's first patched version and
+in the same major. Only the alerted package itself: a new transitive entry still fails. The
+alerts come from the GitHub API (GH_TOKEN with Dependabot alerts read, GITHUB_REPOSITORY),
+read only when an entry is too new. Without them there is no exemption, never an error.
+
 Usage: check_release_age.py [--base GIT_REF] LOCKFILE...
 Exit codes: 0 pass, 1 violations, 2 configuration or network error.
 """
@@ -22,6 +29,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import json
+import os
 import re
 import subprocess
 import sys
@@ -30,9 +38,11 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 REGISTRY = "https://registry.npmjs.org/"
+GITHUB_API = "https://api.github.com"
+RELEASE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
 
 class ConfigError(Exception):
@@ -162,6 +172,88 @@ def check_npm_entries(
     return violations
 
 
+# Security fixes for open Dependabot alerts
+
+
+def _release(version: str) -> tuple[int, int, int] | None:
+    """A plain release version as numbers. Pre-releases and other forms are None."""
+    match = RELEASE.fullmatch(version.removeprefix("v"))
+    return tuple(int(part) for part in match.groups()) if match else None  # type: ignore[return-value]
+
+
+def alert_fixes(alerts: list[dict], manifest_dir: str) -> dict[str, list[tuple[str, int]]]:
+    """npm package name -> [(first patched version, alert number)] for one manifest folder."""
+    fixes: dict[str, list[tuple[str, int]]] = {}
+    for alert in alerts:
+        dependency = alert.get("dependency") or {}
+        package = dependency.get("package") or {}
+        patched = (alert.get("security_vulnerability") or {}).get("first_patched_version") or {}
+        folder = PurePosixPath(dependency.get("manifest_path", "")).parent.as_posix()
+        if package.get("ecosystem") != "npm" or folder != manifest_dir or not patched.get("identifier"):
+            continue
+        fixes.setdefault(package["name"], []).append((patched["identifier"], alert.get("number", 0)))
+    return fixes
+
+
+def security_fix_exemptions(
+    violations: list[Violation], fixes: dict[str, list[tuple[str, int]]]
+) -> tuple[list[Violation], list[str]]:
+    """Split too-new entries into the ones that still fail and notes for the exempted fixes."""
+    kept: list[Violation] = []
+    notes: list[str] = []
+    for violation in violations:
+        version = _release(violation.version)
+        match = None
+        for patched, number in fixes.get(violation.name, []):
+            floor = _release(patched)
+            if version and floor and version[0] == floor[0] and version >= floor:
+                match = number
+                break
+        if match is None:
+            kept.append(violation)
+        else:
+            notes.append(f"{violation.name}@{violation.version} is a security fix: Dependabot alert #{match}")
+    return kept, notes
+
+
+def fetch_open_alerts(repository: str, token: str) -> list[dict]:
+    alerts: list[dict] = []
+    for page in range(1, 11):
+        url = f"{GITHUB_API}/repos/{repository}/dependabot/alerts?state=open&ecosystem=npm&per_page=100&page={page}"
+        headers = {"Accept": "application/vnd.github+json", "Authorization": f"Bearer {token}"}
+        request = urllib.request.Request(url, headers=headers)  # noqa: S310
+        with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310 (fixed https host)
+            batch = json.load(response)
+        alerts.extend(batch)
+        if len(batch) < 100:
+            break
+    return alerts
+
+
+def repository_folder(path: Path) -> str:
+    """The lockfile's folder relative to the repository root, as the alerts API writes it."""
+    result = subprocess.run(  # noqa: S603
+        ["git", "rev-parse", "--show-prefix"],  # noqa: S607
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    prefix = result.stdout.strip() if result.returncode == 0 else ""
+    return PurePosixPath(prefix, path.parent.as_posix()).as_posix().rstrip("/") or "."
+
+
+def load_fixes(path: Path, fetch=fetch_open_alerts) -> dict[str, list[tuple[str, int]]]:
+    repository, token = os.environ.get("GITHUB_REPOSITORY"), os.environ.get("GH_TOKEN")
+    if not repository or not token:
+        print(f"{path}: no GH_TOKEN or GITHUB_REPOSITORY, so no security-fix exemption")
+        return {}
+    try:
+        return alert_fixes(fetch(repository, token), repository_folder(path))
+    except (OSError, ValueError) as error:
+        print(f"::warning file={path}::cannot read Dependabot alerts ({error}), so no security-fix exemption")
+        return {}
+
+
 def git_show(ref: str, path: Path) -> str | None:
     # `ref:./path` resolves the path from the current directory, not the repository root.
     result = subprocess.run(  # noqa: S603
@@ -187,7 +279,12 @@ def check_lockfile(path: Path, base: str | None, now: datetime) -> list[Violatio
         if base_text is not None:
             entries -= npm_registry_entries(base_text)
         print(f"{path}: checking {len(entries)} new registry entries")
-        return check_npm_entries(entries, window, exclude, now)
+        violations = check_npm_entries(entries, window, exclude, now)
+        if violations:
+            violations, notes = security_fix_exemptions(violations, load_fixes(path))
+            for note in notes:
+                print(f"::notice file={path}::{note}")
+        return violations
     raise ConfigError(f"unsupported lockfile: {path}")
 
 

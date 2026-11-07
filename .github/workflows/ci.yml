@@ -42,6 +42,10 @@ jobs:
       - run: uv run --locked pytest
 
   frontend:
+    # Dependabot alerts read: the release-age check exempts a fresh fix for an open alert (CHB-95).
+    permissions:
+      contents: read
+      vulnerability-alerts: read
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
@@ -65,6 +69,7 @@ jobs:
         if: github.event_name == 'pull_request'
         env:
           BASE_REF: ${{ github.base_ref }}
+          GH_TOKEN: ${{ github.token }}
         run: python3 -I ../scripts/check_release_age.py --base "origin/$BASE_REF" package-lock.json
       - name: Provenance and trusted publisher downgrades
         if: github.event_name == 'pull_request'
@@ -78,6 +83,10 @@ jobs:
       - run: npm test
 
   e2e:
+    # Dependabot alerts read: the release-age check exempts a fresh fix for an open alert (CHB-95).
+    permissions:
+      contents: read
+      vulnerability-alerts: read
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [backend, frontend]
@@ -115,6 +124,7 @@ jobs:
         working-directory: e2e
         env:
           BASE_REF: ${{ github.base_ref }}
+          GH_TOKEN: ${{ github.token }}
         run: python3 -I ../scripts/check_release_age.py --base "origin/$BASE_REF" package-lock.json
       - name: Provenance and trusted publisher downgrades
         if: github.event_name == 'pull_request'
