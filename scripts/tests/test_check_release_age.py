@@ -1,3 +1,5 @@
+import os
+import subprocess
 import sys
 import tempfile
 import contextlib
@@ -13,6 +15,8 @@ from check_release_age import (
     ConfigError,
     Violation,
     alert_fixes,
+    check_lockfile,
+    repository_folder,
     load_fixes,
     security_fix_exemptions,
     check_npm_entries,
@@ -166,9 +170,6 @@ class SecurityFixTest(unittest.TestCase):
         self.assertIn("Dependabot alert #7", notes[0])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class LoadFixesTest(unittest.TestCase):
     """Reading alerts never fails the check: without them there is simply no exemption."""
@@ -186,7 +187,7 @@ class LoadFixesTest(unittest.TestCase):
         def fetch(*_):
             raise AssertionError("must not call the API")
 
-        fixes, out = self._load({}, fetch)
+        fixes, out = self._load({"PR_AUTHOR": "dependabot[bot]"}, fetch)
 
         self.assertEqual(fixes, {})
         self.assertIn("no security-fix exemption", out)
@@ -195,12 +196,94 @@ class LoadFixesTest(unittest.TestCase):
         def fetch(*_):
             raise OSError("HTTP 403")
 
-        fixes, out = self._load({"GH_TOKEN": "t", "GITHUB_REPOSITORY": "o/r"}, fetch)
+        fixes, out = self._load({"GH_TOKEN": "t", "GITHUB_REPOSITORY": "o/r", "PR_AUTHOR": "dependabot[bot]"}, fetch)
 
         self.assertEqual(fixes, {})
         self.assertIn("::warning", out)
 
     def test_reads_the_alerts_for_this_folder(self):
-        fixes, _ = self._load({"GH_TOKEN": "t", "GITHUB_REPOSITORY": "o/r"}, lambda repo, token: [alert("vite", "8.3.6")])
+        fixes, _ = self._load(DEPENDABOT_ENV, lambda repo, token: [alert("vite", "8.3.6")])
 
         self.assertEqual(fixes, {"vite": [("8.3.6", 7)]})
+
+    def test_a_pull_request_by_anyone_else_gets_no_exemption_and_no_call(self):
+        def fetch(*_):
+            raise AssertionError("must not call the API")
+
+        env = {**DEPENDABOT_ENV, "PR_AUTHOR": "chb-factory-agent[bot]"}
+
+        self.assertEqual(self._load(env, fetch)[0], {})
+
+
+DEPENDABOT_ENV = {"GH_TOKEN": "t", "GITHUB_REPOSITORY": "o/r", "PR_AUTHOR": "dependabot[bot]"}
+
+LOCK_WITH_VITE = """{"packages": {"": {},
+  "node_modules/vite": {"version": "8.3.6", "resolved": "https://registry.npmjs.org/vite/-/vite-8.3.6.tgz"}}}"""
+
+
+class CheckLockfileTest(unittest.TestCase):
+    """check_lockfile end to end, with the registry and the alerts API replaced."""
+
+    def _check(self, env, alerts):
+        calls = []
+
+        def fetch(repo, token):
+            calls.append(repo)
+            return alerts
+
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            (folder / ".npmrc").write_text("min-release-age=7\n")
+            lock = folder / "package-lock.json"
+            lock.write_text(LOCK_WITH_VITE)
+            with (
+                mock.patch.dict("os.environ", env, clear=True),
+                mock.patch("check_release_age.fetch_publish_time", return_value=NOW - timedelta(days=1)),
+                mock.patch("check_release_age.fetch_open_alerts", fetch),
+                mock.patch("check_release_age.repository_folder", return_value="frontend"),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                return check_lockfile(lock, None, NOW), calls
+
+    def test_a_fresh_fix_for_an_open_alert_passes_on_a_dependabot_pr(self):
+        violations, calls = self._check(DEPENDABOT_ENV, [alert("vite", "8.3.6")])
+
+        self.assertEqual((violations, calls), ([], ["o/r"]))
+
+    def test_the_same_entry_fails_without_an_alert(self):
+        violations, _ = self._check(DEPENDABOT_ENV, [])
+
+        self.assertEqual([(v.name, v.version) for v in violations], [("vite", "8.3.6")])
+
+    def test_an_old_enough_entry_never_calls_the_api(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            (folder / ".npmrc").write_text("min-release-age=7\n")
+            lock = folder / "package-lock.json"
+            lock.write_text(LOCK_WITH_VITE)
+            with (
+                mock.patch.dict("os.environ", DEPENDABOT_ENV, clear=True),
+                mock.patch("check_release_age.fetch_publish_time", return_value=NOW - timedelta(days=30)),
+                mock.patch("check_release_age.fetch_open_alerts", lambda *a: calls.append(a) or []),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(check_lockfile(lock, None, NOW), [])
+        self.assertEqual(calls, [])
+
+
+class RepositoryFolderTest(unittest.TestCase):
+    def test_maps_a_lockfile_to_its_folder_from_the_repository_root(self):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            subprocess.run(["git", "init", "-q", str(root)], check=True, env=env)  # noqa: S603,S607
+            (root / "frontend").mkdir()
+            with mock.patch.dict("os.environ", env, clear=True), contextlib.chdir(root / "frontend"):
+                self.assertEqual(repository_folder(Path("package-lock.json")), "frontend")
+            with mock.patch.dict("os.environ", env, clear=True), contextlib.chdir(root):
+                self.assertEqual(repository_folder(Path("package-lock.json")), ".")
+
+
+if __name__ == "__main__":
+    unittest.main()

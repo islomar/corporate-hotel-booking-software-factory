@@ -17,7 +17,7 @@ npm security fixes (CHB-95): Dependabot ignores `min-release-age` for security u
 fix can be younger than the window. A too-new npm entry passes when it is the package of an
 open Dependabot alert on the same manifest, at exactly the alert's first patched version
 (Dependabot moves to the minimum fix). Only the alerted package itself: a new transitive entry
-still fails. The
+still fails. Only for pull requests opened by Dependabot (PR_AUTHOR=dependabot[bot]). The
 alerts come from the GitHub API (GH_TOKEN with Dependabot alerts read, GITHUB_REPOSITORY),
 read only when an entry is too new. Without them there is no exemption, never an error.
 
@@ -43,6 +43,9 @@ from pathlib import Path, PurePosixPath
 
 REGISTRY = "https://registry.npmjs.org/"
 GITHUB_API = "https://api.github.com"
+DEPENDABOT = "dependabot[bot]"
+NEXT_LINK = re.compile(r'<([^>]+)>;\s*rel="next"')
+MAX_ALERT_PAGES = 20
 RELEASE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
 
@@ -186,6 +189,8 @@ def alert_fixes(alerts: list[dict], manifest_dir: str) -> dict[str, list[tuple[s
     """npm package name -> [(first patched version, alert number)] for one manifest folder."""
     fixes: dict[str, list[tuple[str, int]]] = {}
     for alert in alerts:
+        if not isinstance(alert, dict):
+            continue
         dependency = alert.get("dependency") or {}
         package = dependency.get("package") or {}
         patched = (alert.get("security_vulnerability") or {}).get("first_patched_version") or {}
@@ -220,17 +225,25 @@ def security_fix_exemptions(
 
 
 def fetch_open_alerts(repository: str, token: str) -> list[dict]:
+    """Open npm alerts, following the Link header (the endpoint uses cursor pagination)."""
     alerts: list[dict] = []
-    for page in range(1, 11):
-        url = f"{GITHUB_API}/repos/{repository}/dependabot/alerts?state=open&ecosystem=npm&per_page=100&page={page}"
+    url: str | None = f"{GITHUB_API}/repos/{repository}/dependabot/alerts?state=open&ecosystem=npm&per_page=100"
+    for _ in range(MAX_ALERT_PAGES):
+        if url is None:
+            return alerts
+        if not url.startswith(GITHUB_API + "/"):
+            raise ValueError(f"unexpected next page URL: {url}")
         headers = {"Accept": "application/vnd.github+json", "Authorization": f"Bearer {token}"}
         request = urllib.request.Request(url, headers=headers)  # noqa: S310
-        with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310 (fixed https host)
+        with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310 (checked https host)
             batch = json.load(response)
+            link = response.headers.get("Link", "")
+        if not isinstance(batch, list):
+            raise ValueError("the alerts API did not answer with a list")
         alerts.extend(batch)
-        if len(batch) < 100:
-            break
-    return alerts
+        found = NEXT_LINK.search(link)
+        url = found.group(1) if found else None
+    raise ValueError(f"more than {MAX_ALERT_PAGES} pages of open alerts")
 
 
 def repository_folder(path: Path) -> str:
@@ -245,7 +258,10 @@ def repository_folder(path: Path) -> str:
     return PurePosixPath(prefix, path.parent.as_posix()).as_posix().rstrip("/") or "."
 
 
-def load_fixes(path: Path, fetch=fetch_open_alerts) -> dict[str, list[tuple[str, int]]]:
+def load_fixes(path: Path, fetch=None) -> dict[str, list[tuple[str, int]]]:
+    fetch = fetch or fetch_open_alerts
+    if os.environ.get("PR_AUTHOR") != DEPENDABOT:
+        return {}
     repository, token = os.environ.get("GITHUB_REPOSITORY"), os.environ.get("GH_TOKEN")
     if not repository or not token:
         print(f"{path}: no GH_TOKEN or GITHUB_REPOSITORY, so no security-fix exemption")
@@ -282,7 +298,7 @@ def check_lockfile(path: Path, base: str | None, now: datetime) -> list[Violatio
         if base_text is not None:
             entries -= npm_registry_entries(base_text)
         print(f"{path}: checking {len(entries)} new registry entries")
-        violations = check_npm_entries(entries, window, exclude, now)
+        violations = check_npm_entries(entries, window, exclude, now, publish_time=fetch_publish_time)
         if violations:
             violations, notes = security_fix_exemptions(violations, load_fixes(path))
             for note in notes:
