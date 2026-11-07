@@ -1014,9 +1014,41 @@ class MarkdownTest(unittest.TestCase):
         self.assertEqual(text_to_adf(adf_to_text(text_to_adf(text))), text_to_adf(text))
 
 
+STATUS_READ = ("GET", "/rest/api/3/issue/CHB-12?fields=status")
+ME = ("GET", "/rest/api/3/myself")
+COMMENT = "/rest/api/3/issue/CHB-12/comment/10071"
+
+
+def _status(name: str) -> dict[str, Any]:
+    return {"fields": {"status": {"name": name}}}
+
+
 class DescriptionTest(unittest.TestCase):
+    def _write(self, fake: FakeJira, text: str) -> tuple[int, str, str]:
+        with tempfile.NamedTemporaryFile("w") as body:
+            body.write(text)
+            body.flush()
+            return _run(["description", "CHB-12", "--file", body.name], fake)
+
+    def test_refuses_to_drop_the_section_the_status_requires(self) -> None:
+        for status, heading in SECTIONS.items():
+            fake = FakeJira({STATUS_READ: _status(status)})
+            code, _, err = self._write(fake, "## Goal\n\nNew.")
+
+            self.assertEqual(code, 4, status)
+            self.assertIn(heading, err)
+            self.assertEqual(fake.writes(), [], status)
+
+    def test_keeps_a_required_section_when_the_text_has_it(self) -> None:
+        heading = SECTIONS["Validating"]
+        fake = FakeJira({STATUS_READ: _status("Validating"), ("PUT", "/rest/api/3/issue/CHB-12"): None})
+        code, _, _ = self._write(fake, f"## Goal\n\nNew.\n\n## {heading}\n\nAC1 checked.")
+
+        self.assertEqual(code, 0)
+        self.assertEqual(len(fake.writes()), 1)
+
     def test_replaces_the_whole_description(self) -> None:
-        fake = FakeJira({("PUT", "/rest/api/3/issue/CHB-12"): None})
+        fake = FakeJira({STATUS_READ: _status("To Do"), ("PUT", "/rest/api/3/issue/CHB-12"): None})
         with tempfile.NamedTemporaryFile("w") as body:
             body.write("## Goal\n\nNew.")
             body.flush()
@@ -1084,8 +1116,25 @@ class ReferenceLinkTest(unittest.TestCase):
 
 
 class EditCommentTest(unittest.TestCase):
+    def test_refuses_a_comment_written_by_someone_else(self) -> None:
+        fake = FakeJira({ME: {"accountId": "agent"}, ("GET", COMMENT): {"id": "10071", "author": {"accountId": "owner"}}})
+        with tempfile.NamedTemporaryFile("w") as body:
+            body.write("x")
+            body.flush()
+            code, _, err = _run(["edit-comment", "CHB-12", "10071", "--body-file", body.name], fake)
+
+        self.assertEqual(code, 1)
+        self.assertIn("not written by the agent", err)
+        self.assertEqual(fake.writes(), [])
+
     def test_replaces_the_body_of_a_comment(self) -> None:
-        fake = FakeJira({("PUT", "/rest/api/3/issue/CHB-12/comment/10071"): {"id": "10071"}})
+        fake = FakeJira(
+            {
+                ME: {"accountId": "agent"},
+                ("GET", COMMENT): {"id": "10071", "author": {"accountId": "agent"}},
+                ("PUT", COMMENT): {"id": "10071"},
+            }
+        )
         with tempfile.NamedTemporaryFile("w") as body:
             body.write("See CHB-1.")
             body.flush()

@@ -580,17 +580,32 @@ class Jira:
         self.request("PUT", f"/rest/api/3/issue/{check_key(key)}", body, empty_ok=True)
 
     def edit_comment(self, key: str, comment_id: str, body: str) -> None:
-        """Replace the body of one comment (Jira lets an account edit only its own comments)."""
+        """Replace the body of one of the agent's own comments on this issue.
+
+        The account is a project Administrator, so Jira would let it edit anyone's comment.
+        The wrapper refuses a comment by another author (exit 1) before any write.
+        """
         if not body.strip():
             raise UsageError("comment body is empty")
         path = f"/rest/api/3/issue/{check_key(key)}/comment/{check_comment_id(comment_id)}"
+        author = self.request("GET", path).get("author", {}).get("accountId")
+        if author != self.myself()["accountId"]:
+            raise JiraError(f"comment {comment_id} on {key} was not written by the agent; only the agent's own comments can be edited")
         self.request("PUT", path, {"body": text_to_adf(body)})
 
     def set_description(self, key: str, text: str) -> None:
         """Replace the whole description with the Markdown text."""
         if not text.strip():
             raise UsageError("description is empty")
-        body = {"fields": {"description": text_to_adf(text)}}
+        new = text_to_adf(text)
+        status = self.request("GET", f"/rest/api/3/issue/{check_key(key)}?fields=status")["fields"]["status"]["name"]
+        heading = REQUIRED_SECTIONS.get(str(status).casefold())
+        if heading and not has_section(new, heading):
+            raise BlockedError(
+                f"{key} is in {status}, which requires a section headed {heading!r}; the new description has none. "
+                f"Keep that section in the file (## {heading})."
+            )
+        body = {"fields": {"description": new}}
         self.request("PUT", f"/rest/api/3/issue/{check_key(key)}", body, empty_ok=True)
 
     def set_section(self, key: str, heading: str, body: str) -> bool:
