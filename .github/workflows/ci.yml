@@ -68,7 +68,9 @@ jobs:
         if: github.event_name == 'pull_request'
         env:
           BASE_REF: ${{ github.base_ref }}
-          # Only Dependabot PRs get the token: another branch could change the script to read every alert.
+          # Only Dependabot PRs get the token, so a branch that only edits the script cannot read the alerts.
+          # A branch can still edit this workflow (pull_request runs the head's copy): .github/ needs
+          # code-owner review in the main ruleset, and that review is the guard.
           GH_TOKEN: ${{ github.event.pull_request.user.login == 'dependabot[bot]' && github.token || '' }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
         run: python3 -I ../scripts/check_release_age.py --base "origin/$BASE_REF" package-lock.json
@@ -124,7 +126,9 @@ jobs:
         working-directory: e2e
         env:
           BASE_REF: ${{ github.base_ref }}
-          # Only Dependabot PRs get the token: another branch could change the script to read every alert.
+          # Only Dependabot PRs get the token, so a branch that only edits the script cannot read the alerts.
+          # A branch can still edit this workflow (pull_request runs the head's copy): .github/ needs
+          # code-owner review in the main ruleset, and that review is the guard.
           GH_TOKEN: ${{ github.event.pull_request.user.login == 'dependabot[bot]' && github.token || '' }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
         run: python3 -I ../scripts/check_release_age.py --base "origin/$BASE_REF" package-lock.json

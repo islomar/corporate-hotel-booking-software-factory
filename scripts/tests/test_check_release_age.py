@@ -170,6 +170,8 @@ class SecurityFixTest(unittest.TestCase):
             ("vite", "8.3.7-beta.1"): False,
             ("rollup", "4.0.0"): False,
         }
+        kept, _ = security_fix_exemptions([young("next", "9.0.0-rc.1")], {"next": [("9.0.0-rc.1", 3)]})
+        self.assertEqual(len(kept), 1, "a pre-release fix is never exempted")
         for (name, version), exempt in cases.items():
             kept, notes = security_fix_exemptions([young(name, version)], fixes)
             self.assertEqual(kept == [], exempt, (name, version))

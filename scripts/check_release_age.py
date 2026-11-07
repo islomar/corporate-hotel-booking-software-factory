@@ -305,6 +305,7 @@ def check_lockfile(path: Path, base: str | None, now: datetime) -> list[Violatio
         if base_text is not None:
             entries -= npm_registry_entries(base_text)
         print(f"{path}: checking {len(entries)} new registry entries")
+        # Passed explicitly (not left to the default) so tests can replace fetch_publish_time.
         violations = check_npm_entries(entries, window, exclude, now, publish_time=fetch_publish_time)
         if violations:
             violations, notes = security_fix_exemptions(violations, load_fixes(path))
