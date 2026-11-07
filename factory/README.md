@@ -74,12 +74,13 @@ The owner's `acli` login is global state and is not touched.
 ```sh
 factory/bin/jira view CHB-12
 factory/bin/jira search 'project = CHB AND status = "In Review"'
-factory/bin/jira create --parent CHB-27 --summary "Short title" --description-file description.txt
+factory/bin/jira create --parent CHB-27 --summary "Short title" --description-file description.txt --priority Medium
 factory/bin/jira transition CHB-12 "In Review"
 factory/bin/jira comment CHB-12 --body-file comment.txt   # "-" reads stdin
 factory/bin/jira assign CHB-12 --me
 factory/bin/jira rank CHB-12 CHB-14 --before CHB-9   # or --after; up to 50 issues, kept in that order
 factory/bin/jira section CHB-12 --heading "Acceptance criteria (Validating)" --body-file section.txt
+factory/bin/jira priority CHB-12 High   # High, Medium or Low (docs/process/priorities.md)
 ```
 
 Text files are plain text. Blank lines separate paragraphs and URLs become links.

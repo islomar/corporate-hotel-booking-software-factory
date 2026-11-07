@@ -422,12 +422,12 @@ class CreateTest(unittest.TestCase):
             }
         )
 
-    def _create(self, fake: FakeJira) -> tuple[int, str, str]:
+    def _create(self, fake: FakeJira, priority: tuple[str, ...] = ("--priority", "Medium")) -> tuple[int, str, str]:
         with tempfile.NamedTemporaryFile("w") as description:
             description.write("Line one.\n\nAC1: works.")
             description.flush()
             argv = ["create", "--parent", "CHB-27", "--summary", "Do it", "--description-file", description.name]
-            return _run(argv, fake)
+            return _run([*argv, *priority], fake)
 
     def test_creates_a_task_in_chb_under_the_epic(self) -> None:
         fake = self._fake("Epic")
@@ -441,11 +441,27 @@ class CreateTest(unittest.TestCase):
         self.assertEqual(fields["issuetype"], {"name": "Task"})
         self.assertEqual(fields["parent"], {"key": "CHB-27"})
         self.assertEqual(adf_to_text(fields["description"]), "Line one.\n\nAC1: works.")
+        self.assertEqual(fields["priority"], {"name": "Medium"})
+
+    def test_priority_is_required(self) -> None:
+        fake = self._fake("Epic")
+        code, _, _ = self._create(fake, priority=())
+
+        self.assertEqual(code, 2)
+        self.assertEqual(fake.requests, [])
+
+    def test_only_high_medium_and_low_are_accepted(self) -> None:
+        for value in ("Highest", "Lowest", "Critical", "high"):
+            fake = self._fake("Epic")
+            code, _, _ = self._create(fake, priority=("--priority", value))
+
+            self.assertEqual(code, 2, value)
+            self.assertEqual(fake.requests, [], value)
 
     def test_empty_summary_is_refused_before_any_request(self) -> None:
         fake = self._fake("Epic")
         with tempfile.NamedTemporaryFile("w") as description:
-            argv = ["create", "--parent", "CHB-27", "--summary", "  ", "--description-file", description.name]
+            argv = ["create", "--parent", "CHB-27", "--summary", "  ", "--description-file", description.name, "--priority", "Low"]
             code, _, err = _run(argv, fake)
 
         self.assertEqual(code, 1)
@@ -626,17 +642,18 @@ class ViewTest(unittest.TestCase):
                 "summary": "Title",
                 "issuetype": {"name": "Task"},
                 "status": {"name": "In Review"},
+                "priority": {"name": "High"},
                 "assignee": {"displayName": "Claude (CHB agent)"},
                 "parent": {"key": "CHB-27"},
                 "description": doc,
                 "comment": {"comments": [{"author": {"displayName": "Owner"}, "created": "t", "body": doc}]},
             },
         }
-        path = "/rest/api/3/issue/CHB-12?fields=summary,status,assignee,issuetype,parent,description,comment"
+        path = "/rest/api/3/issue/CHB-12?fields=summary,status,priority,assignee,issuetype,parent,description,comment"
         code, out, _ = _run(["view", "CHB-12"], FakeJira({("GET", path): issue}))
 
         self.assertEqual(code, 0)
-        for text in ("CHB-12 [Task] Title", "Status: In Review", "Assignee: Claude (CHB agent)", "Parent: CHB-27", "--- Owner"):
+        for text in ("CHB-12 [Task] Title", "Status: In Review", "Priority: High", "Assignee: Claude (CHB agent)", "Parent: CHB-27", "--- Owner"):
             self.assertIn(text, out)
         self.assertEqual(out.count("The description."), 2)
 
@@ -894,6 +911,53 @@ class SectionCommandTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("2 sections", err)
         self.assertEqual(fake.writes(), [])
+
+
+class PriorityTest(unittest.TestCase):
+    def test_sets_the_priority_of_an_issue(self) -> None:
+        fake = FakeJira({("PUT", "/rest/api/3/issue/CHB-12"): None})
+        code, out, _ = _run(["priority", "CHB-12", "High"], fake)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(out.strip(), "CHB-12 priority High")
+        self.assertEqual(fake.writes(), [("PUT", "/rest/api/3/issue/CHB-12", {"fields": {"priority": {"name": "High"}}})])
+
+    def test_refuses_any_other_value_before_any_request(self) -> None:
+        for value in ("Highest", "Lowest", "Urgent", ""):
+            fake = FakeJira({})
+            code, _, _ = _run(["priority", "CHB-12", value], fake)
+
+            self.assertEqual(code, 2, value)
+            self.assertEqual(fake.requests, [], value)
+
+    def test_only_chb_keys(self) -> None:
+        fake = FakeJira({})
+        self.assertEqual(_run(["priority", "OTHER-1", "Low"], fake)[0], 1)
+        self.assertEqual(fake.requests, [])
+
+
+class MarkdownHeadingTest(unittest.TestCase):
+    """A description written with "## Heading" lines gets real headings, so `section` finds them."""
+
+    def test_markdown_heading_lines_become_headings(self) -> None:
+        doc = text_to_adf("## Goal\n\nDo it.\n\n### Detail\nMore.")
+
+        self.assertEqual(doc["content"][0], _heading("Goal"))
+        self.assertEqual(doc["content"][1], _para("Do it."))
+        self.assertEqual(doc["content"][2], _heading("Detail", 3))
+        self.assertEqual(doc["content"][3], _para("More."))
+
+    def test_a_hash_without_a_space_stays_text(self) -> None:
+        self.assertEqual(text_to_adf("#123 is an issue")["content"], [_para("#123 is an issue")])
+
+    def test_section_replaces_a_section_written_at_creation(self) -> None:
+        created = text_to_adf("## Goal\n\nG.\n\n## Work\n\nOld step.\n\n## Acceptance criteria\n\nAC.")
+        after = replace_section(created, "Work", "New step.")
+
+        text = adf_to_text(after)
+        self.assertEqual(text.count("Work"), 1)
+        self.assertNotIn("Old step.", text)
+        self.assertLess(text.index("New step."), text.index("Acceptance criteria"))
 
 
 if __name__ == "__main__":
