@@ -1,12 +1,23 @@
 import base64
 import json
+import subprocess
 import sys
 import unittest
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from as_agent import agent_env, jwt_signing_input, noreply_email
+from as_agent import (
+    KEY_COMMAND,
+    AppKeyError,
+    agent_env,
+    jwt_signing_input,
+    noreply_email,
+    read_private_key,
+    read_private_key_with_override,
+)
+from op_service_account import ServiceAccountError
 
 
 def _decode(part: str) -> dict[str, object]:
@@ -27,7 +38,7 @@ class JwtSigningInputTest(unittest.TestCase):
 class AgentEnvTest(unittest.TestCase):
     def setUp(self) -> None:
         self.env = agent_env(
-            {"PATH": "/bin", "GH_TOKEN": "owner-token", "GITHUB_TOKEN": "owner"},
+            {"PATH": "/bin", "GH_TOKEN": "owner-token", "GITHUB_TOKEN": "owner", "OP_SERVICE_ACCOUNT_TOKEN": "ops_x"},
             token="ghs_agent",
             bot_login="chb-factory-agent[bot]",
             bot_id=42,
@@ -36,6 +47,7 @@ class AgentEnvTest(unittest.TestCase):
     def test_gh_uses_the_installation_token(self) -> None:
         self.assertEqual(self.env["GH_TOKEN"], "ghs_agent")
         self.assertNotIn("GITHUB_TOKEN", self.env)
+        self.assertNotIn("OP_SERVICE_ACCOUNT_TOKEN", self.env)
         self.assertEqual(self.env["PATH"], "/bin")
 
     def test_commits_are_authored_by_the_bot(self) -> None:
@@ -50,6 +62,73 @@ class AgentEnvTest(unittest.TestCase):
 
         self.assertEqual(config["url.https://github.com/.insteadOf"], "git@github.com:")
         self.assertEqual(config["credential.https://github.com.helper"], "!gh auth git-credential")
+
+
+def _runner(returncode: int = 0, stdout: bytes = b"-----BEGIN KEY-----\n") -> Any:
+    calls: list[dict[str, Any]] = []
+
+    def run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        calls.append({"command": command, **kwargs})
+        return subprocess.CompletedProcess(command, returncode, stdout, b"")
+
+    run.calls = calls  # type: ignore[attr-defined]
+    return run
+
+
+class ReadPrivateKeyTest(unittest.TestCase):
+    def test_the_default_command_reads_the_document_from_the_factory_vault(self) -> None:
+        self.assertEqual(
+            KEY_COMMAND, "op document get chb-factory-agent.2026-11-06.private-key --vault chb-factory"
+        )
+
+    def test_op_gets_the_service_account_token_in_its_own_environment_only(self) -> None:
+        base = {"PATH": "/bin"}
+        run = _runner()
+
+        key = read_private_key(["op", "document", "get", "k"], base, token_reader=lambda: "ops_fake", run=run)
+
+        self.assertEqual(key, b"-----BEGIN KEY-----\n")
+        (call,) = run.calls
+        self.assertEqual(call["env"], {"PATH": "/bin", "OP_SERVICE_ACCOUNT_TOKEN": "ops_fake"})
+        self.assertEqual(base, {"PATH": "/bin"})
+        self.assertGreater(call["timeout"], 0)
+
+    def test_no_token_in_the_keyring_stops_before_op(self) -> None:
+        def no_token() -> str:
+            raise ServiceAccountError("no 1Password service account token in the keyring")
+
+        run = _runner()
+        with self.assertRaisesRegex(AppKeyError, "keyring"):
+            read_private_key(["op"], {}, token_reader=no_token, run=run)
+        self.assertEqual(run.calls, [])
+
+    def test_failing_op_or_empty_output_is_an_error_without_output(self) -> None:
+        for run in (_runner(returncode=1, stdout=b"secret"), _runner(stdout=b" \n")):
+            with self.assertRaises(AppKeyError) as caught:
+                read_private_key(["op"], {}, token_reader=lambda: "ops_fake", run=run)
+            self.assertNotIn("secret", str(caught.exception))
+
+    def test_missing_op_is_an_error(self) -> None:
+        with self.assertRaises(AppKeyError):
+            read_private_key(["/nonexistent/op"], {}, token_reader=lambda: "ops_fake")
+
+
+class KeyCommandOverrideTest(unittest.TestCase):
+    def test_the_override_never_gets_the_service_account_token(self) -> None:
+        run = _runner()
+
+        key = read_private_key_with_override("my-key --name k", {"PATH": "/bin", "OP_SERVICE_ACCOUNT_TOKEN": "ops_x"}, run)
+
+        self.assertEqual(key, b"-----BEGIN KEY-----\n")
+        (call,) = run.calls
+        self.assertEqual(call["command"], ["my-key", "--name", "k"])
+        self.assertEqual(call["env"], {"PATH": "/bin"})
+
+    def test_a_failing_override_is_an_error_without_output(self) -> None:
+        for run in (_runner(returncode=1, stdout=b"secret"), _runner(stdout=b"")):
+            with self.assertRaises(AppKeyError) as caught:
+                read_private_key_with_override("my-key", {}, run)
+            self.assertNotIn("secret", str(caught.exception))
 
 
 class NoreplyEmailTest(unittest.TestCase):
