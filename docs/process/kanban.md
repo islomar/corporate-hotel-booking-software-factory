@@ -24,6 +24,7 @@ Each status below has a meaning, rules to enter and rules to leave.
 A ticket moves only when the rules to leave are true. Agents follow this document; the owner can override it, and the override is written as a comment on the ticket.
 
 ADR-ad3e defines "done". This document makes it operational.
+Priorities are defined in `priorities.md`. The rank in To Do decides the order of work.
 
 ## WIP limits
 
@@ -130,7 +131,7 @@ Meaning: the ticket will not be done. This is a valid outcome.
 The person or agent doing the work is the assignee.
 Agent work is assigned to the Claude account ("Claude (CHB agent)").
 
-Agents make every Jira write (create, transition, comment, assign, rank, description section) through `factory/bin/jira`, so Jira history shows the Claude account as the author.
+Agents make every Jira write (create, transition, comment, assign, rank, description section, priority) through `factory/bin/jira`, so Jira history shows the Claude account as the author.
 `acli` is logged in as the owner and is for the owner only.
 When `factory/bin/jira` fails, the agent stops and reports. It never falls back to `acli`.
 A Claude Code hook denies `acli` writes and direct REST writes to Jira in this repository.

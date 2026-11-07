@@ -4,12 +4,13 @@
 Usage:
   factory/bin/jira view CHB-12 [--json]
   factory/bin/jira search 'project = CHB AND status = "In Review"' [--json]
-  factory/bin/jira create --parent CHB-27 --summary TEXT --description-file FILE
+  factory/bin/jira create --parent CHB-27 --summary TEXT --description-file FILE --priority High|Medium|Low
   factory/bin/jira transition CHB-12 "In Review"
   factory/bin/jira comment CHB-12 --body-file FILE      (FILE "-" reads stdin)
   factory/bin/jira assign CHB-12 --me | --account-id ID
   factory/bin/jira rank CHB-12 [CHB-13 ...] --before CHB-9 | --after CHB-9
   factory/bin/jira section CHB-12 --heading TEXT --body-file FILE
+  factory/bin/jira priority CHB-12 High|Medium|Low
 
 The account email and API token are read from the 1Password item chb-jira-claude.api-token
 (fields username and credential, vault chb-factory) on every call, with one `op` call that
@@ -22,6 +23,9 @@ wrapper is the guardrail. It only touches issues whose key is CHB-<n>, creates o
 Tasks under a CHB Epic, and has no delete, no project, board, workflow or permission
 writes, and no raw request command. Do not add one. `rank` changes only the rank of
 issues. `section` writes only the description field, and changes only one section of it.
+`priority` writes only the priority field, and only High, Medium or Low (docs/process/priorities.md).
+
+In a description, comment or section body, a line "## Heading" (1 to 6 #) becomes a heading.
 
 Exit codes:
   0  done
@@ -68,7 +72,9 @@ CREDENTIALS_COMMAND = [
 ]  # fmt: skip
 KEY_PATTERN = re.compile(rf"^{PROJECT}-[1-9][0-9]*$")
 URL_PATTERN = re.compile(r"https?://[^\s<>()]*[^\s<>().,;:!?'\"]")
-SEARCH_FIELDS = ["summary", "status", "assignee", "issuetype", "parent"]
+SEARCH_FIELDS = ["summary", "status", "assignee", "issuetype", "parent", "priority"]
+PRIORITIES = ("High", "Medium", "Low")  # Highest and Lowest exist in Jira but CHB does not use them
+HEADING_PATTERN = re.compile(r"^(#{1,6}) +(\S.*?)\s*$")
 RANK_LIMIT = 50  # issues per rank request, the Jira Software limit
 BOARD_ID = 2  # the CHB board; its column configuration holds the WIP limits
 IN_PROGRESS = "In Progress"
@@ -176,8 +182,12 @@ def text_to_adf(text: str, *, bullets: bool = False) -> dict[str, Any]:
     With bullets, consecutive lines that start with "- " become a bullet list.
     """
     blocks: list[dict[str, Any]] = []
-    for block in re.split(r"\n\s*\n", text.strip()):
-        lines = block.split("\n")
+    for lines in _blocks(text):
+        heading = HEADING_PATTERN.fullmatch(lines[0])
+        if heading:
+            level, title = heading.groups()
+            blocks.append({"type": "heading", "attrs": {"level": len(level)}, "content": _inline(title)})
+            continue
         if not bullets:
             blocks.append(_paragraph(lines))
             continue
@@ -199,6 +209,30 @@ def text_to_adf(text: str, *, bullets: bool = False) -> dict[str, Any]:
         if items:
             blocks.append(_bullet_list(items))
     return {"type": "doc", "version": 1, "content": blocks}
+
+
+def _blocks(text: str) -> list[list[str]]:
+    """Blank lines split blocks, and a heading line is a block of its own."""
+    blocks: list[list[str]] = []
+    for block in re.split(r"\n\s*\n", text.strip()):
+        current: list[str] = []
+        for line in block.split("\n"):
+            if HEADING_PATTERN.fullmatch(line):
+                if current:
+                    blocks.append(current)
+                blocks.append([line])
+                current = []
+            else:
+                current.append(line)
+        if current:
+            blocks.append(current)
+    return blocks
+
+
+def check_priority(priority: str) -> str:
+    if priority not in PRIORITIES:
+        raise UsageError(f"priority must be one of {', '.join(PRIORITIES)}, got {priority!r}")
+    return priority
 
 
 def _paragraph(lines: list[str]) -> dict[str, Any]:
@@ -346,7 +380,7 @@ class Jira:
         return self.request("GET", "/rest/api/3/myself")
 
     def view(self, key: str) -> dict[str, Any]:
-        fields = "summary,status,assignee,issuetype,parent,description,comment"
+        fields = "summary,status,priority,assignee,issuetype,parent,description,comment"
         return self.request("GET", f"/rest/api/3/issue/{check_key(key)}?fields={fields}")
 
     def search(self, jql: str, limit: int = 500) -> list[dict[str, Any]]:
@@ -363,7 +397,8 @@ class Jira:
                 break
         return issues
 
-    def create(self, parent: str, summary: str, description: str) -> str:
+    def create(self, parent: str, summary: str, description: str, priority: str) -> str:
+        check_priority(priority)
         if not summary.strip():
             raise JiraError("summary is empty")
         epic = self.request("GET", f"/rest/api/3/issue/{check_key(parent)}?fields=issuetype")
@@ -379,6 +414,7 @@ class Jira:
                     "parent": {"key": parent},
                     "summary": summary.strip(),
                     "description": text_to_adf(description),
+                    "priority": {"name": priority},
                 }
             },
         )
@@ -447,6 +483,10 @@ class Jira:
         if status not in (200, 204) or failed:
             details = "; ".join(f"{e.get('issueKey', e.get('issueId', '?'))}: {_errors(e.get('errors'))}" for e in failed)
             raise JiraError(f"rank failed for some issues (HTTP {status}): {details or 'no details'}")
+
+    def set_priority(self, key: str, priority: str) -> None:
+        body = {"fields": {"priority": {"name": check_priority(priority)}}}
+        self.request("PUT", f"/rest/api/3/issue/{check_key(key)}", body, empty_ok=True)
 
     def set_section(self, key: str, heading: str, body: str) -> bool:
         """Set one section of the description. Return False when it already had that content."""
@@ -581,6 +621,8 @@ def _print_issue(issue: dict[str, Any]) -> None:
     parent = fields.get("parent")
     print(f"{issue['key']} [{fields['issuetype']['name']}] {fields['summary']}")
     print(f"Status: {fields['status']['name']}")
+    if fields.get("priority"):
+        print(f"Priority: {fields['priority']['name']}")
     print(f"Assignee: {_name(fields.get('assignee'))}")
     if parent:
         print(f"Parent: {parent['key']}")
@@ -618,6 +660,7 @@ def _parser() -> argparse.ArgumentParser:
     create.add_argument("--parent", required=True)
     create.add_argument("--summary", required=True)
     create.add_argument("--description-file", required=True)
+    create.add_argument("--priority", required=True, choices=PRIORITIES)
 
     transition = commands.add_parser("transition", help="move an issue to a status, by status name")
     transition.add_argument("key")
@@ -643,6 +686,10 @@ def _parser() -> argparse.ArgumentParser:
     section.add_argument("key")
     section.add_argument("--heading", required=True)
     section.add_argument("--body-file", required=True)
+
+    priority = commands.add_parser("priority", help="set the priority: High, Medium or Low")
+    priority.add_argument("key")
+    priority.add_argument("priority", choices=PRIORITIES)
     return parser
 
 
@@ -662,7 +709,7 @@ def run(args: argparse.Namespace, jira: Jira) -> None:
             fields = issue["fields"]
             print(f"{issue['key']}\t{fields['status']['name']}\t{_name(fields.get('assignee'))}\t{fields['summary']}")
     elif args.command == "create":
-        print(jira.create(args.parent, args.summary, _read_text(args.description_file)))
+        print(jira.create(args.parent, args.summary, _read_text(args.description_file), args.priority))
     elif args.command == "transition":
         target, notices = jira.transition(args.key, args.status)
         print(f"{args.key} -> {target}")
@@ -680,6 +727,9 @@ def run(args: argparse.Namespace, jira: Jira) -> None:
     elif args.command == "section":
         changed = jira.set_section(args.key, args.heading, args.body)
         print(f"{args.key} section {args.heading!r} {'set' if changed else 'unchanged'}")
+    elif args.command == "priority":
+        jira.set_priority(args.key, args.priority)
+        print(f"{args.key} priority {args.priority}")
 
 
 def main(
