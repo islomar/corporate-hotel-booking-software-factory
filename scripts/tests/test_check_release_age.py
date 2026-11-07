@@ -142,11 +142,13 @@ class SecurityFixTest(unittest.TestCase):
 
         self.assertEqual(alert_fixes(alerts, "frontend"), {"vite": [("8.3.6", 7), ("9.0.1", 8)]})
 
-    def test_exempts_the_alerted_package_at_or_above_the_fix_in_the_same_major(self):
+    def test_exempts_only_the_first_patched_version_of_the_alerted_package(self):
         fixes = {"vite": [("8.3.6", 7)]}
         cases = {
             ("vite", "8.3.6"): True,
-            ("vite", "8.4.0"): True,
+            ("vite", "v8.3.6"): True,
+            ("vite", "8.3.7"): False,
+            ("vite", "8.4.0"): False,
             ("vite", "8.3.5"): False,
             ("vite", "9.0.0"): False,
             ("vite", "8.3.7-beta.1"): False,

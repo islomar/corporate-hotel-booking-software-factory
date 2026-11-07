@@ -15,8 +15,9 @@ Exemptions (for a fresh security fix) use the package managers' own settings:
 
 npm security fixes (CHB-95): Dependabot ignores `min-release-age` for security updates, so a
 fix can be younger than the window. A too-new npm entry passes when it is the package of an
-open Dependabot alert on the same manifest, at or above the alert's first patched version and
-in the same major. Only the alerted package itself: a new transitive entry still fails. The
+open Dependabot alert on the same manifest, at exactly the alert's first patched version
+(Dependabot moves to the minimum fix). Only the alerted package itself: a new transitive entry
+still fails. The
 alerts come from the GitHub API (GH_TOKEN with Dependabot alerts read, GITHUB_REPOSITORY),
 read only when an entry is too new. Without them there is no exemption, never an error.
 
@@ -206,7 +207,9 @@ def security_fix_exemptions(
         match = None
         for patched, number in fixes.get(violation.name, []):
             floor = _release(patched)
-            if version and floor and version[0] == floor[0] and version >= floor:
+            # Exactly the first patched version: Dependabot security updates move to the
+            # minimum fixed version, and anything newer is a fresh release like any other.
+            if version and floor and version == floor:
                 match = number
                 break
         if match is None:
