@@ -30,6 +30,15 @@ Events created with the default `GITHUB_TOKEN` start no new workflow runs, so bo
 - The `main` ruleset applies to everyone except the Admin repository role: pull request, required checks `backend`, `frontend`, `e2e`, code-owner review on harness paths.
 - Amended 2026-11-07 (CHB-119): the Admin role bypasses the `main` ruleset, so the owner can push directly to `main`.
   Only the owner holds that role. The agent App has no administration permission and stays bound by the ruleset.
+- Amended 2026-11-07 (CHB-86): the App keeps `workflows` write. The agent pushes workflow changes through pull requests like any other change.
+  A workflow edited on an agent branch cannot reach secrets, because no secret depends on the App permission:
+  - no repository-level Actions secrets exist;
+  - the reviewer secrets live in the `reviewer` environment and the deploy runs in `production`; both allow only the `main` branch;
+  - the agent App key is a Dependabot secret, given only to Dependabot runs;
+  - Google Cloud trusts GitHub OIDC only for `refs/heads/main` (`infra/gcp/identities.tf`);
+  - the default `GITHUB_TOKEN` is read-only, and Actions cannot approve pull requests.
+  A live probe on 2026-11-07 (run 42422566406, throwaway branch) confirmed it: the job with `environment: reviewer` was rejected by the environment rule, and the job without it read an empty secret.
+  A new secret goes in an environment limited to `main`, never at repository level.
 
 ## Alternatives rejected
 
