@@ -58,6 +58,8 @@ class FakeJira:
         body = json.loads(request.data) if request.data else None
         self.requests.append((request.get_method(), path, body, dict(request.header_items())))
         answer = self.routes[(request.get_method(), path)]
+        if callable(answer):
+            answer = answer(body)
         if isinstance(answer, int):
             error_body = io.BytesIO(json.dumps({"errorMessages": ["nope"], "errors": {"f": "bad"}}).encode())
             raise urllib.error.HTTPError(request.full_url, answer, "error", {}, error_body)  # type: ignore[arg-type]
@@ -66,7 +68,11 @@ class FakeJira:
         return FakeResponse(b"" if answer is None else json.dumps(answer).encode())
 
     def writes(self) -> list[tuple[str, str, Any]]:
-        return [(m, p, b) for m, p, b, _ in self.requests if m != "GET"]
+        """Requests that change Jira. A JQL search is a POST but only reads."""
+        return [(m, p, b) for m, p, b, _ in self.requests if m != "GET" and p != SEARCH]
+
+    def searches(self) -> list[str]:
+        return [b["jql"] for m, p, b, _ in self.requests if (m, p) == ("POST", SEARCH)]
 
 
 def _run(argv: list[str], fake: FakeJira, credentials_reader: Any = lambda: CREDENTIALS) -> tuple[int, str, str]:
@@ -76,12 +82,77 @@ def _run(argv: list[str], fake: FakeJira, credentials_reader: Any = lambda: CRED
     return code, out.getvalue(), err.getvalue()
 
 
+SEARCH = "/rest/api/3/search/jql"
+BOARD = "/rest/agile/1.0/board/2/configuration"
+# Status ids as on the real board: To Do 10003, In Progress 3, In Review 10004, Validating 10006,
+# Needs human 10007, Done 10005.
+STATUS_IDS = {
+    "To Do": "10003",
+    "In Progress": "3",
+    "In Review": "10004",
+    "Validating": "10006",
+    "Needs human": "10007",
+    "Done": "10005",
+}
 TRANSITIONS = {
     "transitions": [
-        {"id": "21", "to": {"name": "In Progress"}},
-        {"id": "31", "to": {"name": "In Review"}},
+        {"id": str(n), "to": {"name": name, "id": status_id}} for n, (name, status_id) in enumerate(STATUS_IDS.items(), 11)
     ]
 }
+
+
+def board_config(**limits: dict[str, int]) -> dict[str, Any]:
+    """A board configuration with one column per status. Limits: board_config(**{"In Review": {"max": 3}})."""
+    columns = []
+    for name, status_id in STATUS_IDS.items():
+        columns.append({"name": name, "statuses": [{"id": status_id, "self": "x"}], **limits.get(name, {})})
+    return {"id": 2, "columnConfig": {"columns": columns, "constraintType": "none"}}
+
+
+BOARD_LIMITS = {"In Progress": {"min": 1, "max": 3}, "In Review": {"max": 3}, "Validating": {"max": 3}, "Needs human": {"max": 3}}
+SECTIONS = {
+    "Validating": "Acceptance criteria (Validating)",
+    "Needs human": "Needs human: owner steps",
+}
+
+
+def description_with(*headings: str, body: str = "Some text.") -> dict[str, Any]:
+    content: list[dict[str, Any]] = [{"type": "paragraph", "content": [{"type": "text", "text": "Intro."}]}]
+    for heading in headings:
+        content.append({"type": "heading", "attrs": {"level": 2}, "content": [{"type": "text", "text": heading}]})
+        if body:
+            content.append({"type": "paragraph", "content": [{"type": "text", "text": body}]})
+    return {"type": "doc", "version": 1, "content": content}
+
+
+def issue_in(status: str, description: Any = None) -> dict[str, Any]:
+    return {"fields": {"status": {"name": status, "id": STATUS_IDS[status]}, "description": description}}
+
+
+def keys_answer(by_status: dict[str, list[str]]) -> Any:
+    """Answer a JQL search with the keys listed for the status ids it names, minus the excluded key."""
+
+    def answer(body: dict[str, Any]) -> dict[str, Any]:
+        jql = body["jql"]
+        excluded = jql.split("key != ")[1].split()[0]
+        keys = [k for name, ks in by_status.items() if f"({STATUS_IDS[name]})" in jql for k in ks if k != excluded]
+        return {"issues": [{"key": k} for k in keys], "isLast": True}
+
+    return answer
+
+
+def transition_fake(
+    current: str, by_status: dict[str, list[str]] | None = None, description: Any = None, board: Any = None
+) -> FakeJira:
+    return FakeJira(
+        {
+            ("GET", "/rest/api/3/issue/CHB-12/transitions"): TRANSITIONS,
+            ("GET", "/rest/api/3/issue/CHB-12?fields=status,description"): issue_in(current, description),
+            ("GET", BOARD): board_config(**BOARD_LIMITS) if board is None else board,
+            ("POST", SEARCH): keys_answer(by_status or {}),
+            ("POST", "/rest/api/3/issue/CHB-12/transitions"): None,
+        }
+    )
 
 
 class AuthTest(unittest.TestCase):
@@ -96,24 +167,19 @@ class AuthTest(unittest.TestCase):
 
 class TransitionTest(unittest.TestCase):
     def test_moves_by_status_name_case_insensitively(self) -> None:
-        fake = FakeJira(
-            {
-                ("GET", "/rest/api/3/issue/CHB-12/transitions"): TRANSITIONS,
-                ("POST", "/rest/api/3/issue/CHB-12/transitions"): None,
-            }
-        )
+        fake = transition_fake("In Progress", {"In Progress": ["CHB-1"]})
         code, out, _ = _run(["transition", "CHB-12", "in review"], fake)
 
         self.assertEqual(code, 0)
-        self.assertEqual(fake.writes(), [("POST", "/rest/api/3/issue/CHB-12/transitions", {"transition": {"id": "31"}})])
+        self.assertEqual(fake.writes(), [("POST", "/rest/api/3/issue/CHB-12/transitions", {"transition": {"id": "13"}})])
         self.assertEqual(out.strip(), "CHB-12 -> In Review")
 
     def test_unknown_status_fails_and_lists_the_allowed_ones(self) -> None:
-        fake = FakeJira({("GET", "/rest/api/3/issue/CHB-12/transitions"): TRANSITIONS})
+        fake = FakeJira({("GET", "/rest/api/3/issue/CHB-12/transitions"): {"transitions": TRANSITIONS["transitions"][1:3]}})
         code, _, err = _run(["transition", "CHB-12", "Done"], fake)
 
         self.assertEqual(code, 1)
-        self.assertIn("In Progress, In Review", err)
+        self.assertIn("Allowed: In Progress, In Review", err)
         self.assertEqual(fake.writes(), [])
 
     def test_hook_runs_before_the_move_and_can_block_it(self) -> None:
@@ -125,8 +191,182 @@ class TransitionTest(unittest.TestCase):
 
         self.assertEqual(code, 1)
         self.assertEqual(hook.call_args.args[1:], ("CHB-12", "In Progress"))
+        self.assertEqual(hook.call_args.kwargs, {"status_id": "3"})
         self.assertIn("WIP limit reached", err)
         self.assertEqual(fake.writes(), [])
+
+
+class WipLimitTest(unittest.TestCase):
+    """CHB-108: the board's column limits block moves into a full column (exit 4)."""
+
+    def test_full_column_blocks_with_column_limit_and_tickets(self) -> None:
+        fake = transition_fake("In Progress", {"In Review": ["CHB-1", "CHB-2", "CHB-3"]})
+        code, out, err = _run(["transition", "CHB-12", "In Review"], fake)
+
+        self.assertEqual(code, 4)
+        self.assertEqual(out, "")
+        self.assertIn("column 'In Review' is at its WIP limit (3/3): CHB-1, CHB-2, CHB-3", err)
+        self.assertIn("Leave CHB-12 in In Progress", err)
+        self.assertEqual(fake.writes(), [])
+
+    def test_count_asks_for_the_column_statuses_in_chb_without_the_ticket(self) -> None:
+        fake = transition_fake("In Progress", {"In Review": ["CHB-1", "CHB-2"]})
+        code, _, _ = _run(["transition", "CHB-12", "In Review"], fake)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            fake.searches()[0], "project = CHB AND status in (10004) AND key != CHB-12 ORDER BY key ASC"
+        )
+
+    def test_below_the_limit_moves(self) -> None:
+        fake = transition_fake("In Progress", {"In Review": ["CHB-1", "CHB-2"], "In Progress": ["CHB-5"]})
+        code, out, _ = _run(["transition", "CHB-12", "In Review"], fake)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(out.strip(), "CHB-12 -> In Review")
+        self.assertEqual(len(fake.writes()), 1)
+
+    def test_limit_comes_from_the_board_config(self) -> None:
+        board = board_config(**{"In Review": {"max": 1}})
+        fake = transition_fake("In Progress", {"In Review": ["CHB-1"], "In Progress": ["CHB-5"]}, board=board)
+        code, _, err = _run(["transition", "CHB-12", "In Review"], fake)
+
+        self.assertEqual(code, 4)
+        self.assertIn("(1/1): CHB-1", err)
+
+    def test_every_max_blocks_including_needs_human_and_in_progress(self) -> None:
+        full = ["CHB-1", "CHB-2", "CHB-3"]
+        for current, target in [("To Do", "In Progress"), ("In Progress", "Needs human"), ("In Review", "Validating")]:
+            with self.subTest(target=target):
+                description = description_with(*SECTIONS.values())
+                fake = transition_fake(current, {target: full}, description=description)
+                code, _, err = _run(["transition", "CHB-12", target], fake)
+
+                self.assertEqual(code, 4)
+                self.assertIn(f"column {target!r} is at its WIP limit (3/3)", err)
+                self.assertEqual(fake.writes(), [])
+
+    def test_columns_without_a_max_never_block(self) -> None:
+        many = [f"CHB-{n}" for n in range(1, 40)]
+        for target in ["Done", "To Do"]:
+            with self.subTest(target=target):
+                fake = transition_fake("In Review", {target: many})
+                code, _, _ = _run(["transition", "CHB-12", target], fake)
+
+                self.assertEqual(code, 0)
+                self.assertEqual(fake.searches(), [])
+
+    def test_a_move_within_the_same_column_is_never_blocked(self) -> None:
+        board = board_config(**{"In Review": {"max": 1}})
+        board["columnConfig"]["columns"][1]["statuses"].append({"id": "10004"})  # In Progress and In Review together
+        del board["columnConfig"]["columns"][2]
+        fake = transition_fake("In Progress", {"In Progress": ["CHB-1", "CHB-2"]}, board=board)
+        code, _, _ = _run(["transition", "CHB-12", "In Review"], fake)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(fake.searches(), [])
+
+    def test_a_status_on_no_column_is_never_blocked(self) -> None:
+        board = board_config(**BOARD_LIMITS)
+        del board["columnConfig"]["columns"][2]  # In Review is not on the board
+        fake = transition_fake("To Do", {"In Review": ["CHB-1", "CHB-2", "CHB-3"]}, board=board)
+        code, _, _ = _run(["transition", "CHB-12", "In Review"], fake)
+
+        self.assertEqual(code, 0)
+
+    def test_an_unreadable_board_blocks_with_exit_1(self) -> None:
+        fake = transition_fake("In Progress", board=500)
+        code, _, err = _run(["transition", "CHB-12", "In Review"], fake)
+
+        self.assertEqual(code, 1)
+        self.assertIn("board/2/configuration: HTTP 500", err)
+        self.assertEqual(fake.writes(), [])
+
+
+class MinimumSignalTest(unittest.TestCase):
+    """CHB-108: the In Progress minimum is a signal, never a block."""
+
+    def test_leaving_in_progress_empty_prints_idle_and_exits_0(self) -> None:
+        fake = transition_fake("In Progress", {"In Progress": ["CHB-12"]})  # search still lists the moved ticket
+        code, out, _ = _run(["transition", "CHB-12", "In Review"], fake)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            out.splitlines(),
+            ["CHB-12 -> In Review", "In Progress is below its minimum (0/1): idle, ask the owner for the next ticket"],
+        )
+        self.assertEqual(fake.searches()[-1], "project = CHB AND status in (3) AND key != CHB-12 ORDER BY key ASC")
+
+    def test_a_failed_count_after_the_move_is_a_notice_not_a_failure(self) -> None:
+        fake = transition_fake("In Progress")
+        fake.routes[("POST", SEARCH)] = lambda body: 500 if "status in (3)" in body["jql"] else {"issues": []}
+        code, out, _ = _run(["transition", "CHB-12", "In Review"], fake)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(out.splitlines()[0], "CHB-12 -> In Review")
+        self.assertIn("could not check the In Progress minimum", out)
+        self.assertEqual(len(fake.writes()), 1)
+
+    def test_no_signal_while_in_progress_holds_its_minimum(self) -> None:
+        fake = transition_fake("In Progress", {"In Progress": ["CHB-7"]})
+        code, out, _ = _run(["transition", "CHB-12", "In Review"], fake)
+
+        self.assertEqual(code, 0)
+        self.assertNotIn("minimum", out)
+
+    def test_no_signal_when_the_ticket_did_not_leave_in_progress(self) -> None:
+        fake = transition_fake("To Do")
+        code, out, _ = _run(["transition", "CHB-12", "In Progress"], fake)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(out.strip(), "CHB-12 -> In Progress")
+
+
+class RequiredSectionTest(unittest.TestCase):
+    """CHB-108: Validating and Needs human need their description section first (exit 4)."""
+
+    def test_missing_section_blocks_and_says_how_to_write_it(self) -> None:
+        for target, heading in SECTIONS.items():
+            with self.subTest(target=target):
+                fake = transition_fake("In Progress", {"In Progress": ["CHB-1"]}, description=description_with("Other"))
+                code, _, err = _run(["transition", "CHB-12", target], fake)
+
+                self.assertEqual(code, 4)
+                self.assertIn(f"no section headed {heading!r}", err)
+                self.assertIn(f'factory/bin/jira section CHB-12 --heading "{heading}" --body-file FILE', err)
+                self.assertEqual(fake.writes(), [])
+
+    def test_present_section_lets_the_move_through(self) -> None:
+        for target, heading in SECTIONS.items():
+            with self.subTest(target=target):
+                fake = transition_fake("In Progress", {"In Progress": ["CHB-1"]}, description=description_with(heading))
+                code, out, _ = _run(["transition", "CHB-12", target], fake)
+
+                self.assertEqual(code, 0)
+                self.assertIn(f"CHB-12 -> {target}", out)
+
+    def test_heading_must_match_exactly_and_have_text_under_it(self) -> None:
+        cases = {
+            "other case": description_with("acceptance criteria (validating)"),
+            "in a comment-like paragraph": {
+                "type": "doc",
+                "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Acceptance criteria (Validating)"}]}],
+            },
+            "empty section": description_with("Acceptance criteria (Validating)", body=""),
+            "no description": None,
+        }
+        for name, description in cases.items():
+            with self.subTest(name):
+                fake = transition_fake("In Review", description=description)
+                code, _, _ = _run(["transition", "CHB-12", "Validating"], fake)
+
+                self.assertEqual(code, 4)
+
+    def test_other_targets_need_no_section(self) -> None:
+        fake = transition_fake("In Progress", {"In Progress": ["CHB-1"]}, description=None)
+        code, _, _ = _run(["transition", "CHB-12", "In Review"], fake)
+
+        self.assertEqual(code, 0)
 
 
 class CommentTest(unittest.TestCase):
