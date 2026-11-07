@@ -1,11 +1,13 @@
 import contextlib
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "review"))
 
@@ -223,6 +225,14 @@ class CommandLineTest(unittest.TestCase):
     """Runs main() on a real git repository: a base commit, then PR commits."""
 
     def setUp(self) -> None:
+        # main() runs git with the inherited environment. A worktree hook sets GIT_DIR and GIT_INDEX_FILE,
+        # and git would then read the outer repository instead of this one (CHB-124).
+        patcher = mock.patch.dict(os.environ)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        local = subprocess.run(["git", "rev-parse", "--local-env-vars"], check=True, capture_output=True, text=True)  # noqa: S603,S607
+        for name in local.stdout.split():
+            os.environ.pop(name, None)
         repo = tempfile.TemporaryDirectory()
         files = tempfile.TemporaryDirectory()
         self.addCleanup(repo.cleanup)
