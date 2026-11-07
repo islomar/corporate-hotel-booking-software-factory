@@ -1,9 +1,16 @@
-# Applies to everyone, the owner included: no bypass actors (ADR-d7b7).
+# Applies to everyone except the Admin role, which only the owner holds (ADR-d7b7, CHB-119).
+# The agent App has no administration permission, so the ruleset still binds it.
 resource "github_repository_ruleset" "main" {
   name        = "main"
   repository  = github_repository.this.name
   target      = "branch"
   enforcement = "active"
+
+  bypass_actors {
+    actor_id    = 5 # built-in Admin repository role
+    actor_type  = "RepositoryRole"
+    bypass_mode = "always"
+  }
 
   conditions {
     ref_name {
