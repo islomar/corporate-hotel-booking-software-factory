@@ -3,6 +3,7 @@
 ## Contents
 
 - [Kanban statuses](#kanban-statuses)
+  - [WIP limits](#wip-limits)
   - [Flow](#flow)
   - [Statuses](#statuses)
     - [To Do](#to-do)
@@ -23,6 +24,21 @@ Each status below has a meaning, rules to enter and rules to leave.
 A ticket moves only when the rules to leave are true. Agents follow this document; the owner can override it, and the override is written as a comment on the ticket.
 
 ADR-ad3e defines "done". This document makes it operational.
+
+## WIP limits
+
+The CHB board (board 2) holds the WIP limits: a min and a max per column, set by the owner in the board settings.
+`factory/bin/jira transition` reads them from the board configuration on every move. The code holds no limit.
+
+- Max: a hard block. A move into a column that already holds that many other tickets exits 4 and names the column, the limit and the tickets in it.
+  The ticket does not move. The agent comments on it, tells the owner and starts nothing else.
+- Moves within one column, out of a column, or into a column without a max are never blocked.
+- Min: a signal only. When a move leaves In Progress below its min, the wrapper prints "idle, ask the owner for the next ticket".
+  The agent asks the owner and never pulls a ticket without the owner's go.
+- Owner override: the owner moves the ticket in the Jira UI and writes why in a comment on the ticket.
+
+Jira Free only colours a column over its limit. The check lives in `factory/bin/jira`.
+A Claude Code hook in `.claude/settings.json` denies raw `acli` writes and direct REST writes, so agents cannot bypass the check.
 
 ## Flow
 
@@ -50,7 +66,7 @@ Meaning: someone (the agent or the owner) is changing code, infrastructure or do
 - Enter: the worker assigns the ticket to themselves (an agent runs `factory/bin/jira assign CHB-<n> --me`) and creates the branch `CHB-<n>-<slug>` from `main`.
 - Leave to In Review: a pull request is open, `make check` passed locally, and the PR body states what merging changes in plain words.
 - Leave to Needs human: the worker is blocked by a question or a decision only the owner can make.
-- WIP limit: 3, the most agents that run in parallel. Not enforced on the board yet.
+- WIP limit: min 1, max 3 (the most agents that run in parallel). See [WIP limits](#wip-limits).
 
 ### In Review
 
@@ -59,7 +75,7 @@ Meaning: a pull request waits for review and merge.
 - Enter: the PR is open and linked from the ticket.
 - Leave to Validating: the PR is merged into `main`. CI passed and the required reviews were given.
 - Leave to In Progress: review asked for changes.
-- WIP limit: 3, set on the board. When the column is full, the agent reviews, fixes or closes PRs before it opens new ones (close before open).
+- WIP limit: max 3. When the column is full, the agent reviews, fixes or closes pull requests before it opens new ones (close before open).
 
 ### Validating
 
@@ -76,11 +92,13 @@ Meaning: the change is merged and deployed, but nobody has yet confirmed that it
   - Pass condition: what the check must show.
   - Who checks: the agent or the owner. If the owner must act, the section has numbered steps, as for Needs human.
   - If it fails: what happens next, and by when the ticket goes back to In Progress.
+- `factory/bin/jira transition` refuses the move (exit 4) while that section is missing.
 - Leave to Done: each acceptance criterion is checked in the live system, and the evidence is written as a ticket comment.
   Evidence is concrete: the smoke test of the deploy, a `gcloud` or `gh api` read of the real setting, a screenshot, a log line, a metric.
   A passing plan or a green CI run is not evidence of the live result.
 - Leave to In Progress: the check fails. A new or reopened PR fixes it.
 - Some checks need time (for example a background cleanup that runs within a day). The ticket stays in Validating until then.
+- WIP limit: max 3.
 
 ### Needs human
 
@@ -90,8 +108,10 @@ Meaning: the work cannot continue without the owner.
   The worker writes a section headed "Needs human: owner steps" in the ticket description, not in a comment, with `factory/bin/jira section`.
   It is a numbered step-by-step procedure: what to do, where (exact URL or menu path), how (each click or command).
   It also states what not to touch, the deadline if any, and how the owner reports that it is done.
+  `factory/bin/jira transition` refuses the move (exit 4) while that section is missing.
 - Leave: the owner answers or acts. The ticket goes back to the status it came from.
 - This status is the top of every notification.
+- WIP limit: max 3, a hard block like the others. When the column is full, the agent leaves the ticket in its status, comments on it, tells the owner and starts nothing else.
 
 ### Done
 
@@ -113,4 +133,5 @@ Agent work is assigned to the Claude account ("Claude (CHB agent)").
 Agents make every Jira write (create, transition, comment, assign, rank, description section) through `factory/bin/jira`, so Jira history shows the Claude account as the author.
 `acli` is logged in as the owner and is for the owner only.
 When `factory/bin/jira` fails, the agent stops and reports. It never falls back to `acli`.
+A Claude Code hook denies `acli` writes and direct REST writes to Jira in this repository.
 See `factory/README.md`.

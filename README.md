@@ -22,6 +22,13 @@
 ![Python](https://img.shields.io/badge/python-3.15-3776AB?logo=python&logoColor=white)
 ![React](https://img.shields.io/badge/react-19-61DAFB?logo=react&logoColor=black)
 
+> [!NOTE]
+> **Disclaimer:** This repository is a LEARNING experiment 👨‍🔬🧪
+>
+> - I try things here that I would not always do in real-life development.
+> - AI agents write most of the code, under the checks in [Process](#process).
+> - The production app is a demo: no real bookings, no uptime promise. Do not enter personal data.
+
 - Production: <https://chb-1027266991110.europe-west1.run.app>
 - API reference (OpenAPI): <https://chb-1027266991110.europe-west1.run.app/api/docs>
 - Work tracking (Jira board `CHB`, sign-in required): <https://islomar.atlassian.net/jira/software/projects/CHB/boards/2>
@@ -33,7 +40,7 @@ The experiment combines two sources:
 - The 540 talk "Del humano en el bucle al desarrollo desatendido": skills, code workflows, an orchestrator, PR scoring, evidence per acceptance criterion.
 - eferro's post [Turning up the dial](https://www.eferro.net/2026/10/turning-up-dial-seeing-forest-while.html): small safe steps, learnings in the repo, rules as checks, `validating` before done.
 
-Delegation rises only as fast as the checks underneath it.
+**The question**: how close can delivery get to fully unattended while the results stay trustworthy? Delegation rises only as fast as the checks underneath it.
 
 ## Quick start
 

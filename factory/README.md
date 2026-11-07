@@ -5,6 +5,8 @@
 - [Factory](#factory)
   - [Acting as the agent](#acting-as-the-agent)
   - [Acting in Jira as the agent](#acting-in-jira-as-the-agent)
+    - [Board rules on transition](#board-rules-on-transition)
+    - [Hook against raw Jira writes](#hook-against-raw-jira-writes)
   - [Automated PR review (shadow mode)](#automated-pr-review-shadow-mode)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -55,7 +57,8 @@ A bad heading, an empty body, a duplicate key or more than 50 issues exit 2 befo
 
 `view` shows a bullet list as lines that start with a dash.
 
-Exit codes: 0 done, 1 Jira refused or failed, 2 usage error, 3 no credential (1Password locked or `op` failed). On 3 the agent stops and reports.
+Exit codes: 0 done, 1 Jira refused or failed, 2 usage error, 3 no credential (1Password locked or `op` failed), 4 a board rule blocks the transition.
+On 3 the agent stops and reports. On 4 the ticket does not move: the agent comments on it and reports.
 
 The account is a CHB project Administrator, not a Member: Jira Free has no Member role.
 It can delete issues and change project and board settings through the REST API.
@@ -69,7 +72,33 @@ The wrapper is the guardrail:
 Do not add a generic request command or a delete command.
 The token itself still has the account's full rights. Anyone who runs `op item get` on it bypasses the wrapper.
 
-`before_transition` in `jira.py` runs before every transition. CHB-108 adds the WIP-limit check there.
+### Board rules on transition
+
+`before_transition` in `jira.py` runs before every transition (CHB-108). It exits 4 and does not move the ticket when:
+
+- the target status is Validating and the description has no section headed "Acceptance criteria (Validating)" with text under it;
+- the target status is Needs human and the description has no section headed "Needs human: owner steps" with text under it;
+- the target column has a max on the board and already holds that many other CHB tickets. The message names the column, the limit and the tickets.
+
+The limits come from `GET /rest/agile/1.0/board/2/configuration` on every call, never from code.
+The count is a JQL search on the column's status ids in project CHB, without the moved ticket.
+Moves within a column, out of a column, or into a column without a max are not limited. A failed board read exits 1 and does not move the ticket.
+After a move out of In Progress that leaves it below its board min, `transition` prints `In Progress is below its minimum (0/1): idle, ask the owner for the next ticket` and exits 0.
+If that count fails, it prints a notice instead and still exits 0: the ticket has moved.
+Two agents that move tickets at the same moment can both pass the check. The owner overrides a limit in the Jira UI, with a comment.
+
+### Hook against raw Jira writes
+
+`.claude/settings.json` runs `factory/hooks/deny_raw_jira_writes.py` before every Bash command of a Claude Code session started in this repository.
+It exits 2, which denies the command, for:
+
+- an `acli jira` command that does not only read. Reads are view, search, list, get and `auth status`. The hook denies any other command, known or not, and `--help` on a write subcommand;
+- `curl`, `wget` or Python calls to `*.atlassian.net` or a `/rest/api` or `/rest/agile` path that send data or use a method other than GET or HEAD.
+
+The hook is a guardrail, not a boundary: it reads the command text only. A script file that calls the API, or a URL hidden in a variable, passes.
+It matches anywhere in the command, so it also denies a commit message that quotes a denied command. Use a message file.
+An error inside the hook denies the command. If `python3` cannot start, the command goes through: Claude Code treats that as a non-blocking error.
+Sessions started in another directory do not load this hook.
 
 ## Automated PR review (shadow mode)
 

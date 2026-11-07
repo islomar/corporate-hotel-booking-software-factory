@@ -27,6 +27,11 @@ Exit codes:
      an issue that could not be ranked)
   2  usage error (also a bad section heading, an empty body, a duplicate rank key)
   3  no credential: 1Password is locked or `op` failed. The agent stops and reports.
+  4  a board rule blocks the transition: the target column is at its WIP limit, or the
+     description lacks the section the target status requires (docs/process/kanban.md).
+     The ticket stays where it is.
+
+`transition` reads the column limits from the board configuration (board 2) on every call.
 """
 
 from __future__ import annotations
@@ -41,6 +46,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 SITE = "https://islomar.atlassian.net"
@@ -52,10 +58,18 @@ KEY_PATTERN = re.compile(rf"^{PROJECT}-[1-9][0-9]*$")
 URL_PATTERN = re.compile(r"https?://[^\s<>()]*[^\s<>().,;:!?'\"]")
 SEARCH_FIELDS = ["summary", "status", "assignee", "issuetype", "parent"]
 RANK_LIMIT = 50  # issues per rank request, the Jira Software limit
+BOARD_ID = 2  # the CHB board; its column configuration holds the WIP limits
+IN_PROGRESS = "In Progress"
+# Target status (casefolded) -> description section it requires (docs/process/kanban.md).
+REQUIRED_SECTIONS = {
+    "validating": "Acceptance criteria (Validating)",
+    "needs human": "Needs human: owner steps",
+}
 
 EXIT_JIRA = 1
 EXIT_USAGE = 2
 EXIT_CREDENTIAL = 3
+EXIT_BLOCKED = 4
 
 
 class JiraError(Exception):
@@ -68,6 +82,28 @@ class UsageError(Exception):
 
 class CredentialError(Exception):
     """The token could not be read. Exit code 3: the agent stops."""
+
+
+class BlockedError(Exception):
+    """A board rule blocks the transition: a full column or a missing section. Exit code 4."""
+
+
+@dataclass(frozen=True)
+class Column:
+    """One column of the board, with its status ids and its WIP limits (None when unset)."""
+
+    name: str
+    status_ids: frozenset[str]
+    min: int | None = None
+    max: int | None = None
+
+
+@dataclass(frozen=True)
+class Move:
+    """What before_transition learned, for after_transition."""
+
+    source: Column | None
+    target: Column | None
 
 
 def read_secret(command: list[str], timeout: int = 60) -> str:
@@ -320,7 +356,8 @@ class Jira:
         )
         return str(created["key"])
 
-    def transition(self, key: str, status: str) -> str:
+    def transition(self, key: str, status: str) -> tuple[str, list[str]]:
+        """Move the issue. Return the status name and notices to print (a column below its minimum)."""
         check_key(key)
         transitions = self.request("GET", f"/rest/api/3/issue/{key}/transitions")["transitions"]
         matches = [t for t in transitions if t["to"]["name"].casefold() == status.casefold()]
@@ -328,9 +365,30 @@ class Jira:
             names = sorted({t["to"]["name"] for t in transitions})
             raise JiraError(f"{key} cannot move to {status!r}. Allowed: {', '.join(names) or 'none'}")
         target = matches[0]["to"]["name"]
-        before_transition(self, key, target)
+        move = before_transition(self, key, target, status_id=str(matches[0]["to"]["id"]))
         self.request("POST", f"/rest/api/3/issue/{key}/transitions", {"transition": {"id": matches[0]["id"]}}, empty_ok=True)
-        return target
+        return target, after_transition(self, key, move)
+
+    def board_columns(self) -> list[Column]:
+        """The columns of the CHB board with their WIP limits. The board is the only source of limits."""
+        config = self.request("GET", f"/rest/agile/1.0/board/{BOARD_ID}/configuration")
+        return [
+            Column(
+                name=str(column["name"]),
+                status_ids=frozenset(str(status["id"]) for status in column.get("statuses", [])),
+                min=_limit(column.get("min")),
+                max=_limit(column.get("max")),
+            )
+            for column in config["columnConfig"]["columns"]
+        ]
+
+    def keys_in(self, column: Column, *, excluding: str) -> list[str]:
+        """Keys of the CHB issues in the column's statuses, without `excluding`."""
+        if not column.status_ids:
+            return []
+        ids = ", ".join(sorted(column.status_ids))
+        jql = f"project = {PROJECT} AND status in ({ids}) AND key != {check_key(excluding)} ORDER BY key ASC"
+        return [str(issue["key"]) for issue in self.search(jql, limit=100)]
 
     def comment(self, key: str, body: str) -> str:
         if not body.strip():
@@ -391,12 +449,88 @@ def _json_object(method: str, path: str, raw: bytes, *, empty_ok: bool) -> dict[
     return data
 
 
-def before_transition(jira: Jira, key: str, status: str) -> None:
-    """Hook point, called with the target status name just before every transition POST.
+def before_transition(jira: Jira, key: str, status: str, *, status_id: str) -> Move:
+    """Called with the target status just before every transition POST. Raise to block the move.
 
-    CHB-108 adds the WIP-limit check here: raise JiraError to block the move.
-    It does nothing yet.
+    Raises BlockedError (exit 4) when the target status needs a description section that is
+    missing, or when the target column holds at least its board maximum of other tickets.
+    A move within one column, out of a column, or into a column without a maximum is never
+    blocked by the limit. A failed read of the board raises JiraError and blocks too.
     """
+    issue = jira.request("GET", f"/rest/api/3/issue/{key}?fields=status,description")["fields"]
+    current_id = str(issue["status"]["id"])
+    if current_id == status_id:
+        return Move(None, None)
+    heading = REQUIRED_SECTIONS.get(status.casefold())
+    if heading and not has_section(issue.get("description"), heading):
+        raise BlockedError(
+            f"{key} cannot move to {status}: its description has no section headed {heading!r}. "
+            f'Write it first: factory/bin/jira section {key} --heading "{heading}" --body-file FILE '
+            "(docs/process/kanban.md)."
+        )
+    columns = jira.board_columns()
+    source = _column_of(columns, current_id)
+    target = _column_of(columns, status_id)
+    if target is None or target == source or target.max is None:
+        return Move(source, target)
+    others = jira.keys_in(target, excluding=key)
+    if len(others) >= target.max:
+        where = source.name if source else issue["status"]["name"]
+        raise BlockedError(
+            f"{key} cannot move to {status}: column {target.name!r} is at its WIP limit "
+            f"({len(others)}/{target.max}): {', '.join(others)}. "
+            f"Leave {key} in {where}, comment on it, tell the owner and start nothing else. "
+            "Only the owner overrides a limit, in the Jira UI, with a comment on the ticket (docs/process/kanban.md)."
+        )
+    return Move(source, target)
+
+
+def after_transition(jira: Jira, key: str, move: Move) -> list[str]:
+    """After a move out of a column with a board minimum, say when that column is below it.
+
+    The minimum is a signal, never a block: a failed count becomes a notice, not an error.
+    The moved key is left out of the count because Jira search can still list it in its old
+    status for a moment.
+    """
+    source = move.source
+    if source is None or source == move.target or source.min is None:
+        return []
+    try:
+        count = len(jira.keys_in(source, excluding=key))
+    except JiraError as error:  # the move is done: report, do not fail it
+        return [f"could not check the {source.name} minimum: {error}"]
+    if count >= source.min:
+        return []
+    notice = f"{source.name} is below its minimum ({count}/{source.min})"
+    if source.name == IN_PROGRESS:
+        notice += ": idle, ask the owner for the next ticket"
+    return [notice]
+
+
+def has_section(description: Any, heading: str) -> bool:
+    """True when the description has a top-level heading with exactly this text and text under it."""
+    content = description.get("content", []) if isinstance(description, dict) else []
+    for start, node in enumerate(content):
+        if not (_is_heading(node) and adf_to_text(node).strip() == heading):
+            continue
+        level = _level(node)
+        for following in content[start + 1 :]:
+            if _is_heading(following) and _level(following) <= level:
+                break
+            if adf_to_text(following).strip():
+                return True
+    return False
+
+
+def _column_of(columns: list[Column], status_id: str) -> Column | None:
+    return next((column for column in columns if status_id in column.status_ids), None)
+
+
+def _limit(value: Any) -> int | None:
+    """A board min or max. Jira leaves the field out when the limit is unset."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
 
 
 def _jira_messages(error: urllib.error.HTTPError) -> str:
@@ -502,7 +636,10 @@ def run(args: argparse.Namespace, jira: Jira) -> None:
     elif args.command == "create":
         print(jira.create(args.parent, args.summary, _read_text(args.description_file)))
     elif args.command == "transition":
-        print(f"{args.key} -> {jira.transition(args.key, args.status)}")
+        target, notices = jira.transition(args.key, args.status)
+        print(f"{args.key} -> {target}")
+        for notice in notices:
+            print(notice)
     elif args.command == "comment":
         print(f"{args.key} comment {jira.comment(args.key, _read_text(args.body_file))}")
     elif args.command == "assign":
@@ -541,6 +678,9 @@ def main(
     except CredentialError as error:
         print(f"jira: no Jira credential: {error}. STOP: do not use another Jira login. Report to the owner.", file=sys.stderr)
         return EXIT_CREDENTIAL
+    except BlockedError as error:
+        print(f"jira: blocked: {error}", file=sys.stderr)
+        return EXIT_BLOCKED
     except JiraError as error:
         print(f"jira: {error}", file=sys.stderr)
         return EXIT_JIRA
