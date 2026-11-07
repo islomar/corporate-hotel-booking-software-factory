@@ -131,7 +131,7 @@ Meaning: the ticket will not be done. This is a valid outcome.
 The person or agent doing the work is the assignee.
 Agent work is assigned to the Claude account ("Claude (CHB agent)").
 
-Agents make every Jira write (create, transition, comment, assign, rank, description section, priority) through `factory/bin/jira`, so Jira history shows the Claude account as the author.
+Agents make every Jira write (create, transition, comment, edit-comment, assign, rank, section, description, priority) through `factory/bin/jira`, so Jira history shows the Claude account as the author.
 `acli` is logged in as the owner and is for the owner only.
 When `factory/bin/jira` fails, the agent stops and reports. It never falls back to `acli`.
 A Claude Code hook denies `acli` writes and direct REST writes to Jira in this repository.

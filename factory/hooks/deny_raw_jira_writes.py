@@ -43,7 +43,7 @@ PYTHON_WRITE = re.compile(
     r"\.(?:post|put|patch|delete)\s*\(|\bmethod\s*=\s*['\"]?(?!GET\b|HEAD\b)\w|\b(?:data|json)\s*=", re.IGNORECASE
 )
 
-WRAPPER = "Use factory/bin/jira (create, transition, comment, assign, rank, section, priority); see CLAUDE.md."
+WRAPPER = "Use factory/bin/jira (create, transition, comment, edit-comment, assign, rank, section, description, priority); see CLAUDE.md."
 
 
 def acli_write(command: str) -> str | None:

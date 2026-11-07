@@ -960,5 +960,201 @@ class MarkdownHeadingTest(unittest.TestCase):
         self.assertLess(text.index("New step."), text.index("Acceptance criteria"))
 
 
+def _text(text: str, *marks: dict[str, Any]) -> dict[str, Any]:
+    node: dict[str, Any] = {"type": "text", "text": text}
+    if marks:
+        node["marks"] = list(marks)
+    return node
+
+
+CODE = {"type": "code"}
+STRONG = {"type": "strong"}
+
+
+class MarkdownTest(unittest.TestCase):
+    """Descriptions, comments and sections are written in Markdown and must render in Jira (CHB-129)."""
+
+    def test_bullet_lines_become_a_bullet_list_everywhere(self) -> None:
+        bullets, = text_to_adf("- one\n- two")["content"]
+
+        self.assertEqual(bullets["type"], "bulletList")
+        self.assertEqual([adf_to_text(item).strip() for item in bullets["content"]], ["one", "two"])
+
+    def test_numbered_lines_become_an_ordered_list_with_continuation_lines(self) -> None:
+        listed, = text_to_adf("1. First.\n   More of first.\n2. Second.")["content"]
+
+        self.assertEqual((listed["type"], listed["attrs"]), ("orderedList", {"order": 1}))
+        first, second = listed["content"]
+        self.assertEqual(first["content"][0]["content"], [_text("First."), {"type": "hardBreak"}, _text("More of first.")])
+        self.assertEqual(adf_to_text(second).strip(), "Second.")
+
+    def test_a_list_split_by_blank_lines_keeps_its_numbers(self) -> None:
+        _, second = text_to_adf("1. a\n\n2. b")["content"]
+
+        self.assertEqual(second["attrs"], {"order": 2})
+
+    def test_backticks_become_code_and_double_stars_bold(self) -> None:
+        paragraph, = text_to_adf("Run `make check` **now**.")["content"]
+
+        self.assertEqual(paragraph["content"], [_text("Run "), _text("make check", CODE), _text(" "), _text("now", STRONG), _text(".")])
+
+    def test_a_url_inside_code_is_not_a_link(self) -> None:
+        paragraph, = text_to_adf("`https://x.y/z`")["content"]
+
+        self.assertEqual(paragraph["content"], [_text("https://x.y/z", CODE)])
+
+    def test_plain_text_view_shows_the_lists_back(self) -> None:
+        doc = text_to_adf("## Work\n\n1. a\n2. b\n\n- c")
+
+        self.assertEqual(adf_to_text(doc), "## Work\n\n1. a\n2. b\n\n- c")
+
+    def test_markdown_survives_a_round_trip(self) -> None:
+        text = "## Goal\n\nRun `make check` for **CHB-1** (#42).\nNext line.\n\n1. a\n   more of a\n2. b\n\n- c\n  more of c\n- d"
+
+        self.assertEqual(text_to_adf(adf_to_text(text_to_adf(text))), text_to_adf(text))
+
+
+STATUS_READ = ("GET", "/rest/api/3/issue/CHB-12?fields=status")
+ME = ("GET", "/rest/api/3/myself")
+COMMENT = "/rest/api/3/issue/CHB-12/comment/10071"
+
+
+def _status(name: str) -> dict[str, Any]:
+    return {"fields": {"status": {"name": name}}}
+
+
+class DescriptionTest(unittest.TestCase):
+    def _write(self, fake: FakeJira, text: str) -> tuple[int, str, str]:
+        with tempfile.NamedTemporaryFile("w") as body:
+            body.write(text)
+            body.flush()
+            return _run(["description", "CHB-12", "--file", body.name], fake)
+
+    def test_refuses_to_drop_the_section_the_status_requires(self) -> None:
+        for status, heading in SECTIONS.items():
+            fake = FakeJira({STATUS_READ: _status(status)})
+            code, _, err = self._write(fake, "## Goal\n\nNew.")
+
+            self.assertEqual(code, 4, status)
+            self.assertIn(heading, err)
+            self.assertEqual(fake.writes(), [], status)
+
+    def test_keeps_a_required_section_when_the_text_has_it(self) -> None:
+        heading = SECTIONS["Validating"]
+        fake = FakeJira({STATUS_READ: _status("Validating"), ("PUT", "/rest/api/3/issue/CHB-12"): None})
+        code, _, _ = self._write(fake, f"## Goal\n\nNew.\n\n## {heading}\n\nAC1 checked.")
+
+        self.assertEqual(code, 0)
+        self.assertEqual(len(fake.writes()), 1)
+
+    def test_replaces_the_whole_description(self) -> None:
+        fake = FakeJira({STATUS_READ: _status("To Do"), ("PUT", "/rest/api/3/issue/CHB-12"): None})
+        with tempfile.NamedTemporaryFile("w") as body:
+            body.write("## Goal\n\nNew.")
+            body.flush()
+            code, out, _ = _run(["description", "CHB-12", "--file", body.name], fake)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(out.strip(), "CHB-12 description set")
+        (method, path, sent), = fake.writes()
+        self.assertEqual((method, path, list(sent["fields"])), ("PUT", "/rest/api/3/issue/CHB-12", ["description"]))
+        self.assertEqual(sent["fields"]["description"]["content"][0], _heading("Goal"))
+
+    def test_an_empty_file_is_refused_before_any_request(self) -> None:
+        fake = FakeJira({})
+        with tempfile.NamedTemporaryFile("w") as body:
+            code, _, _ = _run(["description", "CHB-12", "--file", body.name], fake)
+
+        self.assertEqual(code, 2)
+        self.assertEqual(fake.requests, [])
+
+
+BROWSE = "https://islomar.atlassian.net/browse/"
+PULL = "https://github.com/islomar/corporate-hotel-booking-software-factory/pull/"
+
+
+def _link(text: str, href: str) -> dict[str, Any]:
+    return _text(text, {"type": "link", "attrs": {"href": href}})
+
+
+class ReferenceLinkTest(unittest.TestCase):
+    """Ticket keys and PR numbers in Jira text are links (CHB-129)."""
+
+    def test_ticket_keys_link_to_jira(self) -> None:
+        paragraph, = text_to_adf("See CHB-122, then CHB-7.")["content"]
+
+        self.assertEqual(
+            paragraph["content"],
+            [_text("See "), _link("CHB-122", BROWSE + "CHB-122"), _text(", then "), _link("CHB-7", BROWSE + "CHB-7"), _text(".")],
+        )
+
+    def test_pr_numbers_link_to_github(self) -> None:
+        paragraph, = text_to_adf("PR #44 merged (#42, main 5e51f6a).")["content"]
+
+        self.assertEqual(
+            paragraph["content"],
+            [_link("PR #44", PULL + "44"), _text(" merged ("), _link("#42", PULL + "42"), _text(", main 5e51f6a).")],
+        )
+
+    def test_keys_in_lists_and_headings_link_too(self) -> None:
+        heading, bullets = text_to_adf("## CHB-1\n\n- CHB-2 done")["content"]
+
+        self.assertEqual(heading["content"], [_link("CHB-1", BROWSE + "CHB-1")])
+        self.assertEqual(bullets["content"][0]["content"][0]["content"][0], _link("CHB-2", BROWSE + "CHB-2"))
+
+    def test_lookalikes_stay_text(self) -> None:
+        for text in ("XCHB-12", "CHB-0", "issue #12 here", "CHB-12a", "`CHB-12`"):
+            paragraph, = text_to_adf(text)["content"]
+            links = [n for n in paragraph["content"] if any(m["type"] == "link" for m in n.get("marks", []))]
+            self.assertEqual(links, [], text)
+
+    def test_a_key_inside_a_url_keeps_the_url_link(self) -> None:
+        url = "https://islomar.atlassian.net/browse/CHB-9"
+        paragraph, = text_to_adf(url)["content"]
+
+        self.assertEqual(paragraph["content"], [_link(url, url)])
+
+
+class EditCommentTest(unittest.TestCase):
+    def test_refuses_a_comment_written_by_someone_else(self) -> None:
+        fake = FakeJira({ME: {"accountId": "agent"}, ("GET", COMMENT): {"id": "10071", "author": {"accountId": "owner"}}})
+        with tempfile.NamedTemporaryFile("w") as body:
+            body.write("x")
+            body.flush()
+            code, _, err = _run(["edit-comment", "CHB-12", "10071", "--body-file", body.name], fake)
+
+        self.assertEqual(code, 1)
+        self.assertIn("not written by the agent", err)
+        self.assertEqual(fake.writes(), [])
+
+    def test_replaces_the_body_of_a_comment(self) -> None:
+        fake = FakeJira(
+            {
+                ME: {"accountId": "agent"},
+                ("GET", COMMENT): {"id": "10071", "author": {"accountId": "agent"}},
+                ("PUT", COMMENT): {"id": "10071"},
+            }
+        )
+        with tempfile.NamedTemporaryFile("w") as body:
+            body.write("See CHB-1.")
+            body.flush()
+            code, out, _ = _run(["edit-comment", "CHB-12", "10071", "--body-file", body.name], fake)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(out.strip(), "CHB-12 comment 10071 updated")
+        (_, _, sent), = fake.writes()
+        self.assertEqual(sent["body"]["content"][0]["content"][1], _link("CHB-1", BROWSE + "CHB-1"))
+
+    def test_comment_id_must_be_a_number(self) -> None:
+        fake = FakeJira({})
+        with tempfile.NamedTemporaryFile("w") as body:
+            body.write("x")
+            body.flush()
+            code, _, _ = _run(["edit-comment", "CHB-12", "../worklog", "--body-file", body.name], fake)
+
+        self.assertEqual(code, 2)
+        self.assertEqual(fake.requests, [])
+
+
 if __name__ == "__main__":
     unittest.main()

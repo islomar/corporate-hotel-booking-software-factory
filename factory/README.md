@@ -81,6 +81,8 @@ factory/bin/jira assign CHB-12 --me
 factory/bin/jira rank CHB-12 CHB-14 --before CHB-9   # or --after; up to 50 issues, kept in that order
 factory/bin/jira section CHB-12 --heading "Acceptance criteria (Validating)" --body-file section.txt
 factory/bin/jira priority CHB-12 High   # High, Medium or Low (docs/process/priorities.md)
+factory/bin/jira description CHB-12 --file description.md   # replaces the whole description
+factory/bin/jira edit-comment CHB-12 10071 --body-file comment.md   # the agent's own comments only
 ```
 
 Text files are plain text. Blank lines separate paragraphs and URLs become links.
