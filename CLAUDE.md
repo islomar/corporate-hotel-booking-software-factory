@@ -22,13 +22,14 @@ All work is tracked in Jira space `CHB` (see `TODO.md`). Move tickets only as `d
 - Branch from `main`. Start dependent work after the parent PR merges.
   A PR that must build on an open PR uses `--base <parent-branch>`, never `--base main`. GitHub retargets it to `main` when the parent merges.
 - Push branches and open PRs through `factory/bin/as-agent` (for example `factory/bin/as-agent gh pr create`), never with the owner's login. See ADR-d7b7.
-- Commit only through `factory/bin/as-agent` too. If it fails (for example 1Password is locked), stop and report. Never commit with another git identity, not even locally.
+- Commit only through `factory/bin/as-agent` too. If it fails (for example no 1Password service account token in the keyring, exit code 3), stop and report.
+  Never commit with another git identity, not even locally.
 - Do every Jira write (create, transition, comment, assign, rank, description section) through `factory/bin/jira`. It acts as the Atlassian account "Claude (CHB agent)".
   Never write to Jira with `acli`: its login is the owner's. Read with `factory/bin/jira view` and `factory/bin/jira search`.
   A PreToolUse hook (`.claude/settings.json`, `factory/hooks/deny_raw_jira_writes.py`) blocks `acli jira` writes and `curl`, `wget` or Python writes to the Jira REST API.
   It matches the whole command text: put a commit message or PR body that quotes such a command in a file.
   If `factory/bin/jira transition` exits 4, a board rule blocks the move (WIP limit or missing section). Leave the ticket, comment, and report. See `docs/process/kanban.md`.
-  If `factory/bin/jira` fails (for example 1Password is locked, exit code 3), stop and report.
+  If `factory/bin/jira` fails (for example no 1Password service account token in the keyring, exit code 3), stop and report.
 - Run `make check` before every commit. Gates read exit codes, not output text.
 - One Jira ticket per branch: `CHB-<n>-<slug>`. Every change reaches `main` through a squash-merged PR: the `main` ruleset applies to everyone (`infra/github/ruleset.tf`).
 - Kata design rules: services stay stateless, no circular dependencies between services, data in repositories, packages follow actors and areas.

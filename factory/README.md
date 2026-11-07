@@ -3,6 +3,8 @@
 **Table of Contents** *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Factory](#factory)
+  - [Credentials: the 1Password service account](#credentials-the-1password-service-account)
+    - [Renewing the token](#renewing-the-token)
   - [Acting as the agent](#acting-as-the-agent)
   - [Acting in Jira as the agent](#acting-in-jira-as-the-agent)
     - [Board rules on transition](#board-rules-on-transition)
@@ -15,11 +17,46 @@
 
 Agent workflows, the orchestrator and the notifier live here. Built in phases 3 to 7.
 
+## Credentials: the 1Password service account
+
+`factory/bin/as-agent` and `factory/bin/jira` read their secrets from the 1Password vault `chb-factory` (CHB-97).
+It holds two items: the document `chb-factory-agent.2026-11-06.private-key` (the GitHub App key) and the API credential `chb-jira-claude.api-token` (the Jira email and token).
+
+They read it as the 1Password service account `chb-factory-agent`, which can only read that vault.
+Its token is in the GNOME keyring, unlocked at login:
+
+```sh
+secret-tool lookup service chb-factory key op-service-account-token
+```
+
+`factory/op_service_account.py` reads it on every call and passes it as `OP_SERVICE_ACCOUNT_TOKEN` in the environment of the one `op` subprocess.
+It never reaches the parent shell, the command that as-agent runs, a file or the output.
+`op` then never asks the owner's desktop app, so no approval pop-up appears and the owner's other vaults are out of reach.
+
+Without the token (keyring locked, item absent, `secret-tool` missing) or when `op` fails (token expired or revoked), `jira` exits 3 and `as-agent` exits 3 and runs nothing.
+Neither falls back to the owner's desktop 1Password: that would bring back the pop-ups and the owner's full 1Password rights.
+The agent stops and reports.
+
+The pop-up was also a human check on every read. Without it, any process that runs as the owner's user while the keyring is unlocked can read the two items in `chb-factory`, and nothing else.
+
+### Renewing the token
+
+A service account token can expire. When it expires, every agent commit, push and Jira write stops with exit 3.
+The owner checks the expiry in 1Password (<https://my.1password.com> > Developer > Service accounts > `chb-factory-agent`) and renews it before that date:
+
+1. Create a new token for `chb-factory-agent` in the same place, with the same vault access (`chb-factory`, Read Items only).
+2. In your own terminal, store it under the same attributes; this replaces the old one:
+   `secret-tool store --label="chb-factory 1Password service account" service chb-factory key op-service-account-token`
+3. Check: `factory/bin/jira view CHB-97` exits 0.
+4. Revoke the old token in 1Password.
+
+Ticket: CHB-121.
+
 ## Acting as the agent
 
 `factory/bin/as-agent <command>` runs a command as the GitHub App `chb-factory-agent`:
 `gh` uses a one-hour installation token, git commits are authored by `chb-factory-agent[bot]`, and git pushes over HTTPS with the token.
-The private key is read from 1Password at run time.
+The private key is read at run time from the vault `chb-factory` with the service account (see above).
 
 ```sh
 factory/bin/as-agent git push -u origin CHB-71-agent-token
@@ -29,8 +66,8 @@ factory/bin/as-agent gh pr create --fill
 ## Acting in Jira as the agent
 
 `factory/bin/jira` calls the Jira REST API of `islomar.atlassian.net` as the Claude account ("Claude (CHB agent)"), CHB-107.
-Its email and API token are read from the 1Password item `chb-jira-claude.api-token` (fields `username` and `credential`) on every call.
-It stays inside the Python process: never printed, written to a file or passed to another command.
+Its email and API token are read from the 1Password item `chb-jira-claude.api-token` (fields `username` and `credential`, vault `chb-factory`) on every call, with one `op` call as the service account.
+The Jira token stays inside the Python process: never printed, written to a file or passed to another command.
 The owner's `acli` login is global state and is not touched.
 
 ```sh
@@ -57,7 +94,7 @@ A bad heading, an empty body, a duplicate key or more than 50 issues exit 2 befo
 
 `view` shows a bullet list as lines that start with a dash.
 
-Exit codes: 0 done, 1 Jira refused or failed, 2 usage error, 3 no credential (1Password locked or `op` failed), 4 a board rule blocks the transition.
+Exit codes: 0 done, 1 Jira refused or failed, 2 usage error, 3 no credential (no service account token in the keyring, or `op` failed), 4 a board rule blocks the transition.
 On 3 the agent stops and reports. On 4 the ticket does not move: the agent comments on it and reports.
 
 The account is a CHB project Administrator, not a Member: Jira Free has no Member role.
@@ -70,7 +107,8 @@ The wrapper is the guardrail:
 - it refuses HTTP redirects, so the token is never sent to another host.
 
 Do not add a generic request command or a delete command.
-The token itself still has the account's full rights. Anyone who runs `op item get` on it bypasses the wrapper.
+The Jira token itself still has the Jira account's full rights. Anyone who reads it bypasses the wrapper.
+The 1Password service account narrows who can read it to processes that can read the keyring item, but does not narrow what the Jira token can do.
 
 ### Board rules on transition
 

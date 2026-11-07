@@ -12,8 +12,10 @@ Usage:
   factory/bin/jira section CHB-12 --heading TEXT --body-file FILE
 
 The account email and API token are read from the 1Password item chb-jira-claude.api-token
-(fields username and credential) on every call. The token stays in this process: it is
-never printed, logged, written to a file or passed to another process.
+(fields username and credential, vault chb-factory) on every call, with one `op` call that
+uses the 1Password service account token from the GNOME keyring (op_service_account.py).
+The Jira token stays in this process: it is never printed, logged, written to a file or
+passed to another process.
 
 The account is a CHB project Administrator (Jira Free has no Member role), so this
 wrapper is the guardrail. It only touches issues whose key is CHB-<n>, creates only
@@ -26,7 +28,8 @@ Exit codes:
   1  Jira refused or failed (HTTP error, unknown status, parent is not an epic,
      an issue that could not be ranked)
   2  usage error (also a bad section heading, an empty body, a duplicate rank key)
-  3  no credential: 1Password is locked or `op` failed. The agent stops and reports.
+  3  no credential: no service account token in the keyring (keyring locked, item absent)
+     or `op` failed. The agent stops and reports.
   4  a board rule blocks the transition: the target column is at its WIP limit, or the
      description lacks the section the target status requires (docs/process/kanban.md).
      The ticket stays where it is.
@@ -39,6 +42,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
 import re
 import subprocess
 import sys
@@ -47,13 +51,21 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # python3 -I does not add it
+
+import op_service_account  # noqa: E402
 
 SITE = "https://islomar.atlassian.net"
 PROJECT = "CHB"
 ITEM = "chb-jira-claude.api-token"
-USERNAME_COMMAND = ["op", "item", "get", ITEM, "--fields", "label=username"]
-TOKEN_COMMAND = ["op", "item", "get", ITEM, "--fields", "label=credential", "--reveal"]
+FIELDS = ("username", "credential")
+CREDENTIALS_COMMAND = [
+    "op", "item", "get", ITEM, "--vault", op_service_account.VAULT,
+    "--fields", ",".join(f"label={field}" for field in FIELDS), "--reveal", "--format", "json",
+]  # fmt: skip
 KEY_PATTERN = re.compile(rf"^{PROJECT}-[1-9][0-9]*$")
 URL_PATTERN = re.compile(r"https?://[^\s<>()]*[^\s<>().,;:!?'\"]")
 SEARCH_FIELDS = ["summary", "status", "assignee", "issuetype", "parent"]
@@ -106,25 +118,51 @@ class Move:
     target: Column | None
 
 
-def read_secret(command: list[str], timeout: int = 60) -> str:
+def read_secret(
+    command: list[str],
+    timeout: int = 60,
+    token_reader: Callable[[], str] = op_service_account.read_token,
+    run: Callable[..., Any] = subprocess.run,
+) -> str:
+    """Output of `op` run with the service account token in its environment only."""
     try:
-        result = subprocess.run(  # noqa: S603 - fixed command
-            command, stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout, check=False
+        env = op_service_account.op_env(os.environ, token_reader())
+    except op_service_account.ServiceAccountError as error:
+        raise CredentialError(str(error)) from None
+    try:
+        result = run(  # noqa: S603 - fixed command
+            command, stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout, check=False, env=env
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         raise CredentialError(f"could not run {command[0]}: {type(error).__name__}") from None
-    value = result.stdout.decode().strip()
     if result.returncode != 0:
-        raise CredentialError(f"{command[0]} exited {result.returncode} (is 1Password locked?)")
-    if not value:
-        field = next((arg for arg in command if arg.startswith("label=")), command[-1])
-        raise CredentialError(f"1Password field {field} is empty")
-    return value
+        raise CredentialError(f"{command[0]} exited {result.returncode} (service account token expired or revoked?)")
+    return result.stdout.decode()
+
+
+def parse_credentials(output: str) -> tuple[str, str]:
+    """Email and token from `op item get --format json` output. No value ever reaches a message."""
+    try:
+        fields = json.loads(output)
+    except ValueError:
+        raise CredentialError("op returned output that is not JSON") from None
+    if isinstance(fields, dict):
+        fields = [fields]
+    if not isinstance(fields, list):
+        raise CredentialError("op returned JSON that is not a list of fields")
+    values = {f.get("label"): f.get("value") for f in fields if isinstance(f, dict)}
+    result = []
+    for label in FIELDS:
+        value = values.get(label)
+        if not isinstance(value, str) or not value.strip():
+            raise CredentialError(f"1Password field label={label} is missing or empty")
+        result.append(value.strip())
+    return result[0], result[1]
 
 
 def read_credentials(reader: Callable[[list[str]], str] = read_secret) -> tuple[str, str]:
-    """Email and API token of the agent account, both from the 1Password item, on every call."""
-    return reader(USERNAME_COMMAND), reader(TOKEN_COMMAND)
+    """Email and API token of the agent account, from one read of the 1Password item, on every call."""
+    return parse_credentials(reader(CREDENTIALS_COMMAND))
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):

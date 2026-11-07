@@ -4,8 +4,10 @@
 Usage: factory/bin/as-agent <command> [args...]
 Example: factory/bin/as-agent gh pr create --fill
 
-The App's private key is read from 1Password at run time and never written to the
-repository. The script mints a one-hour installation token scoped to this repository,
+The App's private key is read at run time from the 1Password vault chb-factory, with the
+service account token from the GNOME keyring (op_service_account.py), and never written to
+the repository. The service account token goes only to that `op` call, never to the
+command. Without the token the script exits 3 and runs nothing. The script mints a one-hour installation token scoped to this repository,
 then runs the command with:
 - GH_TOKEN set, so `gh` acts as the App;
 - git author and committer set to the App's bot user;
@@ -15,7 +17,8 @@ The token never reaches stdout. Only the command's own output does.
 
 Environment overrides:
 - AGENT_APP_CLIENT_ID: the App's client ID (public).
-- AGENT_APP_KEY_COMMAND: command that prints the private key.
+- AGENT_APP_KEY_COMMAND: command that prints the private key. It also runs with the
+  service account token in its environment.
 """
 
 from __future__ import annotations
@@ -29,12 +32,20 @@ import sys
 import tempfile
 import time
 import urllib.request
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from pathlib import Path
+from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # python3 -I does not add it
+
+import op_service_account  # noqa: E402
 
 CLIENT_ID = "Iv23li3OLZUlWY7ZMLdr"
 APP_SLUG = "chb-factory-agent"
 REPOSITORY = "islomar/corporate-hotel-booking-software-factory"
-KEY_COMMAND = "op document get chb-factory-agent.2026-11-06.private-key"
+KEY_COMMAND = f"op document get chb-factory-agent.2026-11-06.private-key --vault {op_service_account.VAULT}"
+KEY_TIMEOUT_SECONDS = 60
+EXIT_NO_KEY = 3
 API = "https://api.github.com"
 
 
@@ -54,7 +65,8 @@ def noreply_email(login: str, user_id: int) -> str:
 
 
 def agent_env(base: Mapping[str, str], token: str, bot_login: str, bot_id: int) -> dict[str, str]:
-    env = {k: v for k, v in base.items() if k != "GITHUB_TOKEN"}
+    dropped = {"GITHUB_TOKEN", op_service_account.TOKEN_VARIABLE}
+    env = {k: v for k, v in base.items() if k not in dropped}
     email = noreply_email(bot_login, bot_id)
     env |= {
         "GH_TOKEN": token,
@@ -105,6 +117,39 @@ def _api(method: str, path: str, auth: str, body: object | None = None) -> dict[
         return json.load(response)
 
 
+class AppKeyError(Exception):
+    """The App key could not be read. The message never holds the key or a token."""
+
+
+def read_private_key(
+    key_command: list[str],
+    base_env: Mapping[str, str],
+    token_reader: Callable[[], str] = op_service_account.read_token,
+    run: Callable[..., Any] = subprocess.run,
+) -> bytes:
+    """The App key, from `key_command` run with the service account token in its environment only."""
+    try:
+        env = op_service_account.op_env(base_env, token_reader())
+    except op_service_account.ServiceAccountError as error:
+        raise AppKeyError(str(error)) from None
+    try:
+        result = run(
+            key_command,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=KEY_TIMEOUT_SECONDS,
+            check=False,
+            env=env,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise AppKeyError(f"could not run {key_command[0]}: {type(error).__name__}") from None
+    if result.returncode != 0:
+        raise AppKeyError(f"{key_command[0]} exited {result.returncode} (service account token expired or revoked?)")
+    if not result.stdout.strip():
+        raise AppKeyError(f"{key_command[0]} printed no key")
+    return result.stdout
+
+
 def installation_token(client_id: str, private_key: bytes) -> str:
     app_jwt = _sign(jwt_signing_input(client_id, int(time.time())), private_key)
     installation = _api("GET", f"/repos/{REPOSITORY}/installation", f"Bearer {app_jwt}")
@@ -122,7 +167,11 @@ def main(argv: list[str]) -> int:
         print(__doc__, file=sys.stderr)
         return 2
     key_command = shlex.split(os.environ.get("AGENT_APP_KEY_COMMAND", KEY_COMMAND))
-    private_key = subprocess.run(key_command, capture_output=True, check=True).stdout
+    try:
+        private_key = read_private_key(key_command, os.environ)
+    except AppKeyError as error:
+        print(f"as-agent: no App key: {error}. STOP: do not use another identity. Report to the owner.", file=sys.stderr)
+        return EXIT_NO_KEY
     token = installation_token(os.environ.get("AGENT_APP_CLIENT_ID", CLIENT_ID), private_key)
     bot_login = f"{APP_SLUG}[bot]"
     bot = _api("GET", f"/users/{urllib.request.quote(bot_login)}", f"token {token}")

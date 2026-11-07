@@ -13,6 +13,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import jira
+from op_service_account import ServiceAccountError
 from jira import (
     CredentialError,
     Jira,
@@ -517,30 +518,79 @@ class FailureTest(unittest.TestCase):
             self.assertNotIn(secret, out + err)
 
 
+def _op_output(**values: str) -> str:
+    return json.dumps([{"id": k, "label": k, "type": "STRING", "value": v} for k, v in values.items()])
+
+
 class ReadCredentialsTest(unittest.TestCase):
-    def test_email_and_token_come_from_the_same_1password_item(self) -> None:
+    def test_email_and_token_come_from_one_read_of_the_item_in_the_factory_vault(self) -> None:
         commands: list[list[str]] = []
 
         def reader(command: list[str]) -> str:
             commands.append(command)
-            return "agent@example.com" if "label=username" in command else "tok"
+            return _op_output(username="agent@example.com", credential="tok")
 
         self.assertEqual(read_credentials(reader), ("agent@example.com", "tok"))
-        username, token = commands
-        self.assertEqual(username, ["op", "item", "get", "chb-jira-claude.api-token", "--fields", "label=username"])
-        self.assertEqual(token[:5], username[:5])
-        self.assertIn("label=credential", token)
+        self.assertEqual(
+            commands,
+            [
+                ["op", "item", "get", "chb-jira-claude.api-token", "--vault", "chb-factory",
+                 "--fields", "label=username,label=credential", "--reveal", "--format", "json"],
+            ],
+        )  # fmt: skip
 
-    def test_a_failed_username_read_stops_before_the_token(self) -> None:
-        commands: list[list[str]] = []
+    def test_fields_are_picked_by_label_not_position(self) -> None:
+        output = json.dumps([{"label": "credential", "value": "tok"}, {"label": "username", "value": "a@b.c"}])
+        self.assertEqual(read_credentials(lambda command: output), ("a@b.c", "tok"))
 
-        def reader(command: list[str]) -> str:
-            commands.append(command)
-            raise CredentialError("locked")
+    def test_missing_or_empty_field_is_named_without_values(self) -> None:
+        for output in (_op_output(username="a@b.c"), _op_output(username="a@b.c", credential=" ")):
+            with self.assertRaisesRegex(CredentialError, "label=credential is missing or empty") as caught:
+                read_credentials(lambda command, output=output: output)
+            self.assertNotIn("a@b.c", str(caught.exception))
 
+    def test_output_that_is_not_a_list_of_fields_is_a_credential_error(self) -> None:
+        for output in ("not json", "42", "null"):
+            with self.assertRaises(CredentialError):
+                read_credentials(lambda command, output=output: output)
+
+
+def _completed(returncode: int, stdout: bytes = b"") -> Any:
+    calls: list[dict[str, Any]] = []
+
+    def run(command: list[str], **kwargs: Any) -> Any:
+        calls.append({"command": command, **kwargs})
+        return mock.Mock(returncode=returncode, stdout=stdout)
+
+    run.calls = calls  # type: ignore[attr-defined]
+    return run
+
+
+class ReadSecretTest(unittest.TestCase):
+    def test_op_gets_the_service_account_token_in_its_own_environment_only(self) -> None:
+        run = _completed(0, b"out\n")
+
+        self.assertEqual(read_secret(["op", "x"], token_reader=lambda: "ops_fake", run=run), "out\n")
+        (call,) = run.calls
+        self.assertEqual(call["env"]["OP_SERVICE_ACCOUNT_TOKEN"], "ops_fake")
+        self.assertNotIn("OP_SERVICE_ACCOUNT_TOKEN", jira.os.environ)
+
+    def test_no_token_in_the_keyring_is_a_credential_error_and_op_never_runs(self) -> None:
+        def no_token() -> str:
+            raise ServiceAccountError("no 1Password service account token in the keyring")
+
+        run = _completed(0)
+        with self.assertRaisesRegex(CredentialError, "keyring"):
+            read_secret(["op"], token_reader=no_token, run=run)
+        self.assertEqual(run.calls, [])
+
+    def test_failing_op_is_a_credential_error(self) -> None:
+        with self.assertRaisesRegex(CredentialError, "op exited 1"):
+            read_secret(["op"], token_reader=lambda: "ops_fake", run=_completed(1))
+
+    def test_missing_op_is_a_credential_error(self) -> None:
         with self.assertRaises(CredentialError):
-            read_credentials(reader)
-        self.assertEqual(len(commands), 1)
+            read_secret(["/nonexistent/op"], token_reader=lambda: "ops_fake")
 
 
 def _run_raw(argv: list[str], body: bytes) -> tuple[int, str, str]:
@@ -620,20 +670,6 @@ class NetworkTest(unittest.TestCase):
     def test_redirects_are_refused(self) -> None:
         redirect = jira._NoRedirect().redirect_request(None, None, 302, "Found", {}, "https://elsewhere.example/")
         self.assertIsNone(redirect)
-
-
-class ReadTokenTest(unittest.TestCase):
-    def test_returns_the_stripped_output(self) -> None:
-        self.assertEqual(read_secret(["echo", "tok"]), "tok")
-
-    def test_failing_or_empty_command_is_a_credential_error(self) -> None:
-        for command in (["false"], ["true"], ["/nonexistent/op"]):
-            with self.assertRaises(CredentialError):
-                read_secret(command)
-
-    def test_empty_field_is_named_in_the_error(self) -> None:
-        with self.assertRaisesRegex(CredentialError, "field label=username is empty"):
-            read_secret(["true", "--fields", "label=username"])
 
 
 class AdfTest(unittest.TestCase):
