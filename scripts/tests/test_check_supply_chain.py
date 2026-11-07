@@ -28,6 +28,7 @@ from check_supply_chain import (
     release_age_change,
     update_risks,
 )
+from git_sandbox import isolate_from_outer_repo
 
 HEAD = "a" * 40
 OLD = "b" * 40
@@ -481,11 +482,9 @@ class GitRepoTest(unittest.TestCase):
     """A real repository: base commit on main, head commit on a branch."""
 
     def setUp(self):
-        # Ignore the developer's git config: global hooks would run on every test commit.
-        isolated = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
-        patcher = mock.patch.dict(os.environ, isolated)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        # Ignore the developer's git config (global hooks would run on every test commit)
+        # and the GIT_DIR of a worktree hook (git would write to the outer repository).
+        isolate_from_outer_repo(self)
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.repo = Path(tmp.name)
