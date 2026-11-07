@@ -27,7 +27,9 @@ Events created with the default `GITHUB_TOKEN` start no new workflow runs, so bo
 - A GitHub App, installed only on this repository, acts for the agent and for automation workflows.
 - Permissions: contents, pull requests and workflows read and write; checks, actions and metadata read. No administration.
 - Tokens are short-lived and minted per run. The private key stays in 1Password and in a GitHub Actions secret.
-- The `main` ruleset applies to everyone with no bypass: pull request, required checks `backend`, `frontend`, `e2e`, code-owner review on harness paths.
+- The `main` ruleset applies to everyone except the Admin repository role: pull request, required checks `backend`, `frontend`, `e2e`, code-owner review on harness paths.
+- Amended 2026-11-07 (CHB-119): the Admin role bypasses the `main` ruleset, so the owner can push directly to `main`.
+  Only the owner holds that role. The agent App has no administration permission and stays bound by the ruleset.
 
 ## Alternatives rejected
 
@@ -38,3 +40,5 @@ Events created with the default `GITHUB_TOKEN` start no new workflow runs, so bo
 
 - The owner approves agent PRs as code owner.
 - Merges done by the App trigger CI and deploy.
+- The owner's direct pushes to `main` skip the pull request, the required checks and code-owner review.
+  CI and deploy still run after the push, so an untested commit can reach production.
