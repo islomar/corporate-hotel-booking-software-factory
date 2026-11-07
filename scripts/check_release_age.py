@@ -37,6 +37,7 @@ import sys
 import tomllib
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
@@ -195,9 +196,10 @@ def alert_fixes(alerts: list[dict], manifest_dir: str) -> dict[str, list[tuple[s
         package = dependency.get("package") or {}
         patched = (alert.get("security_vulnerability") or {}).get("first_patched_version") or {}
         folder = PurePosixPath(dependency.get("manifest_path", "")).parent.as_posix()
-        if package.get("ecosystem") != "npm" or folder != manifest_dir or not patched.get("identifier"):
+        name = package.get("name")
+        if package.get("ecosystem") != "npm" or folder != manifest_dir or not name or not patched.get("identifier"):
             continue
-        fixes.setdefault(package["name"], []).append((patched["identifier"], alert.get("number", 0)))
+        fixes.setdefault(name, []).append((patched["identifier"], alert.get("number", 0)))
     return fixes
 
 
@@ -228,9 +230,11 @@ def fetch_open_alerts(repository: str, token: str) -> list[dict]:
     """Open npm alerts, following the Link header (the endpoint uses cursor pagination)."""
     alerts: list[dict] = []
     url: str | None = f"{GITHUB_API}/repos/{repository}/dependabot/alerts?state=open&ecosystem=npm&per_page=100"
-    for _ in range(MAX_ALERT_PAGES):
-        if url is None:
-            return alerts
+    pages = 0
+    while url is not None:
+        if pages == MAX_ALERT_PAGES:
+            raise ValueError(f"more than {MAX_ALERT_PAGES} pages of open alerts")
+        pages += 1
         if not url.startswith(GITHUB_API + "/"):
             raise ValueError(f"unexpected next page URL: {url}")
         headers = {"Accept": "application/vnd.github+json", "Authorization": f"Bearer {token}"}
@@ -243,7 +247,7 @@ def fetch_open_alerts(repository: str, token: str) -> list[dict]:
         alerts.extend(batch)
         found = NEXT_LINK.search(link)
         url = found.group(1) if found else None
-    raise ValueError(f"more than {MAX_ALERT_PAGES} pages of open alerts")
+    return alerts
 
 
 def repository_folder(path: Path) -> str:
@@ -258,7 +262,10 @@ def repository_folder(path: Path) -> str:
     return PurePosixPath(prefix, path.parent.as_posix()).as_posix().rstrip("/") or "."
 
 
-def load_fixes(path: Path, fetch=None) -> dict[str, list[tuple[str, int]]]:
+def load_fixes(
+    path: Path, fetch: Callable[[str, str], list[dict]] | None = None
+) -> dict[str, list[tuple[str, int]]]:
+    # The default is looked up at call time, so tests can replace fetch_open_alerts.
     fetch = fetch or fetch_open_alerts
     if os.environ.get("PR_AUTHOR") != DEPENDABOT:
         return {}

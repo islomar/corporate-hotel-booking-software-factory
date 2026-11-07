@@ -4,6 +4,7 @@ import sys
 import tempfile
 import contextlib
 import io
+import json
 import unittest
 from unittest import mock
 from datetime import UTC, datetime, timedelta
@@ -11,11 +12,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import check_release_age
 from check_release_age import (
     ConfigError,
     Violation,
     alert_fixes,
     check_lockfile,
+    fetch_open_alerts,
     repository_folder,
     load_fixes,
     security_fix_exemptions,
@@ -132,6 +135,12 @@ def young(name, version):
     return Violation(name, version, NOW - timedelta(days=1))
 
 
+DEPENDABOT_ENV = {"GH_TOKEN": "t", "GITHUB_REPOSITORY": "o/r", "PR_AUTHOR": "dependabot[bot]"}
+
+LOCK_WITH_VITE = """{"packages": {"": {},
+  "node_modules/vite": {"version": "8.3.6", "resolved": "https://registry.npmjs.org/vite/-/vite-8.3.6.tgz"}}}"""
+
+
 class SecurityFixTest(unittest.TestCase):
     """A fresh fix for an open Dependabot alert passes the window (CHB-95)."""
 
@@ -142,6 +151,9 @@ class SecurityFixTest(unittest.TestCase):
             alert("other", "1.0.0", manifest="e2e/package-lock.json"),
             alert("django", "5.0.1", ecosystem="pip"),
             alert("nofix", None),
+            {"number": 9, "dependency": {"package": {"ecosystem": "npm"}, "manifest_path": "frontend/package-lock.json"},
+             "security_vulnerability": {"first_patched_version": {"identifier": "1.0.0"}}},
+            "not an alert",
         ]
 
         self.assertEqual(alert_fixes(alerts, "frontend"), {"vite": [("8.3.6", 7), ("9.0.1", 8)]})
@@ -215,16 +227,12 @@ class LoadFixesTest(unittest.TestCase):
         self.assertEqual(self._load(env, fetch)[0], {})
 
 
-DEPENDABOT_ENV = {"GH_TOKEN": "t", "GITHUB_REPOSITORY": "o/r", "PR_AUTHOR": "dependabot[bot]"}
-
-LOCK_WITH_VITE = """{"packages": {"": {},
-  "node_modules/vite": {"version": "8.3.6", "resolved": "https://registry.npmjs.org/vite/-/vite-8.3.6.tgz"}}}"""
 
 
 class CheckLockfileTest(unittest.TestCase):
     """check_lockfile end to end, with the registry and the alerts API replaced."""
 
-    def _check(self, env, alerts):
+    def _check(self, alerts, age=timedelta(days=1), env=DEPENDABOT_ENV):
         calls = []
 
         def fetch(repo, token):
@@ -238,7 +246,7 @@ class CheckLockfileTest(unittest.TestCase):
             lock.write_text(LOCK_WITH_VITE)
             with (
                 mock.patch.dict("os.environ", env, clear=True),
-                mock.patch("check_release_age.fetch_publish_time", return_value=NOW - timedelta(days=1)),
+                mock.patch("check_release_age.fetch_publish_time", return_value=NOW - age),
                 mock.patch("check_release_age.fetch_open_alerts", fetch),
                 mock.patch("check_release_age.repository_folder", return_value="frontend"),
                 contextlib.redirect_stdout(io.StringIO()),
@@ -246,30 +254,67 @@ class CheckLockfileTest(unittest.TestCase):
                 return check_lockfile(lock, None, NOW), calls
 
     def test_a_fresh_fix_for_an_open_alert_passes_on_a_dependabot_pr(self):
-        violations, calls = self._check(DEPENDABOT_ENV, [alert("vite", "8.3.6")])
-
-        self.assertEqual((violations, calls), ([], ["o/r"]))
+        self.assertEqual(self._check([alert("vite", "8.3.6")]), ([], ["o/r"]))
 
     def test_the_same_entry_fails_without_an_alert(self):
-        violations, _ = self._check(DEPENDABOT_ENV, [])
+        violations, _ = self._check([])
 
         self.assertEqual([(v.name, v.version) for v in violations], [("vite", "8.3.6")])
 
     def test_an_old_enough_entry_never_calls_the_api(self):
-        calls = []
-        with tempfile.TemporaryDirectory() as tmp:
-            folder = Path(tmp)
-            (folder / ".npmrc").write_text("min-release-age=7\n")
-            lock = folder / "package-lock.json"
-            lock.write_text(LOCK_WITH_VITE)
-            with (
-                mock.patch.dict("os.environ", DEPENDABOT_ENV, clear=True),
-                mock.patch("check_release_age.fetch_publish_time", return_value=NOW - timedelta(days=30)),
-                mock.patch("check_release_age.fetch_open_alerts", lambda *a: calls.append(a) or []),
-                contextlib.redirect_stdout(io.StringIO()),
-            ):
-                self.assertEqual(check_lockfile(lock, None, NOW), [])
-        self.assertEqual(calls, [])
+        self.assertEqual(self._check([alert("vite", "8.3.6")], age=timedelta(days=30)), ([], []))
+
+
+class FakeResponse(io.BytesIO):
+    def __init__(self, body, link=""):
+        super().__init__(json.dumps(body).encode())
+        self.headers = {"Link": link}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+def next_link(page):
+    return f'<https://api.github.com/repositories/1/dependabot/alerts?after={page}>; rel="next"'
+
+
+class FetchOpenAlertsTest(unittest.TestCase):
+    def _fetch(self, responses):
+        urls = []
+
+        def urlopen(request, timeout):
+            urls.append(request.full_url)
+            return responses.pop(0)
+
+        with mock.patch("urllib.request.urlopen", urlopen):
+            return fetch_open_alerts("o/r", "t"), urls
+
+    def test_follows_the_link_header_to_the_last_page(self):
+        alerts, urls = self._fetch([FakeResponse([{"number": 1}], next_link(2)), FakeResponse([{"number": 2}])])
+
+        self.assertEqual([a["number"] for a in alerts], [1, 2])
+        self.assertTrue(urls[1].endswith("after=2"))
+
+    def test_exactly_the_page_cap_is_fine_one_more_is_an_error(self):
+        cap = check_release_age.MAX_ALERT_PAGES
+        pages = [FakeResponse([], next_link(n)) for n in range(cap - 1)] + [FakeResponse([])]
+        self.assertEqual(self._fetch(pages)[0], [])
+
+        pages = [FakeResponse([], next_link(n)) for n in range(cap + 1)]
+        with self.assertRaises(ValueError):
+            self._fetch(pages)
+
+    def test_refuses_a_next_page_on_another_host(self):
+        evil = '<https://example.com/steal>; rel="next"'
+        with self.assertRaises(ValueError):
+            self._fetch([FakeResponse([], evil)])
+
+    def test_refuses_an_answer_that_is_not_a_list(self):
+        with self.assertRaises(ValueError):
+            self._fetch([FakeResponse({"message": "Bad credentials"})])
 
 
 class RepositoryFolderTest(unittest.TestCase):
