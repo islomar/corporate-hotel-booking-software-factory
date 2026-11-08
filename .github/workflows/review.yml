@@ -300,4 +300,7 @@ jobs:
               output: {title: "Fail", summary: "The gate script produced no verdict. See the workflow run."}}' > "$payload"
           fi
           jq -r '.output.summary' "$payload" >> "$GITHUB_STEP_SUMMARY"
+          # "View more details" opens this run, not the App's homepage (CHB-131).
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          jq --arg url "$run_url" '.details_url = $url' "$payload" > "$payload.tmp" && mv "$payload.tmp" "$payload"
           gh api -X POST "repos/$REPO/check-runs" --input "$payload" > /dev/null
