@@ -31,9 +31,16 @@ Priorities are defined in `priorities.md`. The rank in To Do decides the order o
 The CHB board (board 2) holds the WIP limits: a min and a max per column, set by the owner in the board settings.
 `factory/bin/jira transition` reads them from the board configuration on every move. The code holds no limit.
 
-- Max: a hard block. A move into a column that already holds that many other tickets exits 4 and names the column, the limit and the tickets in it.
-  The ticket does not move. The agent comments on it, tells the owner and starts nothing else.
+A WIP limit stops pulling new work. It never stops the board from recording what already happened (CHB-127).
+
+- Max, starting work: a move from To Do into In Progress exits 4 while In Progress, In Review or Validating holds its max or more.
+  The message names every full column, the limit and the tickets in it.
+  The ticket stays in To Do. The agent comments on it, tells the owner and starts nothing else.
+- Max, Needs human: a move into Needs human exits 4 while that column is full. The ticket stays where it is; the agent comments and tells the owner.
+- Moves into In Review and Validating are never blocked: they record a PR opened or a PR merged. A column can go over its max, and Jira colours it.
+- A move back into In Progress (review asked for changes, a live check failed, the owner answered) is not new work and is never blocked.
 - Moves within one column, out of a column, or into a column without a max are never blocked.
+- The max values live on the board only. This document does not repeat them.
 - Min: a signal only. When a move leaves In Progress below its min, the wrapper prints "idle, ask the owner for the next ticket".
   The agent asks the owner and never pulls a ticket without the owner's go.
 - Owner override: the owner moves the ticket in the Jira UI and writes why in a comment on the ticket.
@@ -67,7 +74,7 @@ Meaning: someone (the agent or the owner) is changing code, infrastructure or do
 - Enter: the worker assigns the ticket to themselves (an agent runs `factory/bin/jira assign CHB-<n> --me`) and creates the branch `CHB-<n>-<slug>` from `main`.
 - Leave to In Review: a pull request is open, `make check` passed locally, and the PR body states what merging changes in plain words.
 - Leave to Needs human: the worker is blocked by a question or a decision only the owner can make.
-- WIP limit: min 1, max 3 (the most agents that run in parallel). See [WIP limits](#wip-limits).
+- WIP limit: a min and a max on the board. The max is the most agents that run in parallel. See [WIP limits](#wip-limits).
 
 ### In Review
 
@@ -76,7 +83,8 @@ Meaning: a pull request waits for review and merge.
 - Enter: the PR is open and linked from the ticket.
 - Leave to Validating: the PR is merged into `main`. CI passed and the required reviews were given.
 - Leave to In Progress: review asked for changes.
-- WIP limit: max 3. When the column is full, the agent reviews, fixes or closes pull requests before it opens new ones (close before open).
+- WIP limit: a max on the board. A full In Review blocks starting work, never opening the PR of work already started.
+  The agent then reviews, fixes or closes pull requests before it starts another ticket.
 
 ### Validating
 
@@ -99,7 +107,8 @@ Meaning: the change is merged and deployed, but nobody has yet confirmed that it
   A passing plan or a green CI run is not evidence of the live result.
 - Leave to In Progress: the check fails. A new or reopened PR fixes it.
 - Some checks need time (for example a background cleanup that runs within a day). The ticket stays in Validating until then.
-- WIP limit: max 3.
+- WIP limit: a max on the board. A full Validating blocks starting work, never recording a merge.
+  The agent then checks live results or tells the owner how to speed them up before it starts another ticket.
 
 ### Needs human
 
@@ -112,7 +121,7 @@ Meaning: the work cannot continue without the owner.
   `factory/bin/jira transition` refuses the move (exit 4) while that section is missing.
 - Leave: the owner answers or acts. The ticket goes back to the status it came from.
 - This status is the top of every notification.
-- WIP limit: max 3, a hard block like the others. When the column is full, the agent leaves the ticket in its status, comments on it, tells the owner and starts nothing else.
+- WIP limit: a max on the board, a hard block on entering. When the column is full, the agent leaves the ticket in its status, comments on it, tells the owner and starts nothing else.
 
 ### Done
 

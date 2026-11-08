@@ -30,7 +30,8 @@ All work is tracked in Jira space `CHB` (see `TODO.md`). Move tickets only as `d
   Never write to Jira with `acli`: its login is the owner's. Read with `factory/bin/jira view` and `factory/bin/jira search`.
   A PreToolUse hook (`.claude/settings.json`, `factory/hooks/deny_raw_jira_writes.py`) blocks `acli jira` writes and `curl`, `wget` or Python writes to the Jira REST API.
   It matches the whole command text: put a commit message or PR body that quotes such a command in a file.
-  If `factory/bin/jira transition` exits 4, a board rule blocks the move (WIP limit or missing section). Leave the ticket, comment, and report. See `docs/process/kanban.md`.
+  If `factory/bin/jira transition` exits 4, a board rule blocks the move: a WIP limit blocks starting work (or entering a full Needs human), or a required section is missing.
+  Leave the ticket, comment, and report. Moves into In Review and Validating are never blocked by a limit. See `docs/process/kanban.md`.
   If `factory/bin/jira` fails (for example no 1Password service account token in the keyring, exit code 3), stop and report.
 - A command for the owner to paste works from any folder: absolute paths, `git -C <repo>`, `make -C <repo>`, or a leading `cd ~/workspace/<repo> &&`.
   A Stop hook (`factory/hooks/check_owner_commands.py`) checks the shell blocks of every reply. See CHB-126.
