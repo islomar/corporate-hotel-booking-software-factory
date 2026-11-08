@@ -35,7 +35,8 @@ A release-age delay keeps those versions out.
 ### Dependabot (`.github/dependabot.yml`)
 
 - Ecosystems: `github-actions`, `uv` (`backend/`), `npm` (`frontend/`, `e2e/`), `docker` (`Dockerfile`), `docker-compose` (`compose.yaml`).
-- Schedule: weekly, Monday 06:00 Europe/Madrid. At most 5 open PRs per block.
+- Schedule: daily (Dependabot runs `daily` Monday to Friday), 06:00 Europe/Madrid. At most 5 open PRs per block.
+  The cooldown keeps fresh releases out; the schedule adds no protection, only delay. Weekly until CHB-135 (2026-11-08).
 - Versioning: `increase` for npm and uv. This is an app: the manifest floor follows the lockfile.
 - Cooldown: 7 days, 14 for majors. GitHub Actions, Docker and Docker Compose support only `default-days`.
 - Groups:

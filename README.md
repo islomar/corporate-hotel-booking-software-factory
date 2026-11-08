@@ -167,4 +167,4 @@ Pushes to `main` run CI. When CI passes, the deploy workflow builds the image, d
 - Setup and factory work is tracked in Jira too. [`TODO.md`](TODO.md) lists the epics.
 - One ticket, one short-lived branch, one pull request. See `docs/decisions/ADR-0faf-short-lived-branches.md`.
 - Merged is not done. See `docs/decisions/ADR-ad3e-definition-of-done.md`.
-- Dependabot updates arrive weekly. Safe ones merge without a person once the setup in `docs/decisions/ADR-ebe6-unattended-dependency-updates.md` is complete.
+- Dependabot updates arrive every weekday. Safe ones merge without a person once the setup in `docs/decisions/ADR-ebe6-unattended-dependency-updates.md` is complete.
