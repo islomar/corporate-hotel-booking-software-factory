@@ -92,6 +92,11 @@ INLINE_PATTERN = re.compile(r"`(?P<code>[^`]+)`|\*\*(?P<bold>[^*]+)\*\*")
 RANK_LIMIT = 50  # issues per rank request, the Jira Software limit
 BOARD_ID = 2  # the CHB board; its column configuration holds the WIP limits
 IN_PROGRESS = "In Progress"
+NEEDS_HUMAN = "Needs human"
+# Columns of started work. Starting a ticket (a move into In Progress from a column that is not
+# started work) is blocked while one of them is at or over its max (CHB-127). Moves into In Review
+# and Validating record a PR or a merge and are never blocked.
+STARTED_WORK = (IN_PROGRESS, "In Review", "Validating")
 # Target status (casefolded) -> description section it requires (docs/process/kanban.md).
 REQUIRED_SECTIONS = {
     "validating": "Acceptance criteria (Validating)",
@@ -641,9 +646,12 @@ def before_transition(jira: Jira, key: str, status: str, *, status_id: str) -> M
     """Called with the target status just before every transition POST. Raise to block the move.
 
     Raises BlockedError (exit 4) when the target status needs a description section that is
-    missing, or when the target column holds at least its board maximum of other tickets.
-    A move within one column, out of a column, or into a column without a maximum is never
-    blocked by the limit. A failed read of the board raises JiraError and blocks too.
+    missing, or when a WIP limit blocks the move (docs/process/kanban.md, CHB-127):
+    - starting work (a move into In Progress from a column that is not started work) is blocked
+      while In Progress, In Review or Validating holds at least its board maximum of other tickets;
+    - a move into Needs human is blocked while Needs human is full.
+    No other move is blocked by a limit: a column can go over its max.
+    A failed read of the board raises JiraError and blocks too.
     """
     issue = jira.request("GET", f"/rest/api/3/issue/{key}?fields=status,description")["fields"]
     current_id = str(issue["status"]["id"])
@@ -659,14 +667,25 @@ def before_transition(jira: Jira, key: str, status: str, *, status_id: str) -> M
     columns = jira.board_columns()
     source = _column_of(columns, current_id)
     target = _column_of(columns, status_id)
-    if target is None or target == source or target.max is None:
+    if target is None or target == source:
         return Move(source, target)
-    others = jira.keys_in(target, excluding=key)
-    if len(others) >= target.max:
+    if target.name == IN_PROGRESS and (source is None or source.name not in (*STARTED_WORK, NEEDS_HUMAN)):
+        limited = [column for column in columns if column.name in STARTED_WORK]
+    elif target.name == NEEDS_HUMAN:
+        limited = [target]
+    else:
+        return Move(source, target)
+    full = []
+    for column in limited:
+        if column.max is None:
+            continue
+        others = jira.keys_in(column, excluding=key)
+        if len(others) >= column.max:
+            full.append(f"column {column.name!r} is at its WIP limit ({len(others)}/{column.max}): {', '.join(others)}")
+    if full:
         where = source.name if source else issue["status"]["name"]
         raise BlockedError(
-            f"{key} cannot move to {status}: column {target.name!r} is at its WIP limit "
-            f"({len(others)}/{target.max}): {', '.join(others)}. "
+            f"{key} cannot move to {status}: {'; '.join(full)}. "
             f"Leave {key} in {where}, comment on it, tell the owner and start nothing else. "
             "Only the owner overrides a limit, in the Jira UI, with a comment on the ticket (docs/process/kanban.md)."
         )

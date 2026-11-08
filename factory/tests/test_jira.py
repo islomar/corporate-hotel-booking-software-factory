@@ -198,54 +198,88 @@ class TransitionTest(unittest.TestCase):
 
 
 class WipLimitTest(unittest.TestCase):
-    """CHB-108: the board's column limits block moves into a full column (exit 4)."""
+    """CHB-108, CHB-127: a full column blocks starting work (exit 4), never recording a PR or a merge."""
 
-    def test_full_column_blocks_with_column_limit_and_tickets(self) -> None:
-        fake = transition_fake("In Progress", {"In Review": ["CHB-1", "CHB-2", "CHB-3"]})
-        code, out, err = _run(["transition", "CHB-12", "In Review"], fake)
+    def test_starting_with_a_full_column_blocks_with_column_limit_and_tickets(self) -> None:
+        for full_column in ["In Progress", "In Review", "Validating"]:
+            with self.subTest(full_column=full_column):
+                fake = transition_fake("To Do", {full_column: ["CHB-1", "CHB-2", "CHB-3"]})
+                code, out, err = _run(["transition", "CHB-12", "In Progress"], fake)
+
+                self.assertEqual(code, 4)
+                self.assertEqual(out, "")
+                self.assertIn(f"column {full_column!r} is at its WIP limit (3/3): CHB-1, CHB-2, CHB-3", err)
+                self.assertIn("Leave CHB-12 in To Do", err)
+                self.assertEqual(fake.writes(), [])
+
+    def test_starting_names_every_full_column(self) -> None:
+        fake = transition_fake("To Do", {"In Review": ["CHB-1", "CHB-2", "CHB-3"], "Validating": ["CHB-4", "CHB-5", "CHB-6"]})
+        code, _, err = _run(["transition", "CHB-12", "In Progress"], fake)
 
         self.assertEqual(code, 4)
-        self.assertEqual(out, "")
-        self.assertIn("column 'In Review' is at its WIP limit (3/3): CHB-1, CHB-2, CHB-3", err)
-        self.assertIn("Leave CHB-12 in In Progress", err)
-        self.assertEqual(fake.writes(), [])
+        self.assertIn("'In Review' is at its WIP limit (3/3): CHB-1, CHB-2, CHB-3", err)
+        self.assertIn("'Validating' is at its WIP limit (3/3): CHB-4, CHB-5, CHB-6", err)
+
+    def test_a_column_over_its_max_blocks_starting_too(self) -> None:
+        fake = transition_fake("To Do", {"Validating": ["CHB-1", "CHB-2", "CHB-3", "CHB-4"]})
+        code, _, err = _run(["transition", "CHB-12", "In Progress"], fake)
+
+        self.assertEqual(code, 4)
+        self.assertIn("(4/3)", err)
 
     def test_count_asks_for_the_column_statuses_in_chb_without_the_ticket(self) -> None:
-        fake = transition_fake("In Progress", {"In Review": ["CHB-1", "CHB-2"]})
-        code, _, _ = _run(["transition", "CHB-12", "In Review"], fake)
+        fake = transition_fake("To Do", {"Validating": ["CHB-1", "CHB-2"]})
+        code, _, _ = _run(["transition", "CHB-12", "In Progress"], fake)
 
         self.assertEqual(code, 0)
-        self.assertEqual(
-            fake.searches()[0], "project = CHB AND status in (10004) AND key != CHB-12 ORDER BY key ASC"
-        )
+        self.assertIn("project = CHB AND status in (10006) AND key != CHB-12 ORDER BY key ASC", fake.searches())
 
-    def test_below_the_limit_moves(self) -> None:
-        fake = transition_fake("In Progress", {"In Review": ["CHB-1", "CHB-2"], "In Progress": ["CHB-5"]})
-        code, out, _ = _run(["transition", "CHB-12", "In Review"], fake)
+    def test_below_the_limits_starts(self) -> None:
+        fake = transition_fake("To Do", {"In Progress": ["CHB-1"], "In Review": ["CHB-2", "CHB-3"], "Validating": ["CHB-4"]})
+        code, out, _ = _run(["transition", "CHB-12", "In Progress"], fake)
 
         self.assertEqual(code, 0)
-        self.assertEqual(out.strip(), "CHB-12 -> In Review")
+        self.assertEqual(out.strip(), "CHB-12 -> In Progress")
         self.assertEqual(len(fake.writes()), 1)
 
     def test_limit_comes_from_the_board_config(self) -> None:
-        board = board_config(**{"In Review": {"max": 1}})
-        fake = transition_fake("In Progress", {"In Review": ["CHB-1"], "In Progress": ["CHB-5"]}, board=board)
-        code, _, err = _run(["transition", "CHB-12", "In Review"], fake)
+        board = board_config(**{"Validating": {"max": 1}})
+        fake = transition_fake("To Do", {"Validating": ["CHB-1"]}, board=board)
+        code, _, err = _run(["transition", "CHB-12", "In Progress"], fake)
 
         self.assertEqual(code, 4)
         self.assertIn("(1/1): CHB-1", err)
 
-    def test_every_max_blocks_including_needs_human_and_in_progress(self) -> None:
-        full = ["CHB-1", "CHB-2", "CHB-3"]
-        for current, target in [("To Do", "In Progress"), ("In Progress", "Needs human"), ("In Review", "Validating")]:
+    def test_recording_a_pr_or_a_merge_is_never_blocked(self) -> None:
+        full = ["CHB-1", "CHB-2", "CHB-3", "CHB-4"]
+        for current, target in [("In Progress", "In Review"), ("In Review", "Validating")]:
             with self.subTest(target=target):
                 description = description_with(*SECTIONS.values())
-                fake = transition_fake(current, {target: full}, description=description)
-                code, _, err = _run(["transition", "CHB-12", target], fake)
+                fake = transition_fake(current, {name: full for name in STATUS_IDS}, description=description)
+                code, out, _ = _run(["transition", "CHB-12", target], fake)
 
-                self.assertEqual(code, 4)
-                self.assertIn(f"column {target!r} is at its WIP limit (3/3)", err)
-                self.assertEqual(fake.writes(), [])
+                self.assertEqual(code, 0)
+                self.assertEqual(out.splitlines()[0], f"CHB-12 -> {target}")
+                self.assertEqual(len(fake.writes()), 1)
+
+    def test_going_back_to_in_progress_is_not_starting_work(self) -> None:
+        full = ["CHB-1", "CHB-2", "CHB-3"]
+        for current in ["In Review", "Validating", "Needs human"]:
+            with self.subTest(current=current):
+                fake = transition_fake(current, {"In Progress": full, "In Review": full, "Validating": full})
+                code, _, _ = _run(["transition", "CHB-12", "In Progress"], fake)
+
+                self.assertEqual(code, 0)
+                self.assertEqual(len(fake.writes()), 1)
+
+    def test_a_full_needs_human_still_blocks(self) -> None:
+        fake = transition_fake("In Progress", {"Needs human": ["CHB-1", "CHB-2", "CHB-3"]}, description=description_with(SECTIONS["Needs human"]))
+        code, _, err = _run(["transition", "CHB-12", "Needs human"], fake)
+
+        self.assertEqual(code, 4)
+        self.assertIn("column 'Needs human' is at its WIP limit (3/3)", err)
+        self.assertIn("Leave CHB-12 in In Progress", err)
+        self.assertEqual(fake.writes(), [])
 
     def test_columns_without_a_max_never_block(self) -> None:
         many = [f"CHB-{n}" for n in range(1, 40)]
@@ -258,26 +292,26 @@ class WipLimitTest(unittest.TestCase):
                 self.assertEqual(fake.searches(), [])
 
     def test_a_move_within_the_same_column_is_never_blocked(self) -> None:
-        board = board_config(**{"In Review": {"max": 1}})
-        board["columnConfig"]["columns"][1]["statuses"].append({"id": "10004"})  # In Progress and In Review together
-        del board["columnConfig"]["columns"][2]
-        fake = transition_fake("In Progress", {"In Progress": ["CHB-1", "CHB-2"]}, board=board)
-        code, _, _ = _run(["transition", "CHB-12", "In Review"], fake)
+        board = board_config(**{"Needs human": {"max": 1}})
+        board["columnConfig"]["columns"][4]["statuses"].append({"id": "3"})  # In Progress and Needs human together
+        del board["columnConfig"]["columns"][1]
+        fake = transition_fake("In Progress", {"Needs human": ["CHB-1", "CHB-2"]}, board=board, description=description_with(SECTIONS["Needs human"]))
+        code, _, _ = _run(["transition", "CHB-12", "Needs human"], fake)
 
         self.assertEqual(code, 0)
         self.assertEqual(fake.searches(), [])
 
     def test_a_status_on_no_column_is_never_blocked(self) -> None:
         board = board_config(**BOARD_LIMITS)
-        del board["columnConfig"]["columns"][2]  # In Review is not on the board
-        fake = transition_fake("To Do", {"In Review": ["CHB-1", "CHB-2", "CHB-3"]}, board=board)
-        code, _, _ = _run(["transition", "CHB-12", "In Review"], fake)
+        del board["columnConfig"]["columns"][4]  # Needs human is not on the board
+        fake = transition_fake("In Progress", {"Needs human": ["CHB-1", "CHB-2", "CHB-3"]}, board=board, description=description_with(SECTIONS["Needs human"]))
+        code, _, _ = _run(["transition", "CHB-12", "Needs human"], fake)
 
         self.assertEqual(code, 0)
 
     def test_an_unreadable_board_blocks_with_exit_1(self) -> None:
-        fake = transition_fake("In Progress", board=500)
-        code, _, err = _run(["transition", "CHB-12", "In Review"], fake)
+        fake = transition_fake("To Do", board=500)
+        code, _, err = _run(["transition", "CHB-12", "In Progress"], fake)
 
         self.assertEqual(code, 1)
         self.assertIn("board/2/configuration: HTTP 500", err)
