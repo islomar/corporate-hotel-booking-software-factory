@@ -264,6 +264,8 @@ class ScratchFolderTest(unittest.TestCase):
             ["git", "commit", "-F", self.SHARED],
             ["gh", "pr", "comment", "61", "--body-file", self.SHARED],
             ["gh", "pr", "edit", "61", f"--body-file={self.SHARED}"],
+            ["gh", "issue", "create", f"--file={self.SHARED}"],
+            ["gh", "api", "repos/o/r/issues/1/comments", "-F", f"body=@{self.SHARED}"],
         ):
             code, err = self._err(argv)
             self.assertEqual(code, 0)
@@ -273,6 +275,9 @@ class ScratchFolderTest(unittest.TestCase):
     def test_a_file_in_a_ticket_subfolder_or_outside_the_scratchpad_gets_none(self) -> None:
         for path in (self.OWN, "/home/me/repo/pr.md", "-"):
             self.assertEqual(self._err(["git", "commit", "-F", path])[1], "", path)
+
+    def test_a_trailing_option_without_a_value_gets_none(self) -> None:
+        self.assertEqual(self._err(["git", "commit", "-F"])[1], "")
 
 
 if __name__ == "__main__":

@@ -78,10 +78,13 @@ def remove_stale(folder: str, now: float, max_age: float = MAX_AGE_SECONDS) -> l
     removed = []
     for name in sorted(os.listdir(folder)):
         path = posixpath.join(folder, name)
-        info = os.lstat(path)
-        if name.endswith(".json") and stat.S_ISREG(info.st_mode) and now - info.st_mtime > max_age:
-            os.unlink(path)
-            removed.append(path)
+        try:
+            info = os.lstat(path)
+            if name.endswith(".json") and stat.S_ISREG(info.st_mode) and now - info.st_mtime > max_age:
+                os.unlink(path)
+                removed.append(path)
+        except FileNotFoundError:  # removed meanwhile, for example by another prune
+            continue
     return removed
 
 
@@ -97,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
         folder = state_dir()
         try:
             removed = remove_stale(folder, time.time())
-        except PermissionError as error:
+        except OSError as error:
             print(f"warn_edit_loops: prune refused: {error}", file=sys.stderr)
             return 1
         print(f"removed {len(removed)} loop-detector state file(s) older than 7 days from {folder}")

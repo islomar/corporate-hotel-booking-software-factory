@@ -189,6 +189,18 @@ class PruneTest(unittest.TestCase):
         self.assertTrue(other.exists())
         self.assertEqual(victim.read_text(), "keep")
 
+    def test_a_file_removed_meanwhile_is_skipped(self) -> None:
+        gone, old = self._file("gone.json", 8), self._file("old.json", 8)
+        real_lstat = os.lstat
+
+        def lstat_after_another_prune(path: str) -> os.stat_result:
+            if path == str(gone):
+                gone.unlink(missing_ok=True)
+            return real_lstat(path)
+
+        with mock.patch.object(hook.os, "lstat", side_effect=lstat_after_another_prune):
+            self.assertEqual(hook.remove_stale(str(self.folder), now=self.NOW), [str(old)])
+
     def test_a_missing_folder_is_not_created(self) -> None:
         missing = Path(self.tmp.name) / "missing"
 

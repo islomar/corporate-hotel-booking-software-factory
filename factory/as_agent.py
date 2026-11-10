@@ -210,6 +210,8 @@ def scratch_warning(argv: list[str]) -> str | None:
         for name in FILE_OPTIONS[1:]:
             if arg.startswith(name + "="):
                 path = arg[len(name) + 1 :]
+        if path and arg == "-F" and "=@" in path:  # `gh api -F key=@file` reads the field from a file
+            path = path.split("=@", 1)[1]
         parts = path.split("/") if path else []
         if "scratchpad" in parts and not any(TICKET_FOLDER.fullmatch(part) for part in parts):
             return (
