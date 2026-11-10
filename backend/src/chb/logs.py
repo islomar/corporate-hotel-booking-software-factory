@@ -12,7 +12,25 @@ from datetime import UTC, datetime
 
 from opentelemetry import trace
 
+from chb.telemetry import HEALTH_PATH
+
 _UVICORN_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
+
+
+class DropHealthCheckAccessLines(logging.Filter):
+    """Drops uvicorn's access line for `GET /api/health`. Every other request still logs.
+
+    Health checks run every few seconds and would fill the logs. Their request metric is
+    recorded by the OpenTelemetry instrumentation, which does not read these lines.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        # uvicorn logs '%s - "%s %s HTTP/%s" %d' with (client, method, path?query, version, status).
+        args = record.args
+        if not isinstance(args, tuple) or len(args) < 3:
+            return True
+        method, path = args[1], args[2]
+        return not (method == "GET" and str(path).split("?", 1)[0] == HEALTH_PATH)
 
 
 class JsonFormatter(logging.Formatter):
@@ -56,3 +74,5 @@ def configure_logging(project_id: str | None, extra_handlers: list[logging.Handl
         logger = logging.getLogger(name)
         logger.handlers = []
         logger.propagate = True
+    # On the logger, not a handler: the stdout line and the OTLP export both lose it.
+    logging.getLogger("uvicorn.access").filters = [DropHealthCheckAccessLines()]
