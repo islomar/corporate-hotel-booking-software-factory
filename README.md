@@ -9,6 +9,7 @@
     - [Local: Grafana](#local-grafana)
     - [Production: Google Cloud console](#production-google-cloud-console)
     - [How export works on Cloud Run](#how-export-works-on-cloud-run)
+  - [Devcontainer](#devcontainer)
   - [Layout](#layout)
   - [Process](#process)
 
@@ -146,10 +147,41 @@ If telemetry setup fails at startup, the app logs one warning and runs without e
 The backend decides sampling itself: health checks (`/api/health`) get request metrics but no traces and no access log line, every other request is traced.
 The sampled flag in an incoming `traceparent` header is ignored; its trace ID is kept.
 
+## Devcontainer
+
+`.devcontainer/` defines a container for agent sessions that run `make check`, with outbound network limited to an allow list.
+It holds Python 3.15, uv, Node 24, Terraform (the version in `infra/github/.terraform-version`), `gh` and Claude Code.
+The firewall pattern comes from Anthropic's [Claude Code reference devcontainer](https://github.com/anthropics/claude-code/tree/main/.devcontainer).
+
+Open it:
+
+- VS Code: install the Dev Containers extension, open the repository, run **Dev Containers: Reopen in Container**.
+- Terminal: `npm install -g @devcontainers/cli`, then `devcontainer up --workspace-folder .` and `devcontainer exec --workspace-folder . make check`.
+
+Open it from a normal clone, not from a git worktree: a worktree's `.git` file points to a host path that does not exist in the container.
+The container runs `npm ci` over the host's `node_modules` when you run `make setup` or `npm ci` inside it.
+
+At every start, `init-firewall.sh` resolves the hosts of `.devcontainer/allowed-hosts.txt`, adds GitHub's published address ranges, and rejects any other outbound traffic.
+Only HTTPS (port 443) to listed hosts and DNS to the container's resolvers get out. IPv6 is dropped.
+`egress.py check` then connects to one allowed host (`registry.npmjs.org`) and one blocked host (`example.com`).
+It exits non-zero if the blocked host connects, or if the allowed host does not.
+To run it again: `python3 -I /usr/local/share/devcontainer/egress.py check`.
+
+Change the allow list:
+
+1. Add one bare host name per line to `.devcontainer/allowed-hosts.txt`, with a comment that names the command that needs it.
+   No scheme, port, path or wildcard.
+2. Run `python3 -I -m unittest discover -s scripts/tests` to validate the file.
+3. Run **Dev Containers: Rebuild Container**. The file is copied into the image, so the agent cannot widen its own list.
+
+Limits: the list holds IP addresses resolved at container start. A host behind a CDN can change address during a long session; restart the container to resolve again.
+A listed host that serves user content (for example `github.com`) can still be used to send data out.
+
 ## Layout
 
 | Path | Content |
 |---|---|
+| `.devcontainer/` | Container for agent sessions, egress allow list |
 | `backend/` | FastAPI app, Python 3.15, uv |
 | `frontend/` | React + TypeScript, Vite |
 | `e2e/` | Playwright tests against the production container |

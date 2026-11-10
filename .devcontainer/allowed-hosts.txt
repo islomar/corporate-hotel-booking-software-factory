@@ -1,0 +1,47 @@
+# Hosts the devcontainer may reach on port 443 (CHB-31). One bare host name per line.
+# init-firewall.sh rejects every other destination. Add a host with a comment that names
+# the command that needs it. README.md, "Devcontainer", says how to apply and test a change.
+
+# npm: `npm ci` in frontend/ and e2e/, scripts/check_release_age.py, Claude Code install
+registry.npmjs.org
+
+# Python: `uv sync --locked` in backend/ (index and wheel files)
+pypi.org
+files.pythonhosted.org
+
+# Terraform: `terraform init` in make check-deps (scripts/check_guard_tests.py)
+registry.terraform.io
+releases.hashicorp.com
+
+# GitHub: git over HTTPS, gh, scripts/check_supply_chain.py, as-agent, provider downloads
+github.com
+api.github.com
+codeload.github.com
+objects.githubusercontent.com
+release-assets.githubusercontent.com
+raw.githubusercontent.com
+
+# Atlassian: factory/bin/jira (REST API of the CHB site)
+islomar.atlassian.net
+
+# 1Password: `op` in as-agent and factory/bin/jira reads the service account vault.
+# The owner's account domain is not known here; my.1password.com is the default.
+my.1password.com
+
+# Anthropic: Claude Code API calls
+api.anthropic.com
+
+# Google APIs used by infra/gcp (terraform plan and apply, gcloud)
+oauth2.googleapis.com
+www.googleapis.com
+sts.googleapis.com
+iam.googleapis.com
+iamcredentials.googleapis.com
+cloudresourcemanager.googleapis.com
+serviceusage.googleapis.com
+cloudbilling.googleapis.com
+billingbudgets.googleapis.com
+run.googleapis.com
+artifactregistry.googleapis.com
+monitoring.googleapis.com
+storage.googleapis.com
