@@ -141,6 +141,8 @@ factory/bin/jira comment CHB-12 --body-file comment.txt   # "-" reads stdin
 factory/bin/jira assign CHB-12 --me
 factory/bin/jira rank CHB-12 CHB-14 --before CHB-9   # or --after; up to 50 issues, kept in that order
 factory/bin/jira section CHB-12 --heading "Acceptance criteria (Validating)" --body-file section.txt
+factory/bin/jira section CHB-12 --heading "Why it matters" --first --body-file why.md   # at the top
+factory/bin/jira sort-todo   # ready High, Medium, Low, then blocked, then epics
 factory/bin/jira priority CHB-12 High   # High, Medium or Low (docs/process/priorities.md)
 factory/bin/jira description CHB-12 --file description.md   # replaces the whole description
 factory/bin/jira edit-comment CHB-12 10071 --body-file comment.md   # the agent's own comments only
@@ -161,7 +163,21 @@ It replaces the section up to the next heading of the same or a higher level, or
 The new section is a level-2 heading and the body. In the body, lines that start with a dash and a space become a bullet list.
 It sends every other part of the description back unchanged. It refuses a description with two such headings.
 It reads, then writes: it overwrites an edit that someone else makes between the two requests.
+With `--first` the section goes at the top instead, and an old copy of it is removed wherever it was.
+The heading "Why it matters" always goes first, with or without `--first` (CHB-148).
 In a section headed "Acceptance criteria (Validating)", each "When:" line needs a "Speed up:" line before the next "When:" line (CHB-133).
+
+`create` refuses a description that does not open with a non-empty "Why it matters" section (exit 2, before 1Password and any request, CHB-148).
+The first node must be a heading with exactly that text, and text must follow before the next heading of the same or a higher level.
+
+`sort-todo` ranks To Do in the order of `docs/process/kanban.md`, To Do (CHB-148): tickets in `top_queue` (they can start) first, High, then Medium, then Low;
+then the other non-epic tickets (blocked by an open ticket); then epics. Each group keeps its rank order. A missing priority counts as Medium.
+Readiness comes from `top_queue` only, so a change to the dependency rule changes the sort too.
+It sends no request when To Do is already sorted. Otherwise it ranks the new top ticket before the old one,
+then the tickets from the first misplaced one, each chunk of up to 50 after the last key ranked.
+`create` runs it after creating the ticket. The search can miss a ticket created a moment ago, so the new ticket is then sorted as the last ticket of To Do.
+A failed sort after `create` prints `could not sort To Do: ...` and exits 0: the ticket exists, so do not create it again; run `sort-todo`.
+The rule decides the order, with no owner exception. The owner moves a ticket by changing its priority, or by ranking it within its priority.
 A bad heading, an empty body, a "When:" line without "Speed up:", a duplicate key or more than 50 issues exit 2 before the wrapper reads 1Password.
 
 `view` shows a bullet list as lines that start with a dash, and each issue link as a line such as `Is blocked by: CHB-146 (To Do)` or `Blocks: CHB-88 (To Do)`.
@@ -182,7 +198,7 @@ It can delete issues and change project and board settings through the REST API.
 The wrapper is the guardrail:
 
 - it accepts only `CHB-<n>` keys and creates only Tasks under a CHB Epic;
-- `rank` changes only the rank of issues, `section` writes only the description field, and `link` only adds "Blocks" links between two CHB issues;
+- `rank` and `sort-todo` change only the rank of issues, `section` writes only the description field, and `link` only adds "Blocks" links between two CHB issues;
 - it has no delete, no project, board, workflow or permission write, and no raw request command;
 - it refuses HTTP redirects, so the token is never sent to another host.
 
@@ -200,15 +216,17 @@ The 1Password service account narrows who can read it to processes that can read
   It is blocked while In Progress, In Review or Validating has a max on the board and holds that many other CHB tickets or more (CHB-127).
   The message names every full column, its count, its limit and its tickets;
 - the target is Needs human and that column has a max and already holds that many other CHB tickets;
-- the move starts work from To Do, passes the limits, and the ticket is not the top ticket of To Do, or is the top ticket without acceptance criteria (CHB-125).
+- the move starts work from To Do, passes the limits, and the ticket is not the top ticket of To Do,
+  or is the top ticket without a "Why it matters" first section or without acceptance criteria (CHB-125, CHB-148).
   The top ticket and acceptance criteria are defined in `docs/process/kanban.md`, To Do.
   One search, `statusCategory != Done ORDER BY Rank ASC`, gives the rank order and the open tickets.
   The search also returns each ticket's `issuelinks`. A ticket is blocked by every ticket on an "is blocked by" link of type "Blocks" that is still open (`open_blockers`, CHB-151).
   "Depends on" text is not read.
-  The top ticket is the first non-epic ticket in To Do that no open ticket blocks. Missing acceptance criteria do not skip it.
+  The check first sorts To Do (`sort-todo`, a rank write before the move) and takes the top ticket from the sorted order, without a second search.
+  The top ticket is the first non-epic ticket in To Do that no open ticket blocks. Missing "Why it matters" or acceptance criteria do not skip it.
   The ticket's own links and criteria come from the read just made.
-  The message names the open blockers (or says the ticket is an epic), names the top ticket and the `rank` command that puts the ticket first,
-  or gives the `section` command that writes the missing "Acceptance criteria".
+  The message names the open blockers (or says the ticket is an epic), names the top ticket and the `priority` and `rank` commands that put the ticket first,
+  or gives the `section` command that writes the missing "Why it matters" or "Acceptance criteria".
   A ticket missing from that search has no known rank and is refused too: try again in a minute.
 
 The limits come from `GET /rest/agile/1.0/board/2/configuration` on every call, never from code.
@@ -218,11 +236,12 @@ A move back into In Progress from In Review, Validating or Needs human is not ne
 A failed board read or open-ticket search exits 1 and does not move the ticket.
 After a move out of a column that leaves it below its board min, `transition` prints `In Progress is below its minimum (0/1)` and exits 0.
 After every move between columns it prints the free In Progress slots and the next top tickets, one per free slot:
-`In Progress 2/3: 1 slot free; next: CHB-123`, `next: CHB-122 (needs acceptance criteria)`, or `next: nothing to start in To Do`.
+`In Progress 2/3: 1 slot free; next: CHB-123`, `next: CHB-122 (needs Why it matters and acceptance criteria)`, or `next: nothing to start in To Do`.
+The next tickets come in the sorted order (`todo_order`), the same order the start check uses.
 It prints no such line when In Progress has no max, or when In Progress, In Review or Validating is at its max.
 The moved ticket is counted in its new column, never in its old one, and is never "next".
 It blocks the To Do tickets it has "Blocks" links to unless it moved to Done or Discarded, whatever the search still shows (CHB-143).
-The start check and this line take the top tickets from one function, `top_queue`.
+The start check and this line take the top tickets from one function, `top_queue`, through `todo_order`.
 If a count fails, `transition` prints a notice instead and still exits 0: the ticket has moved.
 Two agents that move tickets at the same moment can both pass the check. The owner overrides a limit in the Jira UI, with a comment.
 

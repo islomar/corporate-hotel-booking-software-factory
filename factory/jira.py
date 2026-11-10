@@ -9,7 +9,8 @@ Usage:
   factory/bin/jira comment CHB-12 --body-file FILE      (FILE "-" reads stdin)
   factory/bin/jira assign CHB-12 --me | --account-id ID
   factory/bin/jira rank CHB-12 [CHB-13 ...] --before CHB-9 | --after CHB-9
-  factory/bin/jira section CHB-12 --heading TEXT --body-file FILE
+  factory/bin/jira section CHB-12 --heading TEXT --body-file FILE [--first]
+  factory/bin/jira sort-todo                              (ready High, Medium, Low, then blocked, then epics)
   factory/bin/jira priority CHB-12 High|Medium|Low
   factory/bin/jira description CHB-12 --file FILE        (replaces the whole description)
   factory/bin/jira edit-comment CHB-12 10071 --body-file FILE
@@ -28,6 +29,9 @@ writes, and no raw request command. Do not add one. `rank` changes only the rank
 issues. `section` writes only the description field, and changes only one section of it.
 In "Acceptance criteria (Validating)", `section` refuses a "When:" line without a "Speed up:" line.
 `priority` writes only the priority field, and only High, Medium or Low (docs/process/priorities.md).
+`sort-todo` changes only the rank of To Do issues. `create` runs it after creating, and a start from
+To Do runs it before the top-ticket check (CHB-148).
+`create` refuses a description that does not open with a non-empty "Why it matters" section (CHB-148).
 `description` writes only the description field. `edit-comment` changes one comment body.
 `link` creates only "Blocks" links between two different CHB issues, and never removes one.
 
@@ -46,7 +50,8 @@ Exit codes:
      or `op` failed. The agent stops and reports.
   4  a board rule blocks the transition: the target column is at its WIP limit, the
      description lacks the section the target status requires, or a start from To Do is not
-     the top ticket of To Do or has no acceptance criteria (docs/process/kanban.md).
+     the top ticket of To Do, or has no "Why it matters" first section or no acceptance criteria
+     (docs/process/kanban.md).
      The ticket stays where it is.
 
 `transition` reads the column limits from the board configuration (board 2) on every call.
@@ -125,11 +130,17 @@ ACCEPTANCE_PATTERN = re.compile(
 # Open tickets in rank order, for the top of To Do and for the dependencies. Discarded is in the
 # Done status category, so it is not open.
 OPEN_JQL = "statusCategory != Done ORDER BY Rank ASC"
-OPEN_FIELDS = ("status", "issuetype", "description", "issuelinks")
+OPEN_FIELDS = ("status", "issuetype", "description", "issuelinks", "priority")
 # Dependencies are Jira "Blocks" links (CHB-151): inward "is blocked by", outward "blocks". In an issue's
 # issuelinks, an entry of this type with an inwardIssue means "this issue is blocked by inwardIssue".
 BLOCKS = "Blocks"
 OPEN_LIMIT = 1000  # a search answer this long may be cut off; the rank and dependency checks refuse it
+
+# Every ticket opens with this section: the pain, who feels it, the value of solving it (CHB-148).
+WHY_HEADING = "Why it matters"
+# To Do order (CHB-148): ready tickets by priority, then blocked tickets, then epics. A missing or
+# unknown priority sorts as Medium, the default of docs/process/priorities.md.
+PRIORITY_ORDER = {"Highest": 0, "High": 0, "Medium": 1, "Low": 2, "Lowest": 2}
 
 EXIT_JIRA = 1
 EXIT_USAGE = 2
@@ -466,12 +477,13 @@ def check_key(key: str) -> str:
     return key
 
 
-def replace_section(description: dict[str, Any] | None, heading: str, body: str) -> dict[str, Any]:
+def replace_section(description: dict[str, Any] | None, heading: str, body: str, *, first: bool = False) -> dict[str, Any]:
     """Return a copy of the description with the section under `heading` set to `body`.
 
     The section starts at the top-level heading whose text is `heading` and ends before the next
     heading of the same or a higher level, or at the end. It is replaced by a level-2 heading and
     the body. Without such a heading the section is appended. Other nodes are kept as they are.
+    With `first`, the new section goes at the top instead, and the old one is removed wherever it was.
     """
     heading = check_section_input(heading, body)
     doc = description if isinstance(description, dict) and description.get("type") == "doc" else None
@@ -483,16 +495,18 @@ def replace_section(description: dict[str, Any] | None, heading: str, body: str)
     starts = [i for i, node in enumerate(content) if _is_heading(node) and _heading_text(node) == heading]
     if len(starts) > 1:
         raise JiraError(f"the description has {len(starts)} sections headed {heading!r}; fix it by hand")
-    if not starts:
-        content.extend(new)
-    else:
+    if starts:
         start = starts[0]
         level = _level(content[start])
         end = next(
             (i for i in range(start + 1, len(content)) if _is_heading(content[i]) and _level(content[i]) <= level),
             len(content),
         )
-        content[start:end] = new
+        content[start:end] = [] if first else new
+    if first:
+        content[0:0] = new
+    elif not starts:
+        content.extend(new)
     result = dict(doc) if doc else {"type": "doc", "version": 1}
     result["content"] = content
     return result
@@ -542,6 +556,37 @@ def check_link_input(blocked: str, blocker: str) -> None:
             raise UsageError(f"{key!r} is not a {PROJECT} issue key ({PROJECT}-<n>); only CHB tickets are linked")
     if blocked == blocker:
         raise UsageError(f"{blocked} cannot be blocked by itself")
+def why_problem(description: Any) -> str | None:
+    """What is wrong with the description's opening, or None when it opens with a non-empty
+    "Why it matters" section (CHB-148).
+
+    The first node must be a heading (any level) with exactly that text, and a node with text must
+    follow before the next heading of the same or a higher level. Nothing may come before it.
+    """
+    content = description.get("content", []) if isinstance(description, dict) else []
+    opening = content[0] if content else None
+    if not (_is_heading(opening) and _heading_text(opening) == WHY_HEADING):
+        return f"does not start with a section headed {WHY_HEADING!r}"
+    level = _level(opening)
+    for following in content[1:]:
+        if _is_heading(following):
+            if _level(following) <= level:
+                break
+            continue
+        if adf_to_text(following).strip():
+            return None
+    return f"has a {WHY_HEADING!r} section that is empty"
+
+
+def check_why_text(text: str) -> None:
+    """Refuse (UsageError, exit 2) a new description that does not open with "Why it matters"."""
+    problem = why_problem(text_to_adf(text))
+    if problem:
+        raise UsageError(
+            f"the description {problem}. Start it with '## {WHY_HEADING}' and 2 to 5 plain sentences: "
+            "the pain, who feels it (the owner, users of the app, or agents) and the value of solving it "
+            "(docs/process/kanban.md, To Do)"
+        )
 
 
 def check_rank_input(keys: list[str], anchor: str) -> None:
@@ -626,6 +671,7 @@ class Jira:
     def create(self, parent: str, summary: str, description: str, priority: str) -> str:
         check_priority(priority)
         check_summary(summary)
+        check_why_text(description)
         epic = self.request("GET", f"/rest/api/3/issue/{check_key(parent)}?fields=issuetype")
         if epic["fields"]["issuetype"]["name"] != "Epic":
             raise JiraError(f"parent {parent} is a {epic['fields']['issuetype']['name']}, not an Epic")
@@ -680,6 +726,21 @@ class Jira:
         if len(issues) >= OPEN_LIMIT:
             raise JiraError(f"{OPEN_LIMIT} or more open tickets: the search may be cut off, so ranks and dependencies are unknown")
         return issues
+
+    def sort_todo(self, created: dict[str, Any] | None = None) -> TodoOrder:
+        """Sort To Do (apply_todo_order). `created` is a ticket just created, as a search would list it.
+
+        The search can miss a ticket created a moment ago. Jira ranks a new ticket last, so it is
+        then sorted as the last ticket of To Do.
+        """
+        columns = self.board_columns()
+        issues = self.open_issues()
+        to_do = next((column for column in columns if column.name == TO_DO), None)
+        if created is not None and to_do is not None and to_do.status_ids:
+            if created["key"] not in {issue["key"] for issue in issues}:
+                created["fields"]["status"] = {"id": min(to_do.status_ids)}
+                issues.append(created)
+        return apply_todo_order(self, issues, columns)
 
     def keys_in(self, column: Column, *, excluding: str) -> list[str]:
         """Keys of the CHB issues in the column's statuses, without `excluding`."""
@@ -776,11 +837,14 @@ class Jira:
             )
         return True
 
-    def set_section(self, key: str, heading: str, body: str) -> bool:
-        """Set one section of the description. Return False when it already had that content."""
+    def set_section(self, key: str, heading: str, body: str, *, first: bool = False) -> bool:
+        """Set one section of the description. Return False when it already had that content.
+
+        With `first`, or for the "Why it matters" heading, the section goes at the top (CHB-148).
+        """
         check_key(key)
         current = self.request("GET", f"/rest/api/3/issue/{key}?fields=description")["fields"].get("description")
-        updated = replace_section(current, heading, body)
+        updated = replace_section(current, heading, body, first=first or heading.strip() == WHY_HEADING)
         if updated == current:
             return False
         self.request("PUT", f"/rest/api/3/issue/{key}", {"fields": {"description": updated}}, empty_ok=True)
@@ -861,13 +925,16 @@ def before_transition(jira: Jira, key: str, status: str, *, status_id: str) -> M
 
 def check_top_of_to_do(jira: Jira, key: str, fields: dict[str, Any], columns: list[Column]) -> None:
     """Refuse (BlockedError) a start from To Do of a ticket that is not the top ticket of To Do,
-    or of the top ticket while it has no acceptance criteria (docs/process/kanban.md, To Do).
+    or of the top ticket while it has no "Why it matters" first section or no acceptance criteria
+    (docs/process/kanban.md, To Do).
 
     The ticket's own description and links (`fields`) come from the read just made, so a stale
     search answer cannot change its blockers or criteria. Its rank comes from the search.
+    It sorts To Do first (apply_todo_order, CHB-148) and takes the top ticket from the sorted order.
     """
     description = fields.get("description")
     issues = jira.open_issues()
+    order = apply_todo_order(jira, issues, columns, fresh={key: fields})
     blocking = open_blockers(fields, {str(issue["key"]) for issue in issues})
     mine = next((issue for issue in issues if issue["key"] == key), None)
     reason = f"it is blocked by open tickets: {', '.join(blocking)}" if blocking else None
@@ -879,14 +946,23 @@ def check_top_of_to_do(jira: Jira, key: str, fields: dict[str, Any], columns: li
         )
     if mine is None:
         raise BlockedError(f"{key} is missing from the search of open tickets, so its rank is unknown. Try again in a minute.")
-    queue = top_queue(issues, columns, fresh={key: fields})
+    queue = order.ready  # top_queue's answer, in the sorted order
     if key not in queue:  # the search still shows it outside To Do
         raise BlockedError(f"{key} is not in To Do in the search of open tickets yet, so its rank is unknown. Try again in a minute.")
     if queue[0] != key:
+        top = queue[0]
         raise BlockedError(
-            f"{key} is not the top ticket of To Do: {queue[0]} is. Pull {queue[0]}, or, with the owner's go, "
-            f"rank {key} first (factory/bin/jira rank {key} --before {queue[0]}) and try again "
-            "(docs/process/kanban.md, To Do)."
+            f"{key} is not the top ticket of To Do: {top} is. Pull {top}. To start {key} first, with the owner's go, "
+            f"raise its priority (factory/bin/jira priority {key} High) or, when both have the same priority, "
+            f"rank it above {top} (factory/bin/jira rank {key} --before {top}), and try again. "
+            "Every start sorts To Do by priority, so a rank across priorities does not hold (docs/process/kanban.md, To Do)."
+        )
+    problem = why_problem(description)
+    if problem:
+        raise BlockedError(
+            f"{key} cannot start: its description {problem}. Write it first: "
+            f'factory/bin/jira section {key} --heading "{WHY_HEADING}" --first --body-file FILE '
+            "(2 to 5 plain sentences: the pain, who feels it and the value of solving it; docs/process/kanban.md, To Do)."
         )
     if not has_acceptance_criteria(description):
         raise BlockedError(
@@ -955,6 +1031,80 @@ def blockers(fields: dict[str, Any]) -> list[str]:
         if isinstance(link, dict) and (link.get("type") or {}).get("name") == BLOCKS and isinstance(link.get("inwardIssue"), dict)
     ]
     return list(dict.fromkeys(keys))
+
+
+@dataclass(frozen=True)
+class TodoOrder:
+    """The To Do keys in their current rank order and in the order sort-todo wants (CHB-148)."""
+
+    current: list[str]
+    desired: list[str]
+    ready: list[str]  # the top queue (top_queue), in the desired order
+
+    def steps(self) -> list[tuple[list[str], str | None, str | None]]:
+        """Rank requests (keys, before, after) that turn the current order into the desired one.
+
+        Nothing when the order is right. Tickets above the first misplaced one stay. When the top
+        ticket changes, it goes before the old top ticket. Then the tickets from the first one still
+        misplaced follow, in chunks of RANK_LIMIT, each after the last key ranked.
+        """
+        steps: list[tuple[list[str], str | None, str | None]] = []
+        current = self.current
+        if current and current[0] != self.desired[0]:
+            steps.append(([self.desired[0]], current[0], None))
+            current = [self.desired[0], *(key for key in current if key != self.desired[0])]
+        start = next((i for i, (have, want) in enumerate(zip(current, self.desired)) if have != want), None)
+        if start is None:
+            return steps
+        anchor = self.desired[start - 1]
+        for chunk_start in range(start, len(self.desired), RANK_LIMIT):
+            chunk = self.desired[chunk_start : chunk_start + RANK_LIMIT]
+            steps.append((chunk, None, anchor))
+            anchor = chunk[-1]
+        return steps
+
+
+def todo_order(
+    issues: list[dict[str, Any]],
+    columns: Sequence[Column],
+    fresh: dict[str, dict[str, Any]] | None = None,
+    *,
+    moved: tuple[str, Column] | None = None,
+) -> TodoOrder:
+    """The To Do order of docs/process/kanban.md, To Do (CHB-148): tickets that can start (top_queue)
+    first, High, then Medium, then Low; then blocked tickets; then epics. Each group keeps its rank order.
+
+    `issues` is the whole of open_issues(). Readiness comes from top_queue (open_blockers) only, so
+    the dependency rule lives in one place. A missing or unknown priority sorts as Medium. `fresh` and
+    `moved` go to top_queue.
+    """
+    to_do = next((column for column in columns if column.name == TO_DO), None)
+    if to_do is None:
+        return TodoOrder([], [], [])
+    in_to_do = {str(issue["key"]): issue for issue in issues if str(issue["fields"]["status"]["id"]) in to_do.status_ids}
+    current = list(in_to_do)
+    queue = set(top_queue(issues, columns, fresh, moved=moved))
+    ready = sorted((key for key in current if key in queue), key=lambda key: _priority_order(in_to_do[key]))
+    rest = [key for key in current if key not in queue]
+    blocked = [key for key in rest if in_to_do[key]["fields"]["issuetype"]["name"] != "Epic"]
+    epics = [key for key in rest if key not in blocked]
+    return TodoOrder(current, ready + blocked + epics, ready)
+
+
+def _priority_order(issue: dict[str, Any]) -> int:
+    priority = issue["fields"].get("priority")
+    name = priority.get("name") if isinstance(priority, dict) else None
+    return PRIORITY_ORDER.get(str(name), PRIORITY_ORDER["Medium"])
+
+
+def apply_todo_order(
+    jira: Jira, issues: list[dict[str, Any]], columns: Sequence[Column], fresh: dict[str, dict[str, Any]] | None = None
+) -> TodoOrder:
+    """Rank To Do into todo_order, with the rank requests of TodoOrder.steps. No request when sorted."""
+    order = todo_order(issues, columns, fresh)
+    for keys, before, after in order.steps():
+        jira.rank(keys, before=before, after=after)
+    return order
 
 
 def has_acceptance_criteria(description: Any) -> bool:
@@ -1034,12 +1184,15 @@ def _free_slot_notice(jira: Jira, key: str, move: Move) -> list[str]:
             return []
     free = in_progress.max - counts[IN_PROGRESS]
     descriptions = {issue["key"]: issue["fields"].get("description") for issue in issues}
-    queue = [
-        top if has_acceptance_criteria(descriptions[top]) else f"{top} (needs acceptance criteria)"
-        for top in top_queue(issues, move.columns, moved=(key, move.target))[:free]
-    ]
+    queue = [_with_missing_sections(top, descriptions[top]) for top in todo_order(issues, move.columns, moved=(key, move.target)).ready[:free]]
     following = ", ".join(queue) or f"nothing to start in {TO_DO}"
     return [f"{IN_PROGRESS} {counts[IN_PROGRESS]}/{in_progress.max}: {free} slot{'s' if free > 1 else ''} free; next: {following}"]
+
+
+def _with_missing_sections(key: str, description: Any) -> str:
+    """`CHB-7`, or `CHB-7 (needs Why it matters and acceptance criteria)` for what a start would refuse."""
+    missing = [name for name, gap in ((WHY_HEADING, why_problem(description)), ("acceptance criteria", not has_acceptance_criteria(description))) if gap]
+    return f"{key} (needs {' and '.join(missing)})" if missing else key
 
 
 def has_section(description: Any, heading: str) -> bool:
@@ -1173,6 +1326,9 @@ def _parser() -> argparse.ArgumentParser:
     section.add_argument("key")
     section.add_argument("--heading", required=True)
     section.add_argument("--body-file", required=True)
+    section.add_argument("--first", action="store_true", help="put the section at the top (always for 'Why it matters')")
+
+    commands.add_parser("sort-todo", help="rank To Do: ready High, Medium, Low, then blocked tickets, then epics")
 
     edit_comment = commands.add_parser("edit-comment", help="replace the body of one of the agent's comments")
     edit_comment.add_argument("key")
@@ -1210,7 +1366,25 @@ def run(args: argparse.Namespace, jira: Jira) -> None:
             fields = issue["fields"]
             print(f"{issue['key']}\t{fields['status']['name']}\t{_name(fields.get('assignee'))}\t{fields['summary']}")
     elif args.command == "create":
-        print(jira.create(args.parent, args.summary, args.description, args.priority))
+        key = jira.create(args.parent, args.summary, args.description, args.priority)
+        print(key)
+        created = {
+            "key": key,
+            "fields": {"issuetype": {"name": "Task"}, "description": text_to_adf(args.description), "priority": {"name": args.priority}},
+        }
+        # The ticket exists: a failed sort is a notice, never an exit code that invites a second create.
+        # KeyError, TypeError and AttributeError mean an answer of unexpected shape, as in main().
+        try:
+            order = jira.sort_todo(created)
+        except (JiraError, KeyError, TypeError, AttributeError) as error:
+            print(f"could not sort To Do: {error}. Run factory/bin/jira sort-todo")
+        else:
+            if order.steps():
+                print(f"To Do sorted: {', '.join(order.desired)}")
+    elif args.command == "sort-todo":
+        order = jira.sort_todo()
+        state = f"sorted ({len(order.steps())} rank requests)" if order.steps() else "already sorted"
+        print(f"To Do {state}: {', '.join(order.desired) or 'empty'}")
     elif args.command == "transition":
         target, notices = jira.transition(args.key, args.status)
         print(f"{args.key} -> {target}")
@@ -1226,7 +1400,7 @@ def run(args: argparse.Namespace, jira: Jira) -> None:
         jira.rank(args.keys, before=args.before, after=args.after)
         print(f"{' '.join(args.keys)} ranked {'before ' + args.before if args.before else 'after ' + args.after}")
     elif args.command == "section":
-        changed = jira.set_section(args.key, args.heading, args.body)
+        changed = jira.set_section(args.key, args.heading, args.body, first=args.first)
         print(f"{args.key} section {args.heading!r} {'set' if changed else 'unchanged'}")
     elif args.command == "edit-comment":
         jira.edit_comment(args.key, args.comment_id, args.text)
@@ -1265,6 +1439,7 @@ def main(
         if args.command == "create":
             check_summary(args.summary)
             args.description = _read_text(args.description_file)
+            check_why_text(args.description)
         if args.command == "comment":
             args.body = _read_text(args.body_file)
             check_comment_body(args.body)
