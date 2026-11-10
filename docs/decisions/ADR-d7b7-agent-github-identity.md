@@ -35,7 +35,7 @@ Events created with the default `GITHUB_TOKEN` start no new workflow runs, so bo
   - no repository-level Actions secrets exist;
   - the reviewer secrets live in the `reviewer` environment and the deploy runs in `production`; both allow only the `main` branch;
   - the agent App key is a Dependabot secret, given only to Dependabot runs;
-  - Google Cloud trusts GitHub OIDC only for `refs/heads/main` (`infra/gcp/identities.tf`);
+  - Google Cloud trusts GitHub OIDC for `refs/heads/main` (`infra/gcp/identities.tf`), and, read-only, for `pull_request` runs (ADR-3c1f, CHB-81);
   - the default `GITHUB_TOKEN` is read-only, and Actions cannot approve pull requests.
   A live probe on 2026-11-07 (run 42422566406, throwaway branch) confirmed it: the job with `environment: reviewer` was rejected by the environment rule, and the job without it read an empty secret.
   A new secret goes in an environment limited to `main`, never at repository level.
