@@ -194,6 +194,7 @@ It skips epics, prints one line per key and a count, and leaves a ticket with tw
 `tick CHB-<n> <box>` ticks one judgment box: `why`, `trigger`, `decision` or `small`. It changes only that box's `state`; ids and text stay.
 `acceptance` and `unblocked` are verified boxes: `tick` refuses them (exit 2). A box is found by the start of its text (`Box.prefix` in `jira.py`).
 `ready CHB-<n> --trigger "<which trigger and its evidence>"` is the only way from Backlog to the pull list.
+Trigger 5 (the text starts with `5`) is accepted only while Ready is below its board minimum; otherwise `ready` exits 4 and writes nothing (CHB-164).
 It refuses (exit 4, naming each open box) a missing checklist, an unticked judgment box, a description without a "Why it matters" first section,
 no acceptance criteria, or an open blocker. A ticked box does not replace its check. On a ticket outside Backlog it exits 2.
 When every box passes, it ticks the verified boxes, moves the ticket and comments `Moved to Ready. Trigger: <text>`. A failed comment exits 1 and says the ticket moved.
@@ -280,8 +281,10 @@ No other move is limited. Moves into In Review and Validating record a PR or a m
 A move back into In Progress from In Review, Validating or Needs human is not new work and is not limited.
 A failed board read or open-ticket search exits 1 and does not move the ticket.
 After a move out of a column that leaves it below its board min, `transition` prints `In Progress is below its minimum (0/1)` and exits 0.
-For Ready the line also follows a move into it, and says what to do:
-`Ready is below its minimum (<count>/<min>): look for Backlog tickets with a trigger; none qualify means tell the owner`. Nothing is promoted to reach the min.
+Ready is a quota (CHB-164). After any move between columns, while Ready holds fewer than its min, `transition` and `ready` print
+`Ready is below its minimum (<count>/<min>): refill it from Backlog now ...`, then one line per refill candidate, and exit 6 after the move.
+A candidate is a Backlog ticket that is no epic and has no open blocker: `CHB-30 (High): missing Acceptance criteria`, or `complete`. The list is as long as Ready lacks tickets,
+highest priority first, then rank order. Exit 6 means "done, now refill"; it repeats on every later move until Ready is back at its min. A failed read of the count is a notice and exit 0.
 After every move between columns it prints the free In Progress slots and the next top tickets, one per free slot:
 `In Progress 2/3: 1 slot free; next: CHB-123`, `next: CHB-122 (needs Why it matters and acceptance criteria)`, or `next: nothing to start in Ready`. Backlog tickets are never next.
 The next tickets come in the sorted order (`todo_order`), the same order the start check uses.
@@ -330,14 +333,15 @@ The hook reads the column minimums from the board and the open tickets as the ag
 
 - In Progress is below its minimum and Ready has a ticket that can start. The reason names the top ticket and the `transition` command.
   It stays quiet while In Progress, In Review or Validating is at its max.
-- Ready is below its minimum and the reply does not contain "Ready is low" with the result of the Backlog scan.
+- Ready is below its minimum (CHB-164). No reply text passes this; the reason lists the refill candidates, as `transition` does.
 
 It fails open with one line on stderr when Jira or 1Password cannot be reached. It refuses once per session for the same findings: the second stop with the same findings passes
-(state in `<temp dir>/chb-wip-minimums-<uid>/`, folder override `CHB_WIP_MINIMUMS_STATE_DIR`). Like the other hooks it is a guardrail: it reads the reply text only.
+(state in `<temp dir>/chb-wip-minimums-<uid>/`, folder override `CHB_WIP_MINIMUMS_STATE_DIR`). Like the other hooks it is a guardrail: it reads the board, not the reply text (CHB-164).
 
 `factory/bin/jira transition` exits 5 for a WIP limit (a full In Progress, In Review, Validating or Needs human) and 4 for every other board refusal. The exit 5 message names a wait command:
 a bash loop that retries the move every 120 seconds while the exit code is 5. It ends at once on any other code (0 moved; 4 not the top ticket, a missing section or a blocked ticket, printed),
 and after 60 minutes it prints that the slot is still full and exits 1. The agent runs it in the background.
+`transition` and `ready` exit 6 when the move is done and Ready is below its minimum (CHB-164). It is not a refusal: nothing waits for it, and the wait command passes it on as the exit of a finished move.
 
 ## Hook: no personal agent memory
 

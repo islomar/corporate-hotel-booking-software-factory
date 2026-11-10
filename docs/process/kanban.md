@@ -51,16 +51,17 @@ A WIP limit stops pulling new work. It never stops the board from recording what
 - A move back into In Progress (review asked for changes, a live check failed, the owner answered) is not new work and is never blocked.
 - Moves within one column, out of a column, or into a column without a max are never blocked.
 - The max values live on the board only. This document does not repeat them.
-- Min: a signal from the wrapper, enforced by a Stop hook. When a move leaves a column below its min, the wrapper prints `<column> is below its minimum (count/min)`,
-  for example `In Progress is below its minimum (0/1)`.
-  The Stop hook `factory/hooks/check_wip_minimums.py` (CHB-162) reads the board when the agent ends its turn and sends it back once when
-  In Progress is below its min and Ready has a ticket that can start (it names the ticket), or when Ready is below its min and the reply
-  does not report the Backlog scan ("Ready is low" with the result). It fails open when Jira is unreachable and allows the stop on a
+- Min: a signal from the wrapper, enforced by a Stop hook, except for Ready, where it is a quota (see [Ready](#ready)). When a move leaves a column below its min,
+  the wrapper prints `<column> is below its minimum (count/min)`, for example `In Progress is below its minimum (0/1)`.
+  The Stop hook `factory/hooks/check_wip_minimums.py` (CHB-162, CHB-164) reads the board when the agent ends its turn and sends it back once when
+  In Progress is below its min and Ready has a ticket that can start (it names the ticket), or when Ready is below its min (no reply text passes it;
+  the reason lists the refill candidates). It fails open when Jira is unreachable and allows the stop on a
   second refusal for the same board.
 - Waiting for a slot: exit 5 means a WIP limit (exit 4 is every other board refusal). Its message names a wait command.
   The agent runs it in the background (`run_in_background`): it retries the move every 120 seconds while the refusal is exit 5.
   Any other result ends it at once: exit 0 (moved), or a refusal such as exit 4 (not the top ticket, a missing section, a blocked ticket), which it prints.
   After 60 minutes it prints that the slot is still full and exits 1: the agent then tells the owner. The agent never waits longer than an hour without telling the owner.
+- Exit 6: the move is done and Ready is below its min (see [Ready](#ready)). It is neither a refusal (exit 4) nor a full column (exit 5): the agent refills Ready.
 - Free slots: after every move between columns, the wrapper prints the free In Progress slots and the next top tickets of Ready, one per free slot,
   for example `In Progress 2/3: 1 slot free; next: CHB-123` (CHB-125).
   The next tickets follow the sorted order of [Ready](#ready). A Backlog ticket is never next. A ticket that a start would refuse for a missing section is marked:
@@ -97,18 +98,22 @@ Meaning: work that is not needed yet (owner decision, 2026-11-10, CHB-153). It s
 - Enter: any ticket that is not needed now, from any open status. `factory/bin/jira transition CHB-<n> Backlog` needs no trigger.
 - Not sorted, no WIP limit. A Backlog ticket is never the top ticket, never "next", and never starts:
   a move from Backlog into any column other than Ready, Done or Discarded exits 4.
-- Leave to Ready: only with a comment that names the trigger and its evidence. The four triggers:
+- Leave to Ready: only with a comment that names the trigger and its evidence. The five triggers:
   1. something is broken;
   2. the owner asked for it, directly or because it is in the product slice the owner agreed;
   3. it unblocks work in progress;
-  4. the same pain appeared twice.
+  4. the same pain appeared twice;
+  5. Ready is below its minimum (owner decision, 2026-11-10, CHB-164). `factory/bin/jira ready` accepts this trigger, written as
+     `5. Ready is below its minimum (<count>/<min>)`, only while Ready is below its minimum, and refuses it otherwise (exit 4).
+     The refill takes the highest-priority, highest-ranked Backlog tickets that can meet the Definition of Ready.
+     Where a candidate lacks acceptance criteria, the agent writes them first, or splits the ticket. The other boxes of the Definition of Ready still apply.
 
   The ticket's "Why it matters" section states the need and when the need becomes real, never the solution.
   The owner reads it to decide what can move to Ready.
 - Definition of Ready (owner decision, 2026-11-10, CHB-154): every ticket has a section headed "Definition of Ready"
   with six Jira checkboxes, right after "Why it matters". A ticket moves from Backlog to Ready only when every box holds:
   1. Why it matters states the need and when it becomes real, never the solution. The agent ticks it; `ready` checks the section.
-  2. Trigger named with evidence: one of the four triggers above. The agent ticks it; `ready` requires the trigger text and posts it.
+  2. Trigger named with evidence: one of the five triggers above. The agent ticks it; `ready` requires the trigger text and posts it.
   3. Acceptance criteria that can be checked (see [Ready](#ready)). `ready` verifies the section and ticks the box.
   4. Not blocked: every "is blocked by" ticket is Done or Discarded. `ready` verifies the links and ticks the box.
   5. No owner decision pending (money, lock-in, public exposure, deletion), or its decision ticket is Done.
@@ -178,11 +183,12 @@ Ready was named To Do until 2026-11-10 (CHB-153). The rules below apply to it un
 - WIP limit (owner decision, 2026-11-10, CHB-157): a min and a max on the board. Epics never count toward any column limit: the board shows no epic as a card.
   - Max: a move into Ready (`ready`, or a move back) exits 4 while Ready holds its max. The message names the tickets in Ready.
     To make room, the agent moves the least needed ticket back to Backlog (`factory/bin/jira transition CHB-<n> Backlog`), within the limits.
-  - Min: not a quota. After a move that leaves Ready below its min, the wrapper prints
-    `Ready is below its minimum (count/min): look for Backlog tickets with a trigger; none qualify means tell the owner`.
-    The agent looks for Backlog tickets with a real trigger. If none has one, it tells the owner "Ready is low, nothing in Backlog has a trigger".
-    It never moves a ticket to Ready only to reach the min.
-    The Stop hook `factory/hooks/check_wip_minimums.py` refuses to end the turn while Ready is below its min and the reply does not report this scan.
+  - Min: a quota (owner decision, 2026-11-10, CHB-164). Ready always holds its min. A `factory/bin/jira` move between columns that leaves Ready below its min
+    prints `Ready is below its minimum (count/min): refill it from Backlog now ...` and the refill candidates (key, priority, missing sections), then exits 6.
+    The move is done; exit 6 repeats until Ready is back at its min. The agent refills with trigger 5 (see [Backlog](#backlog)):
+    the highest-priority, highest-ranked Backlog tickets that can meet the Definition of Ready. It writes missing acceptance criteria, or splits a ticket, first.
+    When no Backlog ticket can meet the Definition of Ready, the agent tells the owner.
+    The Stop hook `factory/hooks/check_wip_minimums.py` refuses to end the turn while Ready is below its min. A reply that says "Ready is low" does not pass.
 
 ### In Progress
 

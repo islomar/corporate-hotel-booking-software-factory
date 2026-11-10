@@ -3250,7 +3250,7 @@ class ReadyCommandTest(unittest.TestCase):
 # CHB-157: the Ready limits and the Expedite lane.
 READY_LIMITS = {**BOARD_LIMITS, "Ready": {"min": 3, "max": 10}}
 TEN = [f"CHB-{n}" for n in range(1, 11)]
-BELOW_READY = "look for Backlog tickets with a trigger; none qualify means tell the owner"
+BELOW_READY = "refill it from Backlog now"
 
 
 def ready_board(**limits: dict[str, int]) -> dict[str, Any]:
@@ -3330,15 +3330,22 @@ class EpicsInStartedWorkTest(unittest.TestCase):
         self.assertIn("In Progress 1/3: 2 slots free; next: nothing to start in To Do", out.splitlines())
 
 
-class ReadyMinimumTest(unittest.TestCase):
-    """CHB-157 AC2: a move that leaves Ready below its board min prints the signal line; nothing is promoted."""
+def _refill_headline(out: str, count: int) -> str:
+    """The first line of the refill notice, for `count` of 3 in Ready."""
+    (line,) = [line for line in out.splitlines() if line.startswith(f"Ready is below its minimum ({count}/3)")]
+    return line
 
-    def test_leaving_ready_below_its_min_prints_the_signal(self) -> None:
+
+class ReadyMinimumTest(unittest.TestCase):
+    """CHB-164: a move that leaves Ready below its board min prints the refill notice and exits 6 after the move."""
+
+    def test_leaving_ready_below_its_min_exits_6_after_the_move(self) -> None:
         fake = transition_fake("Ready", {"Ready": ["CHB-12", "CHB-1"]}, board=ready_board(), state="after")
         code, out, err = _run(["transition", "CHB-12", "Backlog"], fake)
 
-        self.assertEqual(code, 0, err)
-        self.assertIn(f"Ready is below its minimum (1/3): {BELOW_READY}", out.splitlines())
+        self.assertEqual(code, 6, err)
+        self.assertIn(BELOW_READY, _refill_headline(out, 1))
+        self.assertEqual(out.splitlines()[0], "CHB-12 -> Backlog")
         self.assertEqual(len(fake.writes()), 1)
 
     def test_epics_do_not_count_toward_the_min(self) -> None:
@@ -3346,29 +3353,192 @@ class ReadyMinimumTest(unittest.TestCase):
         fake = transition_fake("Ready", {"Ready": ["CHB-12", *epics]}, board=ready_board(), state="after", epics=epics)
         code, out, _ = _run(["transition", "CHB-12", "Backlog"], fake)
 
-        self.assertEqual(code, 0)
-        self.assertIn(f"Ready is below its minimum (0/3): {BELOW_READY}", out.splitlines())
+        self.assertEqual(code, 6)
+        _refill_headline(out, 0)
 
-    def test_a_move_into_ready_that_leaves_it_below_its_min_prints_the_signal(self) -> None:
+    def test_a_move_into_ready_that_leaves_it_below_its_min_exits_6(self) -> None:
         fake = ready_fake(board=ready_board(), by_status={"Ready": ["CHB-1"]})
         code, out, err = _run(["ready", "CHB-12", "--trigger", "1. broken"], fake)
 
-        self.assertEqual(code, 0, err)
-        self.assertIn(f"Ready is below its minimum (2/3): {BELOW_READY}", out.splitlines())
+        self.assertEqual(code, 6, err)
+        _refill_headline(out, 2)
+        self.assertIn(MOVE_PATH, _write_paths(fake))
 
-    def test_no_signal_while_ready_holds_its_min(self) -> None:
+    def test_a_move_that_brings_ready_to_its_min_exits_0(self) -> None:
+        fake = ready_fake(board=ready_board(), by_status={"Ready": ["CHB-1", "CHB-2"]})
+        code, out, err = _run(["ready", "CHB-12", "--trigger", "1. broken"], fake)
+
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("minimum", out)
+
+    def test_no_notice_while_ready_holds_its_min(self) -> None:
         fake = transition_fake("Ready", {"Ready": ["CHB-12", "CHB-1", "CHB-2", "CHB-3"]}, board=ready_board(), state="after")
         code, out, _ = _run(["transition", "CHB-12", "Backlog"], fake)
 
         self.assertEqual(code, 0)
         self.assertNotIn("minimum", out)
 
-    def test_other_columns_keep_the_plain_signal(self) -> None:
-        fake = transition_fake("In Progress", {"In Progress": ["CHB-12"]}, board=ready_board(), state="after")
+    def test_a_move_that_does_not_touch_ready_exits_6_while_ready_is_below_its_min(self) -> None:
+        fake = transition_fake("In Progress", {"In Progress": ["CHB-12"], "Ready": ["CHB-1"]}, board=ready_board(), state="after")
+        code, out, _ = _run(["transition", "CHB-12", "In Review"], fake)
+
+        self.assertEqual(code, 6)
+        self.assertEqual(out.splitlines()[0], "CHB-12 -> In Review")
+        _refill_headline(out, 1)
+
+    def test_a_move_that_does_not_touch_ready_exits_0_while_ready_holds_its_min(self) -> None:
+        by_status = {"In Progress": ["CHB-12"], "Ready": ["CHB-1", "CHB-2", "CHB-3"]}
+        fake = transition_fake("In Progress", by_status, board=ready_board(), state="after")
         code, out, _ = _run(["transition", "CHB-12", "In Review"], fake)
 
         self.assertEqual(code, 0)
         self.assertIn("In Progress is below its minimum (0/1)", out.splitlines())
+
+    def test_a_failed_read_is_a_notice_and_the_move_stands(self) -> None:
+        fake = ready_fake(board=ready_board(), by_status={"Ready": ["CHB-1"]})
+        real = fake.routes[("POST", SEARCH)]
+
+        def open_search_fails(body: dict[str, Any]) -> Any:
+            if "statusCategory" in body["jql"]:
+                raise jira.JiraError("search is down")
+            return real(body)
+
+        fake.routes[("POST", SEARCH)] = open_search_fails
+        code, out, _ = _run(["ready", "CHB-12", "--trigger", "1. broken"], fake)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(out.splitlines()[0], "CHB-12 -> Ready")
+        self.assertIn("could not check the Ready minimum: search is down", out)
+
+
+def backlog_fake(
+    backlog: list[str],
+    *,
+    descriptions: dict[str, Any] | None = None,
+    priorities: dict[str, str | None] | None = None,
+    links: dict[str, list[dict[str, Any]]] | None = None,
+    epics: tuple[str, ...] = (),
+    ready: tuple[str, ...] = ("CHB-1",),
+) -> FakeJira:
+    """CHB-12 leaves Ready; `ready` stays there; `backlog` holds the refill candidates."""
+    return transition_fake(
+        "Ready",
+        {"Ready": ["CHB-12", *ready], "Backlog": backlog},
+        board=ready_board(),
+        state="after",
+        descriptions=descriptions,
+        priorities=priorities,
+        links=links,
+        epics=epics,
+    )
+
+
+class RefillCandidatesTest(unittest.TestCase):
+    """CHB-164: the notice lists the Backlog tickets that can meet the Definition of Ready: key, priority, missing sections."""
+
+    def candidates(self, fake: FakeJira) -> list[str]:
+        code, out, err = _run(["transition", "CHB-12", "Backlog"], fake)
+        self.assertEqual(code, 6, err)
+        return [line for line in out.splitlines() if line.startswith("  ")]
+
+    def test_highest_priority_first_then_rank_order(self) -> None:
+        keys = ["CHB-20", "CHB-21", "CHB-22", "CHB-23"]
+        fake = backlog_fake(
+            keys,
+            priorities={"CHB-20": "Low", "CHB-21": "High", "CHB-22": "Medium", "CHB-23": "High"},
+            descriptions={key: dor_description() for key in keys},
+        )
+
+        self.assertEqual(self.candidates(fake), ["  CHB-21 (High): complete", "  CHB-23 (High): complete"])
+
+    def test_lists_as_many_as_ready_lacks(self) -> None:
+        keys = ["CHB-20", "CHB-21", "CHB-22", "CHB-23"]
+        fake = backlog_fake(keys, ready=(), descriptions={key: dor_description() for key in keys})
+
+        self.assertEqual(len(self.candidates(fake)), 3)
+
+    def test_names_the_missing_sections(self) -> None:
+        fake = backlog_fake(
+            ["CHB-20", "CHB-21"],
+            descriptions={"CHB-20": dor_description(acceptance=False), "CHB-21": doc("A bare description.")},
+        )
+
+        self.assertEqual(
+            self.candidates(fake),
+            [
+                "  CHB-20 (Medium): missing Acceptance criteria",
+                "  CHB-21 (Medium): missing Why it matters, Acceptance criteria, Definition of Ready",
+            ],
+        )
+
+    def test_leaves_out_epics_and_blocked_tickets(self) -> None:
+        blocked_by = [{"type": {"name": "Blocks"}, "inwardIssue": {"key": "CHB-21"}}]
+        keys = ["CHB-20", "CHB-21", "CHB-22"]
+        fake = backlog_fake(keys, epics=("CHB-20",), links={"CHB-22": blocked_by}, descriptions={key: dor_description() for key in keys})
+
+        self.assertEqual(self.candidates(fake), ["  CHB-21 (Medium): complete"])
+
+    def test_never_lists_the_ticket_just_moved(self) -> None:
+        fake = backlog_fake(["CHB-12", "CHB-20"], descriptions={"CHB-20": dor_description()})
+
+        self.assertEqual(self.candidates(fake), ["  CHB-20 (Medium): complete"])
+
+    def test_says_so_when_no_ticket_can_meet_the_definition_of_ready(self) -> None:
+        self.assertEqual(
+            self.candidates(backlog_fake([])),
+            ["  none: no Backlog ticket can meet the Definition of Ready; tell the owner"],
+        )
+
+
+class RefillTriggerTest(unittest.TestCase):
+    """CHB-164: `ready` accepts trigger 5 only while Ready is below its minimum."""
+
+    TRIGGER = ["--trigger", "5. Ready is below its minimum (1/3)"]
+
+    def test_accepted_while_ready_is_below_its_min(self) -> None:
+        fake = ready_fake(board=ready_board(), by_status={"Ready": ["CHB-1"]})
+        code, out, err = _run(["ready", "CHB-12", *self.TRIGGER], fake)
+
+        self.assertEqual(code, 6, err)
+        self.assertEqual(out.splitlines()[0], "CHB-12 -> Ready")
+        self.assertEqual(_comments(fake), ["Moved to Ready. Trigger: 5. Ready is below its minimum (1/3)"])
+
+    def test_refused_when_ready_holds_its_min(self) -> None:
+        fake = ready_fake(board=ready_board(), by_status={"Ready": ["CHB-1", "CHB-2", "CHB-3"]})
+        code, out, err = _run(["ready", "CHB-12", *self.TRIGGER], fake)
+
+        self.assertEqual(code, 4)
+        self.assertEqual(out, "")
+        self.assertIn("trigger 5 (Ready is below its minimum) does not hold: Ready holds 3 of its minimum 3", err)
+        self.assertEqual(fake.writes(), [])
+
+    def test_epics_do_not_make_ready_reach_its_min(self) -> None:
+        epics = ("CHB-90", "CHB-91")
+        fake = ready_fake(board=ready_board(), by_status={"Ready": ["CHB-1", *epics]}, epics=epics)
+        code, _, err = _run(["ready", "CHB-12", *self.TRIGGER], fake)
+
+        self.assertEqual(code, 6, err)
+
+    def test_refused_when_the_board_has_no_ready_minimum(self) -> None:
+        fake = ready_fake()
+        code, _, err = _run(["ready", "CHB-12", *self.TRIGGER], fake)
+
+        self.assertEqual(code, 4)
+        self.assertIn("needs a Ready minimum", err)
+        self.assertEqual(fake.writes(), [])
+
+    def test_the_other_triggers_work_at_the_min(self) -> None:
+        fake = ready_fake(board=ready_board(), by_status={"Ready": ["CHB-1", "CHB-2", "CHB-3"]})
+        code, _, err = _run(["ready", "CHB-12", "--trigger", "2. the owner asked"], fake)
+
+        self.assertEqual(code, 0, err)
+
+    def test_only_a_leading_5_names_trigger_5(self) -> None:
+        self.assertFalse(jira.is_refill_trigger("52 tickets failed"))
+        self.assertTrue(jira.is_refill_trigger("5. Ready is below its minimum"))
+        self.assertTrue(jira.is_refill_trigger(" 5: refill"))
+        self.assertFalse(jira.is_refill_trigger("2. the owner asked"))
+        self.assertFalse(jira.is_refill_trigger(None))
 
 
 EXPEDITE = ["--expedite", "production bug: bookings fail with HTTP 500 since 10:02, see the deploy log"]
