@@ -1,6 +1,6 @@
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
-**Table of Contents** *generated with [DocToc](https://github.com/thlorenz/doctoc)*
+## Contents
 
 - [Factory](#factory)
   - [Credentials: the 1Password service account](#credentials-the-1password-service-account)
@@ -74,7 +74,7 @@ The owner's `acli` login is global state and is not touched.
 
 ```sh
 factory/bin/jira view CHB-12
-factory/bin/jira search 'project = CHB AND status = "In Review"'
+factory/bin/jira search 'status = "In Review"'   # sent as project = CHB AND (<jql>)
 factory/bin/jira create --parent CHB-27 --summary "Short title" --description-file description.txt --priority Medium
 factory/bin/jira transition CHB-12 "In Review"
 factory/bin/jira comment CHB-12 --body-file comment.txt   # "-" reads stdin
@@ -87,6 +87,11 @@ factory/bin/jira edit-comment CHB-12 10071 --body-file comment.md   # the agent'
 ```
 
 Text files are plain text. Blank lines separate paragraphs and URLs become links.
+A file that is not valid UTF-8, an empty summary or an empty comment body exits 2 before the wrapper reads 1Password.
+
+`search` reads only CHB. It sends `project = CHB AND (<jql>)`, with a trailing `ORDER BY` kept outside the parentheses.
+JQL with a `)` before its `(`, a `(` never closed or an unterminated quote exits 2 before any request.
+An answer that lists an issue outside CHB exits 1 and prints nothing.
 
 `rank` calls `PUT /rest/agile/1.0/issue/rank`. When Jira ranks only some of the issues (HTTP 207), it exits 1 and names each issue that failed.
 

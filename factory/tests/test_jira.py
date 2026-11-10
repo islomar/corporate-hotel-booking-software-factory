@@ -1,9 +1,11 @@
 import base64
 import contextlib
+import http.server
 import io
 import json
 import sys
 import tempfile
+import threading
 import unittest
 import urllib.error
 from pathlib import Path
@@ -135,7 +137,7 @@ def keys_answer(by_status: dict[str, list[str]]) -> Any:
 
     def answer(body: dict[str, Any]) -> dict[str, Any]:
         jql = body["jql"]
-        excluded = jql.split("key != ")[1].split()[0]
+        excluded = jql.split("key != ")[1].split()[0].rstrip(")")
         keys = [k for name, ks in by_status.items() if f"({STATUS_IDS[name]})" in jql for k in ks if k != excluded]
         return {"issues": [{"key": k} for k in keys], "isLast": True}
 
@@ -154,6 +156,10 @@ def transition_fake(
             ("POST", "/rest/api/3/issue/CHB-12/transitions"): None,
         }
     )
+
+
+def _no_credentials() -> tuple[str, str]:
+    raise AssertionError("1Password must not be read")
 
 
 class AuthTest(unittest.TestCase):
@@ -232,7 +238,7 @@ class WipLimitTest(unittest.TestCase):
         code, _, _ = _run(["transition", "CHB-12", "In Progress"], fake)
 
         self.assertEqual(code, 0)
-        self.assertIn("project = CHB AND status in (10006) AND key != CHB-12 ORDER BY key ASC", fake.searches())
+        self.assertIn("project = CHB AND (status in (10006) AND key != CHB-12) ORDER BY key ASC", fake.searches())
 
     def test_below_the_limits_starts(self) -> None:
         fake = transition_fake("To Do", {"In Progress": ["CHB-1"], "In Review": ["CHB-2", "CHB-3"], "Validating": ["CHB-4"]})
@@ -330,7 +336,7 @@ class MinimumSignalTest(unittest.TestCase):
             out.splitlines(),
             ["CHB-12 -> In Review", "In Progress is below its minimum (0/1): idle, ask the owner for the next ticket"],
         )
-        self.assertEqual(fake.searches()[-1], "project = CHB AND status in (3) AND key != CHB-12 ORDER BY key ASC")
+        self.assertEqual(fake.searches()[-1], "project = CHB AND (status in (3) AND key != CHB-12) ORDER BY key ASC")
 
     def test_a_failed_count_after_the_move_is_a_notice_not_a_failure(self) -> None:
         fake = transition_fake("In Progress")
@@ -417,12 +423,37 @@ class CommentTest(unittest.TestCase):
         self.assertEqual(adf_to_text(sent["body"]), "PR: https://github.com/x/y/pull/1")
         self.assertIn("100", out)
 
-    def test_empty_body_is_refused(self) -> None:
+    def test_empty_body_is_a_usage_error_before_1password(self) -> None:
         fake = FakeJira({})
         with tempfile.NamedTemporaryFile("w") as body:
-            code, _, _ = _run(["comment", "CHB-12", "--body-file", body.name], fake)
+            body.write(" \n")
+            body.flush()
+            code, _, err = _run(["comment", "CHB-12", "--body-file", body.name], fake, credentials_reader=_no_credentials)
 
-        self.assertEqual(code, 1)
+        self.assertEqual(code, 2)
+        self.assertIn("comment body is empty", err)
+        self.assertEqual(fake.requests, [])
+
+    def test_a_body_file_that_is_not_utf8_is_a_usage_error(self) -> None:
+        fake = FakeJira({})
+        with tempfile.NamedTemporaryFile("wb") as body:
+            body.write(b"caf\xe9 \xff\xfe")
+            body.flush()
+            code, _, err = _run(["comment", "CHB-12", "--body-file", body.name], fake, credentials_reader=_no_credentials)
+
+        self.assertEqual(code, 2)
+        self.assertIn("not valid UTF-8", err)
+        self.assertNotIn("Traceback", err)
+        self.assertEqual(fake.requests, [])
+
+    def test_stdin_that_is_not_utf8_is_a_usage_error(self) -> None:
+        fake = FakeJira({})
+        stdin = io.TextIOWrapper(io.BytesIO(b"\xff\xfe"), encoding="utf-8")
+        with mock.patch.object(sys, "stdin", stdin):
+            code, _, err = _run(["comment", "CHB-12", "--body-file", "-"], fake, credentials_reader=_no_credentials)
+
+        self.assertEqual(code, 2)
+        self.assertIn("not valid UTF-8", err)
         self.assertEqual(fake.requests, [])
 
 
@@ -496,10 +527,35 @@ class CreateTest(unittest.TestCase):
         fake = self._fake("Epic")
         with tempfile.NamedTemporaryFile("w") as description:
             argv = ["create", "--parent", "CHB-27", "--summary", "  ", "--description-file", description.name, "--priority", "Low"]
-            code, _, err = _run(argv, fake)
+            code, _, err = _run(argv, fake, credentials_reader=_no_credentials)
+
+        self.assertEqual(code, 2)
+        self.assertIn("summary is empty", err)
+        self.assertEqual(fake.requests, [])
+
+    def test_a_description_file_that_is_not_utf8_is_a_usage_error(self) -> None:
+        fake = self._fake("Epic")
+        with tempfile.NamedTemporaryFile("wb") as description:
+            description.write(b"\xff\xfe")
+            description.flush()
+            argv = ["create", "--parent", "CHB-27", "--summary", "S", "--description-file", description.name, "--priority", "Low"]
+            code, _, err = _run(argv, fake, credentials_reader=_no_credentials)
+
+        self.assertEqual(code, 2)
+        self.assertIn("not valid UTF-8", err)
+        self.assertNotIn("Traceback", err)
+        self.assertEqual(fake.requests, [])
+
+    def test_a_parent_outside_chb_is_refused_before_1password(self) -> None:
+        fake = self._fake("Epic")
+        with tempfile.NamedTemporaryFile("w") as description:
+            description.write("Text.")
+            description.flush()
+            argv = ["create", "--parent", "OTHER-1", "--summary", "S", "--description-file", description.name, "--priority", "Low"]
+            code, _, err = _run(argv, fake, credentials_reader=_no_credentials)
 
         self.assertEqual(code, 1)
-        self.assertIn("summary is empty", err)
+        self.assertIn("'OTHER-1' is not a CHB issue key", err)
         self.assertEqual(fake.requests, [])
 
     def test_parent_must_be_an_epic(self) -> None:
@@ -543,6 +599,43 @@ class SearchTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual([line.split("\t")[0] for line in out.getvalue().splitlines()], ["CHB-1", "CHB-2"])
         self.assertIn("Unassigned", out.getvalue())
+
+
+class SearchScopeTest(unittest.TestCase):
+    def _search(self, jql: str) -> tuple[int, list[str], str]:
+        fake = FakeJira({("POST", SEARCH): {"issues": [], "isLast": True}})
+        code, _, err = _run(["search", jql], fake)
+        return code, fake.searches(), err
+
+    def test_any_jql_is_wrapped_in_the_chb_project(self) -> None:
+        cases = {
+            "project = OTHER": "project = CHB AND (project = OTHER)",
+            "status = Done OR project = OTHER": "project = CHB AND (status = Done OR project = OTHER)",
+            'summary ~ "a) OR (b"': 'project = CHB AND (summary ~ "a) OR (b")',
+            "summary ~ 'x\\'' ": "project = CHB AND (summary ~ 'x\\'')",
+            "status = Done order by key ASC": "project = CHB AND (status = Done) order by key ASC",
+            'summary ~ "order by" ORDER BY key': 'project = CHB AND (summary ~ "order by") ORDER BY key',
+            "ORDER BY key DESC": "project = CHB ORDER BY key DESC",
+            "  ": "project = CHB",
+        }
+        for jql, sent in cases.items():
+            code, searches, _ = self._search(jql)
+            self.assertEqual((code, searches), (0, [sent]), jql)
+
+    def test_jql_that_escapes_the_parentheses_is_a_usage_error(self) -> None:
+        for jql in ("x) OR (project = OTHER", "x)", "(x", 'summary ~ "open', "a ORDER BY key ) OR (project = OTHER"):
+            code, searches, err = self._search(jql)
+            self.assertEqual(code, 2, jql)
+            self.assertEqual(searches, [], jql)
+            self.assertNotIn("Traceback", err, jql)
+
+    def test_an_issue_outside_chb_in_the_answer_is_refused(self) -> None:
+        page = {"issues": [{"key": "OTHER-1", "fields": {}}], "isLast": True}
+        code, out, err = _run_raw(["search", "status = Done", "--json"], json.dumps(page).encode())
+
+        self.assertEqual(code, 1)
+        self.assertNotIn("OTHER-1", out)
+        self.assertIn("outside CHB", err)
 
 
 class FailureTest(unittest.TestCase):
@@ -722,6 +815,57 @@ class NetworkTest(unittest.TestCase):
     def test_redirects_are_refused(self) -> None:
         redirect = jira._NoRedirect().redirect_request(None, None, 302, "Found", {}, "https://elsewhere.example/")
         self.assertIsNone(redirect)
+
+    def test_default_opener_does_not_follow_a_302_and_exits_1(self) -> None:
+        target_hits: list[str] = []
+        target = _local_server(lambda handler: (target_hits.append(handler.path), handler.send_response(200)))
+        self.addCleanup(target.server_close)
+        self.addCleanup(target.shutdown)
+        target_url = f"http://127.0.0.1:{target.server_port}/stolen"
+
+        def redirect(handler: http.server.BaseHTTPRequestHandler) -> None:
+            handler.send_response(302)
+            handler.send_header("Location", target_url)
+            handler.send_header("Content-Length", "0")
+
+        source = _local_server(redirect)
+        self.addCleanup(source.server_close)
+        self.addCleanup(source.shutdown)
+        source_site = f"http://127.0.0.1:{source.server_port}"
+
+        def opener_factory() -> Any:
+            real = jira.default_opener()
+
+            def open_(request: Any) -> Any:
+                request.full_url = request.full_url.replace(jira.SITE, source_site, 1)
+                return real(request)
+
+            return open_
+
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = main(["view", "CHB-1"], credentials_reader=lambda: CREDENTIALS, opener_factory=opener_factory)
+
+        self.assertEqual(code, 1)
+        self.assertIn("HTTP 302", err.getvalue())
+        self.assertNotIn("Traceback", err.getvalue())
+        self.assertEqual(target_hits, [])
+
+
+def _local_server(answer: Any) -> http.server.ThreadingHTTPServer:
+    """An HTTP server on a free local port. answer(handler) sends the status and headers of every GET."""
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802 - the name http.server calls
+            answer(self)
+            self.end_headers()
+
+        def log_message(self, *args: Any) -> None:
+            return None
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
 
 
 class AdfTest(unittest.TestCase):
