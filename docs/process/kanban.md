@@ -14,6 +14,7 @@
     - [Needs human](#needs-human)
     - [Done](#done)
     - [Discarded](#discarded)
+  - [Expedite](#expedite)
   - [Assignee](#assignee)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -43,6 +44,9 @@ A WIP limit stops pulling new work. It never stops the board from recording what
   The message names every full column, the limit and the tickets in it.
   The ticket stays in Ready. The agent comments on it, tells the owner and starts nothing else.
 - Max, Needs human: a move into Needs human exits 4 while that column is full. The ticket stays where it is; the agent comments and tells the owner.
+- Max, Ready: a move into Ready exits 4 while Ready is full (CHB-157, see [Ready](#ready)).
+- Epics never count toward any column limit, min or max: the board shows no epic as a card (CHB-157).
+- An [expedite](#expedite) ticket skips every limit and may take a column one over its max.
 - Moves into In Review and Validating are never blocked: they record a PR opened or a PR merged. A column can go over its max, and Jira colours it.
 - A move back into In Progress (review asked for changes, a live check failed, the owner answered) is not new work and is never blocked.
 - Moves within one column, out of a column, or into a column without a max are never blocked.
@@ -163,7 +167,13 @@ Ready was named To Do until 2026-11-10 (CHB-153). The rules below apply to it un
   or is the top ticket without a "Why it matters" first section or without acceptance criteria (CHB-125, CHB-148).
   The message names the top ticket and the next step, or the `section` command that adds the missing section.
   A move back into In Progress from another status is not checked.
-- WIP limit: none.
+- WIP limit (owner decision, 2026-11-10, CHB-157): a min and a max on the board. Epics never count toward any column limit: the board shows no epic as a card.
+  - Max: a move into Ready (`ready`, or a move back) exits 4 while Ready holds its max. The message names the tickets in Ready.
+    To make room, the agent moves the least needed ticket back to Backlog (`factory/bin/jira transition CHB-<n> Backlog`), within the limits.
+  - Min: a signal, not a quota. After a move that leaves Ready below its min, the wrapper prints
+    `Ready is below its minimum (count/min): look for Backlog tickets with a trigger; none qualify means tell the owner`.
+    The agent looks for Backlog tickets with a real trigger. If none has one, it tells the owner "Ready is low, nothing in Backlog has a trigger".
+    It never moves a ticket to Ready only to reach the min.
 
 ### In Progress
 
@@ -221,6 +231,9 @@ Meaning: the work cannot continue without the owner.
   It is a numbered step-by-step procedure: what to do, where (exact URL or menu path), how (each click or command).
   It also states what not to touch, the deadline if any, and how the owner reports that it is done.
   `factory/bin/jira transition` refuses the move (exit 4) while that section is missing.
+- Enter (owner rule, 2026-11-10): when the owner must run something to finish a ticket (merge a PR that changes Terraform and then plan or apply, a console step, a secret),
+  the agent moves the ticket to Needs human with its owner steps as soon as CI and review are green and nothing else is pending on the agent's side.
+  A normal PR that waits only for a plain approval keeps its ticket where it is: In Review.
 - Leave: the owner answers or acts. The ticket goes back to the status it came from.
 - This status is the top of every notification.
 - WIP limit: a max on the board, a hard block on entering. When the column is full, the agent leaves the ticket in its status, comments on it, tells the owner and starts nothing else.
@@ -236,6 +249,24 @@ Meaning: the acceptance criteria hold in the live system, with evidence on the t
 Meaning: the ticket will not be done. This is a valid outcome.
 
 - Enter: from any status. A comment states why: superseded, wrong idea, no longer needed.
+
+## Expedite
+
+Expedite is a class of service for a production incident (owner decision, 2026-11-10, CHB-157). The fix does not wait for a free slot.
+
+- Only for one of three cases:
+  1. `production bug`: a bug that affects users in production;
+  2. `pipeline broken`: the delivery pipeline is broken (CI on `main` or the deploy);
+  3. `secret leak`: a secret is leaking.
+- At most one open expedite ticket at a time.
+- `factory/bin/jira create --parent CHB-<epic> --summary TEXT --description-file FILE --expedite "<case>: <evidence>"` creates it.
+  It skips Backlog and Ready, goes straight to In Progress, and may exceed any column's limit by one.
+  It comments `Expedite: <case>: <evidence>` and assigns the ticket to the agent.
+- The agent tells the owner at once. The wrapper prints `CHB-<n> -> In Progress (expedite). Tell the owner now: <reason>`.
+- Jira priority "Highest" marks it, visible on the card. Highest is allowed only for an expedite ticket:
+  `factory/bin/jira priority CHB-<n> Highest` and `create --priority Highest` exit 2.
+- Refusals: a reason that does not start with one of the three cases exits 2. Another open expedite ticket (an open ticket with priority Highest) exits 4.
+- From In Progress it follows the normal flow: In Review, Validating, Done.
 
 ## Assignee
 

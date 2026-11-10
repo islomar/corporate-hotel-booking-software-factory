@@ -157,8 +157,13 @@ def description_with(*headings: str, body: str = "Some text.") -> dict[str, Any]
     return {"type": "doc", "version": 1, "content": content}
 
 
-def issue_in(status: str, description: Any = None, links: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    fields = {"status": {"name": status, "id": ALL_IDS[status]}, "description": description, "issuelinks": links or []}
+def issue_in(status: str, description: Any = None, links: list[dict[str, Any]] | None = None, *, kind: str = "Task") -> dict[str, Any]:
+    fields = {
+        "status": {"name": status, "id": ALL_IDS[status]},
+        "description": description,
+        "issuelinks": links or [],
+        "issuetype": {"name": kind},
+    }
     return {"fields": fields}
 
 
@@ -175,7 +180,7 @@ def blocks(*keys: str) -> list[dict[str, Any]]:
 
 BLOCKS_TYPE = {"id": "10000", "name": "Blocks", "inward": "is blocked by", "outward": "blocks"}
 RELATES_TYPE = {"id": "10003", "name": "Relates", "inward": "relates to", "outward": "relates to"}
-ISSUE_FIELDS = "status,description,issuelinks"
+ISSUE_FIELDS = "status,description,issuelinks,issuetype"
 
 
 def doc(markdown: str) -> dict[str, Any]:
@@ -200,7 +205,8 @@ def keys_answer(
     The open-tickets search (statusCategory != Done, in rank order) gets every key listed for a
     status that is not Done, with its status, type, description (READY unless given), issue links and
     priority (Medium unless given; None leaves the field out).
-    A column count (status in (...) AND key != X) gets the keys of the statuses it names, minus X.
+    A column count (status in (...) AND key != X) gets the keys of the statuses it names, minus X,
+    and without epics when it asks for no epics (CHB-157).
     """
     descriptions = descriptions or {}
     links = links or {}
@@ -227,7 +233,9 @@ def keys_answer(
             ]
             return {"issues": issues, "isLast": True}
         excluded = jql.split("key != ")[1].split()[0].rstrip(")")
-        keys = [k for name, ks in by_status.items() if f"({ALL_IDS[name]})" in jql for k in ks if k != excluded]
+        ids = {i.strip() for i in jql.split("status in (")[1].split(")")[0].split(",")}
+        no_epics = "issuetype != Epic" in jql
+        keys = [k for name, ks in by_status.items() if ALL_IDS[name] in ids for k in ks if k != excluded and not (no_epics and k in epics)]
         return {"issues": [{"key": k} for k in keys], "isLast": True}
 
     return answer
@@ -375,7 +383,7 @@ class WipLimitTest(unittest.TestCase):
         code, _, _ = _run(["transition", "CHB-12", "In Progress"], fake)
 
         self.assertEqual(code, 0)
-        self.assertIn("project = CHB AND (status in (10006) AND key != CHB-12) ORDER BY key ASC", fake.searches())
+        self.assertIn("project = CHB AND (status in (10006) AND key != CHB-12 AND issuetype != Epic) ORDER BY key ASC", fake.searches())
 
     def test_below_the_limits_starts(self) -> None:
         fake = transition_fake("To Do", {"In Progress": ["CHB-1"], "In Review": ["CHB-2", "CHB-3"], "Validating": ["CHB-4"]})
@@ -478,7 +486,7 @@ class MinimumSignalTest(unittest.TestCase):
                 "In Progress 0/3: 3 slots free; next: nothing to start in To Do",
             ],
         )
-        self.assertIn("project = CHB AND (status in (3) AND key != CHB-12) ORDER BY key ASC", fake.searches())
+        self.assertIn("project = CHB AND (status in (3) AND key != CHB-12 AND issuetype != Epic) ORDER BY key ASC", fake.searches())
 
     def test_a_failed_count_after_the_move_is_a_notice_not_a_failure(self) -> None:
         fake = transition_fake("In Progress")
@@ -2433,11 +2441,16 @@ def backlog_create_fake(state: str, initial: str, pull: list[str] | None = None,
     )
 
 
-def _create_args(fake: FakeJira, *extra: str, credentials_reader: Any = lambda: CREDENTIALS, priority: str = "Medium") -> tuple[int, str, str]:
+def _create_args(
+    fake: FakeJira, *extra: str, credentials_reader: Any = lambda: CREDENTIALS, priority: str | None = "Medium"
+) -> tuple[int, str, str]:
+    """`create` with a valid description; priority None leaves --priority out."""
     with tempfile.NamedTemporaryFile("w") as handle:
         handle.write(f"## {WHY}\n\nThe owner waits.")
         handle.flush()
-        argv = ["create", "--parent", "CHB-27", "--summary", "Do it", "--description-file", handle.name, "--priority", priority, *extra]
+        argv = ["create", "--parent", "CHB-27", "--summary", "Do it", "--description-file", handle.name]
+        argv += [] if priority is None else ["--priority", priority]
+        argv += extra
         return _run(argv, fake, credentials_reader=credentials_reader)
 
 
@@ -2721,10 +2734,17 @@ def ready_fake(
     by_status: dict[str, list[str]] | None = None,
     board: Any = None,
     current: str = "Backlog",
+    epics: tuple[str, ...] = (),
 ) -> FakeJira:
     """CHB-12 sits in Backlog with a passing checklist unless told otherwise."""
     fake = transition_fake(
-        current, by_status, description=dor_description() if description is None else description, board=board, links=links, state=state
+        current,
+        by_status,
+        description=dor_description() if description is None else description,
+        board=board,
+        links=links,
+        state=state,
+        epics=epics,
     )
     fake.routes[("PUT", ISSUE_PATH)] = None
     fake.routes[("POST", COMMENT_PATH)] = {"id": "5"}
@@ -3137,6 +3157,218 @@ class ReadyCommandTest(unittest.TestCase):
                 self.assertEqual(code, 2)
                 self.assertIn("ready moves a ticket from Backlog", err)
                 self.assertEqual(fake.writes(), [])
+
+
+# CHB-157: the Ready limits and the Expedite lane.
+READY_LIMITS = {**BOARD_LIMITS, "Ready": {"min": 3, "max": 10}}
+TEN = [f"CHB-{n}" for n in range(1, 11)]
+BELOW_READY = "look for Backlog tickets with a trigger; none qualify means tell the owner"
+
+
+def ready_board(**limits: dict[str, int]) -> dict[str, Any]:
+    return board_config(state="after", **{**READY_LIMITS, **limits})
+
+
+class ReadyMaximumTest(unittest.TestCase):
+    """CHB-157 AC1: a move into Ready is refused while Ready holds its board max; epics are not counted."""
+
+    TRIGGER = ["--trigger", "2. the owner asked for it on 2026-11-10"]
+
+    def test_ready_is_refused_at_the_max_and_names_the_tickets(self) -> None:
+        fake = ready_fake(board=ready_board(), by_status={"Ready": TEN})
+        code, out, err = _run(["ready", "CHB-12", *self.TRIGGER], fake)
+
+        self.assertEqual(code, 4)
+        self.assertEqual(out, "")
+        self.assertIn("column 'Ready' is at its maximum (10/10): " + ", ".join(TEN), err)
+        self.assertIn("factory/bin/jira transition CHB-<n> Backlog", err)
+        self.assertEqual(fake.writes(), [])
+
+    def test_ready_is_allowed_one_below_the_max(self) -> None:
+        fake = ready_fake(board=ready_board(), by_status={"Ready": TEN[:9]})
+        code, out, err = _run(["ready", "CHB-12", *self.TRIGGER], fake)
+
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.splitlines()[0], "CHB-12 -> Ready")
+
+    def test_epics_in_ready_are_not_counted(self) -> None:
+        fake = ready_fake(board=ready_board(), by_status={"Ready": [*TEN[:9], "CHB-90", "CHB-91"]}, epics=("CHB-90", "CHB-91"))
+        code, _, err = _run(["ready", "CHB-12", *self.TRIGGER], fake)
+
+        self.assertEqual(code, 0, err)
+        self.assertIn(
+            "project = CHB AND (status in (10003, 10010) AND key != CHB-12 AND issuetype != Epic) ORDER BY key ASC", fake.searches()
+        )
+
+    def test_the_limit_comes_from_the_board(self) -> None:
+        fake = ready_fake(board=ready_board(Ready={"max": 2}), by_status={"Ready": ["CHB-1", "CHB-2"]})
+        code, _, err = _run(["ready", "CHB-12", *self.TRIGGER], fake)
+
+        self.assertEqual(code, 4)
+        self.assertIn("(2/2): CHB-1, CHB-2", err)
+
+    def test_a_move_back_into_ready_is_refused_at_the_max_too(self) -> None:
+        fake = transition_fake("In Progress", {"Ready": TEN}, board=ready_board(), state="after")
+        code, _, err = _run(["transition", "CHB-12", "Ready"], fake)
+
+        self.assertEqual(code, 4)
+        self.assertIn("'Ready' is at its maximum (10/10)", err)
+        self.assertEqual(fake.writes(), [])
+
+    def test_an_epic_moving_back_into_ready_is_not_limited(self) -> None:
+        fake = transition_fake("In Progress", {"Ready": TEN}, board=ready_board(), state="after")
+        fake.routes[("GET", f"/rest/api/3/issue/CHB-12?fields={ISSUE_FIELDS}")] = issue_in("In Progress", READY, kind="Epic")
+        code, _, err = _run(["transition", "CHB-12", "Ready"], fake)
+
+        self.assertEqual(code, 0, err)
+
+
+class ReadyMinimumTest(unittest.TestCase):
+    """CHB-157 AC2: a move that leaves Ready below its board min prints the signal line; nothing is promoted."""
+
+    def test_leaving_ready_below_its_min_prints_the_signal(self) -> None:
+        fake = transition_fake("Ready", {"Ready": ["CHB-12", "CHB-1"]}, board=ready_board(), state="after")
+        code, out, err = _run(["transition", "CHB-12", "Backlog"], fake)
+
+        self.assertEqual(code, 0, err)
+        self.assertIn(f"Ready is below its minimum (1/3): {BELOW_READY}", out.splitlines())
+        self.assertEqual(len(fake.writes()), 1)
+
+    def test_epics_do_not_count_toward_the_min(self) -> None:
+        epics = ("CHB-90", "CHB-91", "CHB-92")
+        fake = transition_fake("Ready", {"Ready": ["CHB-12", *epics]}, board=ready_board(), state="after", epics=epics)
+        code, out, _ = _run(["transition", "CHB-12", "Backlog"], fake)
+
+        self.assertEqual(code, 0)
+        self.assertIn(f"Ready is below its minimum (0/3): {BELOW_READY}", out.splitlines())
+
+    def test_a_move_into_ready_that_leaves_it_below_its_min_prints_the_signal(self) -> None:
+        fake = ready_fake(board=ready_board(), by_status={"Ready": ["CHB-1"]})
+        code, out, err = _run(["ready", "CHB-12", "--trigger", "1. broken"], fake)
+
+        self.assertEqual(code, 0, err)
+        self.assertIn(f"Ready is below its minimum (2/3): {BELOW_READY}", out.splitlines())
+
+    def test_no_signal_while_ready_holds_its_min(self) -> None:
+        fake = transition_fake("Ready", {"Ready": ["CHB-12", "CHB-1", "CHB-2", "CHB-3"]}, board=ready_board(), state="after")
+        code, out, _ = _run(["transition", "CHB-12", "Backlog"], fake)
+
+        self.assertEqual(code, 0)
+        self.assertNotIn("minimum", out)
+
+    def test_other_columns_keep_the_plain_signal(self) -> None:
+        fake = transition_fake("In Progress", {"In Progress": ["CHB-12"]}, board=ready_board(), state="after")
+        code, out, _ = _run(["transition", "CHB-12", "In Review"], fake)
+
+        self.assertEqual(code, 0)
+        self.assertIn("In Progress is below its minimum (0/1)", out.splitlines())
+
+
+EXPEDITE = ["--expedite", "production bug: bookings fail with HTTP 500 since 10:02, see the deploy log"]
+NEW_ASSIGNEE = "/rest/api/3/issue/CHB-200/assignee"
+
+
+def expedite_fake(by_status: dict[str, list[str]] | None = None, priorities: dict[str, str | None] | None = None) -> FakeJira:
+    """CHB-200 is created under CHB-27; In Progress and In Review are full unless `by_status` says otherwise."""
+    full = {"In Progress": ["CHB-1", "CHB-2", "CHB-3"], "In Review": ["CHB-4", "CHB-5", "CHB-6"]}
+    return FakeJira(
+        {
+            ("GET", "/rest/api/3/issue/CHB-27?fields=issuetype"): {"fields": {"issuetype": {"name": "Epic"}}},
+            ("POST", CREATE_PATH): {"key": "CHB-200"},
+            ("GET", BOARD): ready_board(),
+            ("GET", NEW_MOVE): transitions_of("after"),
+            ("POST", NEW_MOVE): None,
+            ("POST", NEW_COMMENT): {"id": "7"},
+            ("GET", "/rest/api/3/myself"): {"accountId": "agent-id"},
+            ("PUT", NEW_ASSIGNEE): None,
+            ("POST", SEARCH): keys_answer(full if by_status is None else by_status, priorities=priorities),
+        }
+    )
+
+
+class ExpediteTest(unittest.TestCase):
+    """CHB-157 AC3: `create --expedite` lands in In Progress with Highest, one at a time, for three cases only."""
+
+    def test_lands_in_in_progress_with_highest_even_when_in_progress_is_full(self) -> None:
+        fake = expedite_fake()
+        code, out, err = _create_args(fake, *EXPEDITE, priority=None)
+
+        self.assertEqual(code, 0, err)
+        self.assertEqual(_write_paths(fake), [CREATE_PATH, NEW_MOVE, NEW_COMMENT, NEW_ASSIGNEE])
+        self.assertEqual(fake.writes()[0][2]["fields"]["priority"], {"name": "Highest"})
+        self.assertEqual(fake.writes()[1][2], {"transition": {"id": "13"}})  # In Progress on the "after" board
+        (comment,) = _comments(fake, NEW_COMMENT)
+        self.assertIn("Expedite: production bug: bookings fail with HTTP 500", comment)
+        lines = out.splitlines()
+        self.assertEqual(lines[0], "CHB-200")
+        self.assertIn("CHB-200 -> In Progress (expedite). Tell the owner now:", lines[1])
+
+    def test_a_second_open_expedite_ticket_is_refused_before_any_write(self) -> None:
+        fake = expedite_fake({"In Progress": ["CHB-150"]}, priorities={"CHB-150": "Highest"})
+        code, out, err = _create_args(fake, *EXPEDITE, priority=None)
+
+        self.assertEqual(code, 4)
+        self.assertEqual(out, "")
+        self.assertIn("CHB-150 is an open expedite ticket", err)
+        self.assertEqual(fake.writes(), [])
+
+    def test_a_reason_without_one_of_the_three_cases_is_refused_before_1password(self) -> None:
+        for reason in ("", "  ", "the site is slow", "production bug:", "feature: add a button"):
+            with self.subTest(reason):
+                fake = expedite_fake()
+                code, _, err = _create_args(fake, "--expedite", reason, priority=None, credentials_reader=_no_credentials)
+
+                self.assertEqual(code, 2)
+                self.assertIn("production bug:", err)
+                self.assertEqual(fake.requests, [])
+
+    def test_each_case_is_accepted(self) -> None:
+        for reason in ("production bug: x", "Pipeline broken: CI on main is red", "secret leak: token in a log"):
+            with self.subTest(reason):
+                fake = expedite_fake()
+                code, _, err = _create_args(fake, "--expedite", reason, priority=None)
+
+                self.assertEqual(code, 0, err)
+
+    def test_expedite_with_a_priority_is_refused(self) -> None:
+        fake = expedite_fake()
+        code, _, err = _create_args(fake, *EXPEDITE, priority="High", credentials_reader=_no_credentials)
+
+        self.assertEqual(code, 2)
+        self.assertIn("--expedite sets the priority Highest", err)
+        self.assertEqual(fake.requests, [])
+
+    def test_create_without_priority_or_expedite_is_refused(self) -> None:
+        fake = expedite_fake()
+        code, _, err = _create_args(fake, priority=None, credentials_reader=_no_credentials)
+
+        self.assertEqual(code, 2)
+        self.assertIn("--priority", err)
+        self.assertEqual(fake.requests, [])
+
+    def test_highest_outside_expedite_is_refused_and_names_expedite(self) -> None:
+        fake = FakeJira({})
+        code, _, err = _run(["priority", "CHB-12", "Highest"], fake, credentials_reader=_no_credentials)
+        self.assertEqual(code, 2)
+        self.assertIn("create --expedite", err)
+        self.assertEqual(fake.requests, [])
+
+        fake = expedite_fake()
+        code, _, err = _create_args(fake, priority="Highest", credentials_reader=_no_credentials)
+        self.assertEqual(code, 2)
+        self.assertIn("create --expedite", err)
+        self.assertEqual(fake.requests, [])
+
+    def test_a_failed_move_after_create_is_a_notice_and_exits_0(self) -> None:
+        fake = expedite_fake()
+        fake.routes[("POST", NEW_MOVE)] = 500
+        code, out, _ = _create_args(fake, *EXPEDITE, priority=None)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(out.splitlines()[0], "CHB-200")
+        self.assertIn("could not start CHB-200", out)
+        self.assertIn("Jira UI", out)
+        self.assertEqual(_write_paths(fake), [CREATE_PATH, NEW_MOVE])
 
 
 if __name__ == "__main__":
