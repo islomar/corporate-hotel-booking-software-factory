@@ -3,7 +3,9 @@ import io
 import json
 import os
 import sys
+import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -145,6 +147,102 @@ class LoopDetectorTest(unittest.TestCase):
     def test_an_error_never_blocks(self) -> None:
         with mock.patch.object(hook, "record_edit", side_effect=OSError("disk full")):
             self.assertEqual(self._main(_event("/repo/src/a.py")), (0, "", ""))
+
+
+
+class PruneTest(unittest.TestCase):
+    """CHB-138: `make clean-dev` removes state files older than 7 days."""
+
+    NOW = 1_800_000_000.0
+    DAY = 86_400
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.folder = Path(self.tmp.name) / "chb-edit-loops-test"
+        self.folder.mkdir(mode=0o700)
+
+    def _file(self, name: str, age_days: float, now: float | None = None) -> Path:
+        path = self.folder / name
+        path.write_text("{}")
+        when = (now or self.NOW) - age_days * self.DAY
+        os.utime(path, (when, when))
+        return path
+
+    def test_state_files_older_than_7_days_are_removed_and_newer_ones_stay(self) -> None:
+        old, new = self._file("old.json", 8), self._file("new.json", 6)
+
+        removed = hook.remove_stale(str(self.folder), now=self.NOW)
+
+        self.assertEqual(removed, [str(old)])
+        self.assertFalse(old.exists())
+        self.assertTrue(new.exists())
+
+    def test_only_json_files_are_removed_and_symlinks_are_not_followed(self) -> None:
+        other = self._file("notes.txt", 30)
+        victim = Path(self.tmp.name) / "victim.json"
+        victim.write_text("keep")
+        os.utime(victim, (self.NOW - 30 * self.DAY, self.NOW - 30 * self.DAY))
+        (self.folder / "link.json").symlink_to(victim)
+
+        self.assertEqual(hook.remove_stale(str(self.folder), now=self.NOW), [])
+        self.assertTrue(other.exists())
+        self.assertEqual(victim.read_text(), "keep")
+
+    def test_a_file_removed_meanwhile_is_skipped(self) -> None:
+        gone, old = self._file("gone.json", 8), self._file("old.json", 8)
+        real_lstat = os.lstat
+
+        def lstat_after_another_prune(path: str) -> os.stat_result:
+            if path == str(gone):
+                gone.unlink(missing_ok=True)
+            return real_lstat(path)
+
+        with mock.patch.object(hook.os, "lstat", side_effect=lstat_after_another_prune):
+            self.assertEqual(hook.remove_stale(str(self.folder), now=self.NOW), [str(old)])
+
+    def test_a_missing_folder_is_not_created(self) -> None:
+        missing = Path(self.tmp.name) / "missing"
+
+        self.assertEqual(hook.remove_stale(str(missing), now=self.NOW), [])
+        self.assertFalse(missing.exists())
+
+    def test_a_folder_open_to_other_users_is_refused(self) -> None:
+        self._file("old.json", 8)
+        os.chmod(self.folder, 0o777)
+        self.addCleanup(os.chmod, self.folder, 0o700)
+
+        with self.assertRaises(PermissionError):
+            hook.remove_stale(str(self.folder), now=self.NOW)
+
+    def test_the_prune_flag_reports_an_unsafe_folder_in_one_line(self) -> None:
+        os.chmod(self.folder, 0o777)
+        self.addCleanup(os.chmod, self.folder, 0o700)
+        err = io.StringIO()
+
+        with mock.patch.dict(os.environ, {hook.STATE_DIR_ENV: str(self.folder)}), contextlib.redirect_stderr(err):
+            code = hook.main(["--prune"])
+
+        self.assertEqual(code, 1)
+        self.assertEqual(err.getvalue(), f"warn_edit_loops: prune refused: {self.folder} is open to other users\n")
+
+    def test_the_prune_flag_cleans_the_configured_folder(self) -> None:
+        old = self._file("old.json", 8, now=time.time())
+        new = self._file("new.json", 0, now=time.time())
+
+        result = subprocess.run(
+            [sys.executable, "-I", str(ROOT / "factory" / "hooks" / "warn_edit_loops.py"), "--prune"],
+            env={**os.environ, hook.STATE_DIR_ENV: str(self.folder)},
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual((result.returncode, result.stderr), (0, ""))
+        self.assertIn("removed 1 loop-detector state file", result.stdout)
+        self.assertFalse(old.exists())
+        self.assertTrue(new.exists())
 
 
 class SettingsTest(unittest.TestCase):

@@ -50,6 +50,8 @@ Requirements: Docker, GNU Make. For running checks outside Docker: [uv](https://
 make setup   # dependencies, Playwright browser, git pre-commit hook
 make dev     # backend and frontend with hot reload: http://localhost:5173
              # Grafana with the app's traces, metrics and logs: http://localhost:3000
+make down    # stop the containers
+make clean-dev  # remove this checkout's containers and volumes (run it when done with make dev in a worktree)
 make check   # lint, typecheck and tests (the pre-commit gate)
 make up      # production image: http://localhost:8080
 make e2e     # Playwright against the production image

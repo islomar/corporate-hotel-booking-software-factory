@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := help
 SHELL := /bin/bash
 
-.PHONY: help setup check-npm dev down up check check-backend check-frontend check-deps test e2e format mutate review-agreement infra-plan infra-apply
+.PHONY: help setup check-npm dev down clean-dev up check check-backend check-frontend check-deps test e2e format mutate review-agreement infra-plan infra-apply
 
 help: ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-16s %s\n", $$1, $$2}'
@@ -17,11 +17,19 @@ check-npm: ## Fail if npm is too old to honour min-release-age in .npmrc
 	@v=$$(npm --version); printf '%s\n' 11.10.0 "$$v" | sort -V -C || \
 		{ echo "npm $$v ignores min-release-age in .npmrc. Use Node 24 from .nvmrc (npm >= 11.10)."; exit 1; }
 
+# The mkdir runs first: a missing frontend/node_modules would be created by Docker as root,
+# and `npm ci` on the host then fails (CHB-138).
 dev: ## Run backend and frontend with hot reload (http://localhost:5173), Grafana (http://localhost:3000)
+	mkdir -p frontend/node_modules
 	docker compose up --build backend frontend lgtm
 
 down: ## Stop all containers
 	docker compose --profile prod down
+
+# The volumes are this checkout's compose project only (named after its folder). See CHB-138.
+clean-dev: ## Remove this checkout's containers and volumes, and loop-detector state older than 7 days
+	docker compose --profile prod down --volumes --remove-orphans
+	python3 -I factory/hooks/warn_edit_loops.py --prune
 
 up: ## Run the production image locally (http://localhost:8080)
 	docker compose --profile prod up --build app

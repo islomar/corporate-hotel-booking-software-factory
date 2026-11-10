@@ -119,6 +119,10 @@ factory/bin/as-agent gh pr merge --auto --squash 61
 If the PR opens but auto-merge fails, as-agent exits 5 and prints the command to retry.
 The PR is open: do not create it again.
 
+as-agent warns on stderr when a `-F`, `--file` or `--body-file` path lies in a Claude Code `scratchpad` folder without a `CHB-<n>` folder, for example `<scratchpad>/pr.md`.
+Parallel agents that share one scratch folder overwrite each other's files (CHB-138). The warning never blocks the command.
+`factory/bin/jira` does not check its `--body-file` paths.
+
 ## Subagent models
 
 The owner's Claude Code sets `CLAUDE_CODE_SUBAGENT_MODEL=sonnet` (2026-11-07), so subagents run on Sonnet by default.
@@ -304,6 +308,8 @@ It counts the edits of each file per session. On the 5th and 8th edit it adds co
 The counts live in `<temp dir>/chb-edit-loops-<uid>/<session id>.json`. The env var `CHB_EDIT_LOOP_STATE_DIR` overrides the folder.
 The hook refuses a folder that is a symlink, belongs to another user or is open to others, and opens the state file without following symlinks.
 The hook never blocks. Bad input, an unreadable state file or an internal error gives no warning and exit 0.
+`make clean-dev` runs `warn_edit_loops.py --prune`: it removes state files older than 7 days (CHB-138).
+The temp folder follows `TMPDIR`, so a session with another `TMPDIR` keeps its state elsewhere. Run the prune with the same `TMPDIR`.
 
 ## Hook: no harness edits in feature tickets
 
