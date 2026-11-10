@@ -192,8 +192,8 @@ def _capped_run(limit: int, run: Callable[..., Any] = subprocess.run) -> Callabl
     return capped
 
 
-def read_issues() -> list[dict[str, Any]]:
-    """The Validating tickets with summary and description: one 1Password read, one Jira search."""
+def jira_client() -> jira.Jira:
+    """A Jira client as the agent account: one 1Password read through the service account. Every call has a timeout."""
     token_reader = lambda: op_service_account.read_token(_capped_run(KEYRING_TIMEOUT_SECONDS))  # noqa: E731
     try:
         output = op_service_account.run_op(
@@ -203,7 +203,12 @@ def read_issues() -> list[dict[str, Any]]:
         raise jira.CredentialError(str(error)) from None
     email, token = jira.parse_credentials(output.decode())
     opener = urllib.request.build_opener(jira._NoRedirect)  # noqa: SLF001 - the same redirect refusal
-    client = jira.Jira(email, token, lambda request: opener.open(request, timeout=CALL_TIMEOUT_SECONDS))
+    return jira.Jira(email, token, lambda request: opener.open(request, timeout=CALL_TIMEOUT_SECONDS))
+
+
+def read_issues() -> list[dict[str, Any]]:
+    """The Validating tickets with summary and description: one 1Password read, one Jira search."""
+    client = jira_client()
     return client.search('status = "Validating"', fields=["summary", "description"])
 
 

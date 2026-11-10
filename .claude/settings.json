@@ -84,6 +84,11 @@
           {
             "type": "command",
             "command": "python3 -I \"${CLAUDE_PROJECT_DIR}/factory/hooks/check_owner_commands.py\""
+          },
+          {
+            "type": "command",
+            "command": "python3 -I \"${CLAUDE_PROJECT_DIR}/factory/hooks/check_wip_minimums.py\"",
+            "timeout": 20
           }
         ]
       }

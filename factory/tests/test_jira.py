@@ -363,6 +363,22 @@ class WipLimitTest(unittest.TestCase):
                 self.assertIn("Leave CHB-12 in To Do", err)
                 self.assertEqual(fake.writes(), [])
 
+    def test_a_wip_block_names_the_background_wait_command(self) -> None:
+        """CHB-162: the agent waits for the free slot in the background and does not hand the wait to the owner."""
+        fake = transition_fake("To Do", {"In Progress": ["CHB-1", "CHB-2", "CHB-3"]})
+        code, _, err = _run(["transition", "CHB-12", "In Progress"], fake)
+
+        self.assertEqual(code, 4)
+        self.assertIn("in the background", err)
+        self.assertIn("until factory/bin/jira transition CHB-12 'In Progress'; do [ $? -eq 4 ] || break; sleep 120; done", err)
+        self.assertEqual(fake.writes(), [])
+
+    def test_a_full_needs_human_names_the_wait_command_too(self) -> None:
+        fake = transition_fake("In Progress", {"Needs human": ["CHB-1", "CHB-2", "CHB-3"]}, description=description_with(SECTIONS["Needs human"]))
+        _, _, err = _run(["transition", "CHB-12", "Needs human"], fake)
+
+        self.assertIn("until factory/bin/jira transition CHB-12 'Needs human'; do", err)
+
     def test_starting_names_every_full_column(self) -> None:
         fake = transition_fake("To Do", {"In Review": ["CHB-1", "CHB-2", "CHB-3"], "Validating": ["CHB-4", "CHB-5", "CHB-6"]})
         code, _, err = _run(["transition", "CHB-12", "In Progress"], fake)

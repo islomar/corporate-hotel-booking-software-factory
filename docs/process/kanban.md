@@ -41,8 +41,8 @@ The CHB board (board 2) holds the WIP limits: a min and a max per column, set by
 A WIP limit stops pulling new work. It never stops the board from recording what already happened (CHB-127).
 
 - Max, starting work: a move from Ready into In Progress exits 4 while In Progress, In Review or Validating holds its max or more.
-  The message names every full column, the limit and the tickets in it.
-  The ticket stays in Ready. The agent comments on it, tells the owner and starts nothing else.
+  The message names every full column, the limit and the tickets in it, and the wait command.
+  The ticket stays in Ready. The agent comments on it, runs the wait command in the background and starts nothing else.
 - Max, Needs human: a move into Needs human exits 4 while that column is full. The ticket stays where it is; the agent comments and tells the owner.
 - Max, Ready: a move into Ready exits 4 while Ready is full (CHB-157, see [Ready](#ready)).
 - Epics never count toward any column limit, min or max: the board shows no epic as a card (CHB-157).
@@ -51,8 +51,14 @@ A WIP limit stops pulling new work. It never stops the board from recording what
 - A move back into In Progress (review asked for changes, a live check failed, the owner answered) is not new work and is never blocked.
 - Moves within one column, out of a column, or into a column without a max are never blocked.
 - The max values live on the board only. This document does not repeat them.
-- Min: a signal only. When a move leaves a column below its min, the wrapper prints `<column> is below its minimum (count/min)`,
+- Min: a signal from the wrapper, enforced by a Stop hook. When a move leaves a column below its min, the wrapper prints `<column> is below its minimum (count/min)`,
   for example `In Progress is below its minimum (0/1)`.
+  The Stop hook `factory/hooks/check_wip_minimums.py` (CHB-162) reads the board when the agent ends its turn and sends it back once when
+  In Progress is below its min and Ready has a ticket that can start (it names the ticket), or when Ready is below its min and the reply
+  does not report the Backlog scan ("Ready is low" with the result). It fails open when Jira is unreachable and allows the stop on a
+  second refusal for the same board.
+- Waiting for a slot: the exit 4 message of a WIP limit names a wait command. The agent runs it in the background (`run_in_background`):
+  it retries the move every 120 seconds until the slot is free. The agent does not hand the wait to the owner.
 - Free slots: after every move between columns, the wrapper prints the free In Progress slots and the next top tickets of Ready, one per free slot,
   for example `In Progress 2/3: 1 slot free; next: CHB-123` (CHB-125).
   The next tickets follow the sorted order of [Ready](#ready). A Backlog ticket is never next. A ticket that a start would refuse for a missing section is marked:
@@ -170,10 +176,11 @@ Ready was named To Do until 2026-11-10 (CHB-153). The rules below apply to it un
 - WIP limit (owner decision, 2026-11-10, CHB-157): a min and a max on the board. Epics never count toward any column limit: the board shows no epic as a card.
   - Max: a move into Ready (`ready`, or a move back) exits 4 while Ready holds its max. The message names the tickets in Ready.
     To make room, the agent moves the least needed ticket back to Backlog (`factory/bin/jira transition CHB-<n> Backlog`), within the limits.
-  - Min: a signal, not a quota. After a move that leaves Ready below its min, the wrapper prints
+  - Min: not a quota. After a move that leaves Ready below its min, the wrapper prints
     `Ready is below its minimum (count/min): look for Backlog tickets with a trigger; none qualify means tell the owner`.
     The agent looks for Backlog tickets with a real trigger. If none has one, it tells the owner "Ready is low, nothing in Backlog has a trigger".
     It never moves a ticket to Ready only to reach the min.
+    The Stop hook `factory/hooks/check_wip_minimums.py` refuses to end the turn while Ready is below its min and the reply does not report this scan.
 
 ### In Progress
 
