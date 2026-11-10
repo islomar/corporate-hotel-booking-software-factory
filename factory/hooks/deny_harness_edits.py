@@ -7,6 +7,12 @@ change made inside a feature PR changes the rules the agent works under without 
 Denied: Write, Edit, MultiEdit and NotebookEdit of a path whose first folder, relative to the top of its own git
 worktree, is `.claude`, `factory` or `.github`, when that worktree's branch is `CHB-<n>-...` and
 CHB-<n> is a product epic or its Jira parent is one (PRODUCT_EPICS).
+A Bash command is checked for the paths it may write (CHB-165, `harness_bash_writes.py`): redirections,
+`tee`, `sed -i`, `cp`/`mv`/`install`/`ln`/`rsync`, `rm`, `touch`, `dd of=`, `sh -c`, here-documents and
+interpreter code that calls a write function. Each path gets the verdict of an Edit of that path.
+A command that only reads a harness path (`cat`, `grep`, `git diff`, `git show`) is allowed.
+The forms it cannot catch are listed in `harness_bash_writes.py` and `docs/knowledge/harness-guard-bash-limits.md`;
+code-owner review of the harness folders is the backstop.
 Allowed: other paths, paths outside a git repository, other branches (`main`, `worktree-agent-...`:
 the branch name hook guards names), tickets of other epics and tickets without a parent.
 git that times out or does not start denies a harness path with its own message.
@@ -34,6 +40,7 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from harness_bash_writes import write_targets  # noqa: E402
 from private_folder import private_folder  # noqa: E402
 
 # The product epics (owner, CHB-30): Walking skeleton, Observability with OpenTelemetry,
@@ -225,13 +232,25 @@ def _decide(raw: str) -> int:
     tool_input = event.get("tool_input") if isinstance(event, dict) else None
     paths = [tool_input.get(k) for k in PATH_KEYS] if isinstance(tool_input, dict) else []
     path = next((p for p in paths if isinstance(p, str) and p), None)
+    given_cwd = event.get("cwd") if isinstance(event, dict) else None
+    cwd = given_cwd if isinstance(given_cwd, str) and given_cwd else os.getcwd()
     if path is None:
-        return 0
-    cwd = event.get("cwd") if isinstance(event.get("cwd"), str) and event.get("cwd") else os.getcwd()
+        command = tool_input.get("command") if isinstance(tool_input, dict) else None
+        return _decide_bash(command, cwd) if isinstance(command, str) else 0
     why = reason(path, cwd=cwd)
     if why:
         print(why, file=sys.stderr)
         return 2
+    return 0
+
+
+def _decide_bash(command: str, cwd: str) -> int:
+    """Deny the command when one of the harness paths it may write is denied as an edit."""
+    for path, where in write_targets(command, cwd):
+        why = reason(path, cwd=where)
+        if why:
+            print(why, file=sys.stderr)
+            return 2
     return 0
 
 

@@ -347,13 +347,82 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("hook failed (ValueError)", err)
 
-    def test_project_settings_register_the_hook_on_file_edits(self) -> None:
+    def test_project_settings_register_the_hook_on_file_edits_and_bash(self) -> None:
         settings = json.loads((ROOT / ".claude" / "settings.json").read_text())
         (group,) = [g for g in settings["hooks"]["PreToolUse"] if "deny_harness_edits.py" in g["hooks"][0]["command"]]
 
-        self.assertEqual(set(group["matcher"].split("|")), {"Write", "Edit", "MultiEdit", "NotebookEdit"})
+        self.assertEqual(set(group["matcher"].split("|")), {"Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"})
         self.assertIn("python3 -I", group["hooks"][0]["command"])
         self.assertIn("factory/hooks/deny_harness_edits.py", group["hooks"][0]["command"])
+
+
+def _bash(command: str, cwd: str = "/repo") -> str:
+    return json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": cwd, "tool_input": {"command": command}})
+
+
+class BashTest(unittest.TestCase):
+    """Bash commands that write a harness path get the verdict a Write of that path gets (CHB-165)."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.repo = _git_repo(Path(tmp.name) / "repo", "CHB-20-auth")
+        self.lookup = mock.patch.object(hook, "parent_epic", return_value="CHB-19").start()
+        self.addCleanup(mock.patch.stopall)
+
+    def _run(self, command: str) -> tuple[int, str, str]:
+        return _main(_bash(command, str(self.repo)))
+
+    def test_each_writing_form_on_a_product_branch_is_denied_with_the_edit_reason(self) -> None:
+        for command in [
+            "echo x > factory/a",
+            "echo x | tee .github/a",
+            "sed -i 's/a/b/' .claude/settings.json",
+            "cp /tmp/a factory/a",
+            "mv /tmp/a .github/a",
+            "bash -c 'echo x > factory/a'",
+            "python3 -c \"open('factory/a', 'w').write('x')\"",
+            "cat > factory/a <<'EOF'\nx\nEOF",
+            "cd factory && echo x > a",
+        ]:
+            with self.subTest(command):
+                code, out, err = self._run(command)
+                self.assertEqual((code, out), (2, ""))
+                self.assertIn("Blocked: CHB-20 belongs to product epic CHB-19", err)
+
+    def test_read_only_commands_that_mention_harness_paths_pass_without_jira(self) -> None:
+        for command in ["cat factory/a", "grep -rn x .github", "git diff -- .claude", "cp factory/a /tmp/a", "echo x > docs/a", "echo x > backend/factory/a", "ls"]:
+            with self.subTest(command):
+                self.assertEqual(self._run(command), (0, "", ""))
+        self.lookup.assert_not_called()
+
+    def test_a_factory_ticket_may_write_through_bash(self) -> None:
+        self.lookup.return_value = "CHB-27"
+
+        self.assertEqual(self._run("echo x > factory/a"), (0, "", ""))
+
+    def test_other_branches_pass(self) -> None:
+        main = _git_repo(self.repo.parent / "m", "main")
+
+        self.assertEqual(_main(_bash("echo x > factory/a", str(main))), (0, "", ""))
+
+    def test_jira_unreadable_denies_a_bash_write(self) -> None:
+        self.lookup.side_effect = hook.JiraUnreadable("no token")
+
+        code, _, err = self._run("tee factory/a")
+
+        self.assertEqual(code, 2)
+        self.assertIn("could not read", err)
+
+    def test_an_error_while_reading_a_command_denies(self) -> None:
+        with mock.patch.object(hook, "write_targets", side_effect=ValueError("boom")):
+            code, _, err = _main(_bash("echo factory"))
+
+        self.assertEqual(code, 2)
+        self.assertIn("hook failed (ValueError)", err)
+
+    def test_a_non_string_command_is_left_alone(self) -> None:
+        self.assertEqual(_main(json.dumps({"cwd": "/repo", "tool_input": {"command": 5}}))[0], 0)
 
 
 if __name__ == "__main__":
