@@ -80,7 +80,6 @@ A Claude Code hook in `.claude/settings.json` denies raw `acli` writes and direc
 
 ```mermaid
 stateDiagram-v2
-    direction LR
     state "In Progress" as InProgress
     state "In Review" as InReview
     state "Needs human" as NeedsHuman

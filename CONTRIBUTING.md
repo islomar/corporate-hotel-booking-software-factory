@@ -39,7 +39,7 @@ People and agents build the app on a laptop, ship it through GitHub, and run it 
 The agent never uses the owner's logins: two wrappers act as the agent's own accounts.
 
 ```mermaid
-flowchart LR
+flowchart TD
     owner(["Owner"])
     agent(["Claude Code agent"])
     users(["App users"])
