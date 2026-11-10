@@ -108,8 +108,8 @@ Open <http://localhost:3000>, then **Explore**, and pick a data source:
 - **Prometheus** (metrics): query `http_server_request_duration_seconds_count`.
 - **Loki** (logs): query `{service_name="chb"}`.
 
-Health checks (`/api/health`) produce metrics but no traces.
-To create traces, call another endpoint, for example `curl http://localhost:8000/api/openapi.json`.
+Health checks (`/api/health`) produce metrics, but no traces and no access log lines.
+To create traces and logs, open <http://localhost:8000/api/docs> and reload it a few times.
 
 ### Production: Google Cloud console
 
@@ -131,7 +131,7 @@ gcloud logging read 'resource.labels.service_name="chb" AND jsonPayload.message:
 
 Each JSON log line carries `logging.googleapis.com/trace` and `logging.googleapis.com/spanId`.
 Cloud Logging moves them to the entry's `trace`, `spanId` and `traceSampled`, which is how a log line links to its trace.
-Health-check lines have `traceSampled: false` and no trace.
+Health checks write no access log line.
 
 ### How export works on Cloud Run
 
@@ -139,9 +139,9 @@ Cloud Run throttles CPU after the response goes out.
 The backend holds back the last chunk of each response until it has exported the spans and logs of that request.
 It exports metrics from the same place, at most once a minute.
 One thread runs flushes, one at a time; concurrent responses share the next flush.
-A response waits at most 2 s for a flush. After a span or log flush that fails or takes over 0.5 s, responses skip flushing for 30 s.
+A response waits at most 2 s for a flush. After a span and log flush that fails or takes over 0.5 s, responses skip flushing for 30 s.
 If telemetry setup fails at startup, the app logs one warning and runs without export.
-The backend decides sampling itself: health checks (`/api/health`) get request metrics but no traces, every other request is traced.
+The backend decides sampling itself: health checks (`/api/health`) get request metrics but no traces and no access log line, every other request is traced.
 The sampled flag in an incoming `traceparent` header is ignored; its trace ID is kept.
 
 ## Layout
