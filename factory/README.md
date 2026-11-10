@@ -1,15 +1,17 @@
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
-**Table of Contents** *generated with [DocToc](https://github.com/thlorenz/doctoc)*
+## Contents
 
 - [Factory](#factory)
   - [Credentials: the 1Password service account](#credentials-the-1password-service-account)
-    - [Renewing the token](#renewing-the-token)
+    - [Rotating the token](#rotating-the-token)
   - [Acting as the agent](#acting-as-the-agent)
+  - [Subagent models](#subagent-models)
   - [Acting in Jira as the agent](#acting-in-jira-as-the-agent)
     - [Board rules on transition](#board-rules-on-transition)
     - [Hook against raw Jira writes](#hook-against-raw-jira-writes)
   - [Hook: commands for the owner work from any folder](#hook-commands-for-the-owner-work-from-any-folder)
+  - [Hook: no personal agent memory](#hook-no-personal-agent-memory)
   - [Automated PR review (shadow mode)](#automated-pr-review-shadow-mode)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -41,18 +43,30 @@ The agent stops and reports.
 
 The pop-up was also a human check on every read. Without it, any process that runs as the owner's user while the keyring is unlocked can read the two items in `chb-factory`, and nothing else.
 
-### Renewing the token
+### Rotating the token
 
-A service account token can expire. When it expires, every agent commit, push and Jira write stops with exit 3.
-The owner checks the expiry in 1Password (<https://my.1password.com> > Developer > Service accounts > `chb-factory-agent`) and renews it before that date:
+The token does not expire, on purpose: an expiry would stop every agent commit, push and Jira write on a fixed date (owner decision, 2026-11-07).
+The token is read-only and reaches only the vault `chb-factory`. The remaining risk is a leak, so the owner rotates the token:
 
-1. Create a new token for `chb-factory-agent` in the same place, with the same vault access (`chb-factory`, Read Items only).
-2. In your own terminal, store it under the same attributes; this replaces the old one:
+- once a year (next: by 2027-11-07), and
+- at once on a suspected leak (the token appeared in a chat, log, file, screenshot or commit).
+
+Owner steps, about 5 minutes:
+
+1. Rotate the token. WHERE: <https://my.1password.com> > Developer > Service accounts > `chb-factory-agent` > Rotate token.
+   HOW: for "Expire existing token" pick "in 3 days", or "now" if the token leaked.
+   If the screen offers an expiry for the new token, pick "Never".
+   Copy the new token. Do not paste it into the Claude chat. Do not change the vault access (`chb-factory`, read only).
+2. Store it in your own terminal, never in the Claude chat and never with `!`. This replaces the old one:
    `secret-tool store --label="chb-factory 1Password service account" service chb-factory key op-service-account-token`
-3. Check: `factory/bin/jira view CHB-97` exits 0.
-4. Revoke the old token in 1Password.
+   Paste the token at the `Password:` prompt.
+3. Check, in your terminal from any folder:
+   `~/workspace/corporate-hotel-booking-software-factory/factory/bin/jira view CHB-97` exits 0, and
+   `~/workspace/corporate-hotel-booking-software-factory/factory/bin/as-agent gh api /rate_limit --jq .rate.limit` prints a number.
+4. If a leak was the reason, tell Claude, so it checks where the token appeared.
+5. Tell Claude in the chat: "token rotated". Claude writes the date on the rotation ticket and creates the next yearly rotation ticket.
 
-Ticket: CHB-121.
+Tickets: CHB-121, CHB-123.
 
 ## Acting as the agent
 
@@ -64,6 +78,12 @@ The private key is read at run time from the vault `chb-factory` with the servic
 factory/bin/as-agent git push -u origin CHB-71-agent-token
 factory/bin/as-agent gh pr create --fill
 ```
+
+## Subagent models
+
+The owner's Claude Code sets `CLAUDE_CODE_SUBAGENT_MODEL=sonnet` (2026-11-07), so subagents run on Sonnet by default.
+An agent that implements a CHB ticket, or does design or review work, runs on Opus: pass `model: "opus"` when spawning it.
+Lookups and mechanical briefs stay on the default.
 
 ## Acting in Jira as the agent
 
@@ -100,7 +120,8 @@ It replaces the section up to the next heading of the same or a higher level, or
 The new section is a level-2 heading and the body. In the body, lines that start with a dash and a space become a bullet list.
 It sends every other part of the description back unchanged. It refuses a description with two such headings.
 It reads, then writes: it overwrites an edit that someone else makes between the two requests.
-A bad heading, an empty body, a duplicate key or more than 50 issues exit 2 before the wrapper reads 1Password.
+In a section headed "Acceptance criteria (Validating)", each "When:" line needs a "Speed up:" line before the next "When:" line (CHB-133).
+A bad heading, an empty body, a "When:" line without "Speed up:", a duplicate key or more than 50 issues exit 2 before the wrapper reads 1Password.
 
 `view` shows a bullet list as lines that start with a dash.
 
@@ -136,7 +157,7 @@ The count is a JQL search on the column's status ids in project CHB, without the
 No other move is limited. Moves into In Review and Validating record a PR or a merge, so a column can go over its max; Jira colours it.
 A move back into In Progress from In Review, Validating or Needs human is not new work and is not limited.
 A failed board read exits 1 and does not move the ticket.
-After a move out of In Progress that leaves it below its board min, `transition` prints `In Progress is below its minimum (0/1): idle, ask the owner for the next ticket` and exits 0.
+After a move out of In Progress that leaves it below its board min, `transition` prints `In Progress is below its minimum (0/1): idle, pull the top ticket of To Do` and exits 0.
 If that count fails, it prints a notice instead and still exits 0: the ticket has moved.
 Two agents that move tickets at the same moment can both pass the check. The owner overrides a limit in the Jira UI, with a comment.
 
@@ -168,6 +189,14 @@ These pass: a command after `cd /absolute/folder` in the same block, a line that
 Put a block that you do not want pasted in a `text` block.
 
 The hook blocks once per reply and never on bad input, so it cannot loop. Like the Jira hook, it is a guardrail that reads text only.
+
+## Hook: no personal agent memory
+
+`.claude/settings.json` runs `factory/hooks/deny_agent_memory_writes.py` before every Write, Edit, MultiEdit and NotebookEdit call (CHB-136).
+On 2026-11-07 a session saved a work-in-progress snapshot to Claude Code's per-user memory. It went stale within a day, and a later session read it.
+
+The hook denies any path under `.claude/projects/<project>/memory/`. Work state goes in Jira with `factory/bin/jira`. Learnings go in `docs/knowledge/`, a hook or a check (ADR-eedb).
+Writes through Bash (`>`, `cp`, `sed -i`) are not covered: the hook stops accidents, not a deliberate bypass.
 
 ## Automated PR review (shadow mode)
 

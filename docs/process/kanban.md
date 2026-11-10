@@ -41,8 +41,10 @@ A WIP limit stops pulling new work. It never stops the board from recording what
 - A move back into In Progress (review asked for changes, a live check failed, the owner answered) is not new work and is never blocked.
 - Moves within one column, out of a column, or into a column without a max are never blocked.
 - The max values live on the board only. This document does not repeat them.
-- Min: a signal only. When a move leaves In Progress below its min, the wrapper prints "idle, ask the owner for the next ticket".
-  The agent asks the owner and never pulls a ticket without the owner's go.
+- Min: a signal only. When a move leaves In Progress below its min, the wrapper prints "idle, pull the top ticket of To Do".
+- Pulling work: the agent fills In Progress up to its max, one agent per ticket, in parallel where it can (owner rule, 2026-11-10).
+  It pulls the top tickets of To Do in rank order and needs no go per ticket. The owner can say stop at any time.
+  Finishing comes first: before it pulls a ticket, the agent drives what it can in Validating, In Review and In Progress (live checks, review fixes, owner steps).
 - Owner override: the owner moves the ticket in the Jira UI and writes why in a comment on the ticket.
 
 Jira Free only colours a column over its limit. The check lives in `factory/bin/jira`.
@@ -96,7 +98,11 @@ Meaning: the change is merged and deployed, but nobody has yet confirmed that it
   An agent writes it with `factory/bin/jira section CHB-<n> --heading "Acceptance criteria (Validating)" --body-file FILE`.
   A reader without context must see what is still missing. For each criterion not yet checked live, the section states:
   - What must happen, in the live system.
-  - When: an absolute date and time, or the event that triggers it (for example "the next Dependabot run, Monday 2026-11-09 05:00 UTC").
+  - When: an absolute date and time, or the event that triggers it (for example "the next Dependabot run, 2026-11-11 06:00 Europe/Madrid").
+  - Speed up: a line of its own right after When. It names the exact step that lets the owner trigger it earlier, or says "cannot be sped up" and why.
+    Examples: Dependabot "Check for updates" in the repository's Insights, Dependency graph, Dependabot tab.
+    "Run workflow" on the Actions page of a workflow that declares `workflow_dispatch`. "Re-run jobs" on a failed run.
+    `factory/bin/jira section` refuses the section (exit 2) while a "When:" line has no "Speed up:" line.
   - Where to check: the exact URL or command.
   - Pass condition: what the check must show.
   - Who checks: the agent or the owner. If the owner must act, the section has numbered steps, as for Needs human.
