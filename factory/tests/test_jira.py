@@ -2273,23 +2273,28 @@ class SortTodoTest(unittest.TestCase):
         self.assertEqual(out.splitlines()[0], "CHB-12 -> In Progress")
         self.assertEqual(_write_paths(fake), [RANK_PATH, MOVE_PATH])
 
-    def test_a_blocked_or_epic_start_writes_no_rank_even_when_to_do_is_out_of_order(self) -> None:
+    def test_a_blocked_epic_or_unlisted_start_writes_no_rank_even_when_to_do_is_out_of_order(self) -> None:
         """The refusals that do not depend on the order come before the sort."""
         cases = {
             "blocked": {"links": {"CHB-12": blocked_by("CHB-91")}},
             "epic": {"epics": ("CHB-12",)},
+            "missing from the search": {},
         }
         for name, kwargs in cases.items():
             with self.subTest(name):
                 fake = transition_fake(
                     "To Do", {"To Do": ["CHB-5", "CHB-6"], "In Review": ["CHB-91"]}, priorities={"CHB-6": "High"}, **kwargs
                 )
-                if name == "blocked":
-                    fake.routes[("GET", f"/rest/api/3/issue/CHB-12?fields={ISSUE_FIELDS}")] = issue_in("To Do", READY, blocked_by("CHB-91"))
-                code, _, _ = _run(["transition", "CHB-12", "In Progress"], fake)
+                if name == "missing from the search":
+                    fake.routes[("POST", SEARCH)] = keys_answer(
+                        {"To Do": ["CHB-5", "CHB-6"], "In Review": ["CHB-91"]}, priorities={"CHB-6": "High"}
+                    )
+                code, _, err = _run(["transition", "CHB-12", "In Progress"], fake)
 
                 self.assertEqual(code, 4)
                 self.assertEqual(fake.writes(), [])
+                if name == "missing from the search":
+                    self.assertIn("CHB-12 is missing from the search of open tickets", err)
 
     def test_a_start_refused_by_the_top_rule_names_the_priority_command(self) -> None:
         fake = transition_fake("To Do", {"To Do": ["CHB-5", "CHB-12"]}, priorities={"CHB-5": "High", "CHB-12": "Medium"})
