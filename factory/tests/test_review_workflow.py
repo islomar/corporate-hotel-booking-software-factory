@@ -43,5 +43,53 @@ class DetailsUrlTest(unittest.TestCase):
         self.assertEqual(result, {**payload, "details_url": "https://github.com/o/r/actions/runs/7"})
 
 
+COMMENT_POST = 'gh api -X POST "repos/$REPO/issues/$PR_NUMBER/comments" --input "$comment.json"'
+COMMENT_JSON = re.compile(r"^\s*(jq -n --rawfile body .*)$", re.MULTILINE)
+
+
+class ReviewCommentTest(unittest.TestCase):
+    """CHB-141: the owner reacts to a PR comment; factory/review/agreement.py counts the reactions."""
+
+    def setUp(self) -> None:
+        self.text = WORKFLOW.read_text()
+
+    def test_gate_writes_the_comment_and_a_later_step_posts_it(self) -> None:
+        self.assertIn('--comment-out "$RUNNER_TEMP/comment.md"', self.text)
+        self.assertEqual(self.text.count(COMMENT_POST), 1)
+        self.assertLess(self.text.index(POST), self.text.index(COMMENT_POST))
+        self.assertIn('comment="$RUNNER_TEMP/comment.md"', self.text)
+
+    def test_the_comment_never_blocks_the_check(self) -> None:
+        token_step = self.text[self.text.index("- id: comment-token") :]
+        self.assertIn("continue-on-error: true", token_step.split("- name: Post the review comment")[0])
+        self.assertIn("permission-pull-requests: write", token_step)
+        post_step = self.text[self.text.index("- name: Post the review comment") :]
+        self.assertIn("continue-on-error: true", post_step)
+        # The check-run token keeps pull requests read.
+        check_token = self.text[self.text.index("- id: app-token") : self.text.index("- id: comment-token")]
+        self.assertIn("permission-pull-requests: read", check_token)
+
+    def test_the_comment_follows_a_posted_check_of_a_model_review(self) -> None:
+        self.assertIn("- id: gate\n        name: Gate and post the review check", self.text)
+        token_step = self.text[self.text.index("- id: comment-token") :].split("\n")[1]
+        self.assertIn("steps.gate.outcome == 'success'", token_step)
+        self.assertIn("steps.plan.outputs.action == 'review'", token_step)
+        post_step = self.text[self.text.index("- name: Post the review comment") :].split("\n")[1]
+        self.assertIn("steps.comment-token.outputs.token != ''", post_step)
+
+    @unittest.skipUnless(shutil.which("jq"), "jq is not installed")
+    def test_the_jq_line_sends_the_file_as_the_body(self) -> None:
+        line = COMMENT_JSON.search(self.text).group(1)  # type: ignore[union-attr]
+        body = 'Pass "quoted" `code` $HOME\n\nOwner: react 👍\n<!-- chb-review reviewed:abc -->\n'
+        with tempfile.TemporaryDirectory() as tmp:
+            comment = Path(tmp) / "comment.md"
+            comment.write_text(body, encoding="utf-8")
+            env = {"comment": str(comment), "PATH": "/usr/bin:/bin"}
+            subprocess.run(["bash", "-euc", line], check=True, env=env)  # noqa: S603,S607
+            result = json.loads(Path(f"{comment}.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(result, {"body": body})
+
+
 if __name__ == "__main__":
     unittest.main()

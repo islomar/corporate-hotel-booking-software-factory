@@ -27,7 +27,7 @@
 - Status: accepted (2026-11-06)
 - Date: 2026-11-06
 - Ticket: CHB-82
-- Amended by CHB-93 (decision 2) and CHB-105 (decisions 2, 3 and 7, owner decision 4)
+- Amended by CHB-93 (decision 2), CHB-105 (decisions 2, 3 and 7, owner decision 4) and CHB-141 (decisions 3 and 8)
 
 ## Context
 
@@ -155,6 +155,10 @@ The first version (CHB-87) used `pull_request`, where a branch that edits `revie
   - GitHub treats `neutral` as success for a required check. Once `review` is required, a docs-only PR passes it with no model review. The governance exclusions above are what keep that safe.
 - Fail closed: schema error, timeout, budget cap, refusal or missing output give `failure`.
 - Findings go to the check summary and inline review comments as plain text. Mentions are escaped and length is capped.
+- After a valid model review, the reviewer App also posts the summary as a PR comment (CHB-141).
+  The comment ends with a line that asks the owner to react 👍 or 👎, and a marker `<!-- chb-review reviewed:<sha> -->`.
+  It uses its own token with pull requests write, after the check is posted. A failed comment never blocks the check.
+  Skipped, carried and error runs post no comment.
 - The ruleset requires `review` with `integration_id` set to the reviewer App. A job named `review` in any workflow cannot satisfy it.
 
 ### 4. Risk classes and who approves
@@ -222,6 +226,12 @@ Each stage starts when the owner reads the metrics and agrees. The thresholds be
 | 4. Feature default | Most feature PRs | Harness, security-tagged tickets, fork PRs | Postmortems show no review-caused incident |
 
 Harness paths stay human at every stage.
+
+Stage 1 data (CHB-141): `make review-agreement` runs `factory/review/agreement.py`.
+For each PR merged into `main` since 2026-11-10, it reads the last review comment of the reviewer App and the owner's reaction on it.
+👍 is agree, 👎 is disagree, both count as disagree, none is no answer. Reactions from anyone else are ignored.
+It prints the counts and the stage 1 exit: 20 answered PRs with 2 or fewer disagreements.
+It lists the 👎 PRs. The owner checks their replies for a missed critical finding; the script cannot judge that.
 
 ## Alternatives rejected
 

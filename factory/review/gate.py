@@ -12,8 +12,8 @@ a non-zero exit of claude.
 Usage (from .github/workflows/review.yml):
   gate.py --result result.json --claude-exit-code N --schema schema.json
           --changed-files names.z --prior-runs runs.json --app-slug SLUG
-          --head-sha SHA --out check-run.json
-Writes the check run payload to --out. Exit code: 0 pass, 1 fail, 2 usage error.
+          --head-sha SHA --out check-run.json [--comment-out comment.md]
+Writes the check run payload to --out, and for a valid model review the PR comment to --comment-out. Exit code: 0 pass, 1 fail, 2 usage error.
 """
 
 from __future__ import annotations
@@ -50,6 +50,10 @@ ERROR = "error:"  # + the head SHA: no valid review (claude failed, usage limit,
 CARRIED = "carried:"  # + the SHA whose verdict was carried forward (factory/review/plan.py)
 SKIPPED = "skipped"  # docs-only PR, no model review (factory/review/plan.py)
 SUMMARY_LIMIT = 60000  # GitHub caps a check run summary at 65535 characters.
+# CHB-141: the PR comment of a model review ends with this line and a marker.
+# factory/review/agreement.py counts the owner's reactions on it (ADR-ea8c stage 1).
+REACTION_LINE = "Owner: react 👍 if you agree with this verdict, 👎 if not. On 👎, reply with what it missed or got wrong."
+COMMENT_MARKER = "<!-- chb-review "  # + "reviewed:<sha> -->"
 
 ANNOTATIONS = {"$schema", "title", "description", "$defs"}
 SUPPORTED_KEYWORDS = ANNOTATIONS | {
@@ -374,6 +378,16 @@ def check_run_payload(verdict: Verdict, head_sha: str, summary: str) -> dict[str
     }
 
 
+def comment_body(verdict: Verdict, head_sha: str, summary: str) -> str | None:
+    """PR comment for a valid model review: summary, reaction line, marker. None otherwise.
+
+    An error run (claude failed, usage limit, schema error) is no verdict to agree with.
+    """
+    if verdict.merge_safety is None:
+        return None
+    return f"{summary}\n\n{REACTION_LINE}\n\n{COMMENT_MARKER}{REVIEWED}{head_sha} -->\n"
+
+
 # --- command line -----------------------------------------------------------------------
 
 
@@ -389,6 +403,7 @@ def main(argv: list[str]) -> int:
     for name in ("--result", "--schema", "--changed-files", "--prior-runs", "--app-slug", "--head-sha", "--out"):
         parser.add_argument(name, required=True)
     parser.add_argument("--claude-exit-code", type=int, required=True)
+    parser.add_argument("--comment-out", help="write the PR comment here; only for a valid model review")
     args = parser.parse_args(argv)
 
     schema = json.loads(Path(args.schema).read_text(encoding="utf-8"))
@@ -400,8 +415,12 @@ def main(argv: list[str]) -> int:
         runs = []
     round_number = review_round(runs if isinstance(runs, list) else [], args.app_slug)
 
-    payload = check_run_payload(verdict, args.head_sha, render_summary(verdict, risk, round_number))
+    summary = render_summary(verdict, risk, round_number)
+    payload = check_run_payload(verdict, args.head_sha, summary)
     Path(args.out).write_text(json.dumps(payload), encoding="utf-8")
+    comment = comment_body(verdict, args.head_sha, summary)
+    if args.comment_out and comment is not None:
+        Path(args.comment_out).write_text(comment, encoding="utf-8")
     print(f"{payload['conclusion']}: risk {risk}, round {round_number}; " + "; ".join(verdict.reasons))
     return 0 if verdict.passed else 1
 

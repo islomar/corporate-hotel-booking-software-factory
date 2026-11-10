@@ -271,7 +271,8 @@ jobs:
           permission-checks: write
           permission-pull-requests: read
 
-      - name: Gate and post the review check
+      - id: gate
+        name: Gate and post the review check
         if: ${{ !cancelled() && steps.app-token.outputs.token != '' }}
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -293,7 +294,8 @@ jobs:
               --prior-runs "$RUNNER_TEMP/prior-runs.json" \
               --app-slug "$APP_SLUG" \
               --head-sha "$HEAD_SHA" \
-              --out "$payload" || true
+              --out "$payload" \
+              --comment-out "$RUNNER_TEMP/comment.md" || true
           fi
           if [ ! -s "$payload" ]; then
             jq -n --arg sha "$HEAD_SHA" '{name: "review", head_sha: $sha, status: "completed", conclusion: "failure",
@@ -304,3 +306,31 @@ jobs:
           run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           jq --arg url "$run_url" '.details_url = $url' "$payload" > "$payload.tmp" && mv "$payload.tmp" "$payload"
           gh api -X POST "repos/$REPO/check-runs" --input "$payload" > /dev/null
+
+      # CHB-141: a PR comment the owner reacts to with 👍 or 👎. factory/review/agreement.py counts them
+      # (ADR-ea8c stage 1). gate.py writes the comment only for a valid model review.
+      # Only after the check posted. Own token with pull requests write, and continue-on-error:
+      # a missing permission or a failed comment never blocks the review check.
+      - id: comment-token
+        if: ${{ !cancelled() && steps.gate.outcome == 'success' && steps.plan.outputs.action == 'review' }}
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ secrets.REVIEWER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
+          permission-pull-requests: write
+
+      - name: Post the review comment
+        if: ${{ !cancelled() && steps.comment-token.outputs.token != '' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.comment-token.outputs.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          comment="$RUNNER_TEMP/comment.md"
+          if [ ! -s "$comment" ]; then
+            echo "No valid model review: no comment."
+            exit 0
+          fi
+          jq -n --rawfile body "$comment" '{body: $body}' > "$comment.json"
+          gh api -X POST "repos/$REPO/issues/$PR_NUMBER/comments" --input "$comment.json" > /dev/null

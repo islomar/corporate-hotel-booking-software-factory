@@ -1,6 +1,9 @@
+import contextlib
 import copy
+import io
 import json
 import sys
+import tempfile
 import unittest
 from fractions import Fraction
 from pathlib import Path
@@ -11,9 +14,12 @@ from gate import (
     MAX_ROUNDS,
     SUPPORTED_KEYWORDS,
     GateError,
+    REACTION_LINE,
     check_run_payload,
+    comment_body,
     dimension_scores,
     evaluate,
+    main,
     merge_safety,
     parse_json,
     parse_name_list,
@@ -415,6 +421,77 @@ class CheckRunPayloadTest(unittest.TestCase):
         for verdict in (evaluate("", SCHEMA), evaluate(_envelope(_fixture("valid.json")), SCHEMA, claude_exit_code=1)):
             with self.subTest(verdict.reasons):
                 self.assertEqual(check_run_payload(verdict, head_sha="abc", summary="s")["external_id"], "error:abc")
+
+
+class CommentBodyTest(unittest.TestCase):
+    """CHB-141: the PR comment the owner reacts to. Read by factory/review/agreement.py."""
+
+    def test_a_model_review_gets_the_summary_the_reaction_line_and_the_marker(self) -> None:
+        verdict = evaluate(_envelope(_fixture("valid.json")), SCHEMA)
+
+        body = comment_body(verdict, head_sha="abc", summary="the summary")
+
+        assert body is not None
+        self.assertTrue(body.startswith("the summary"))
+        self.assertIn(REACTION_LINE, body)
+        self.assertTrue(body.rstrip().endswith("<!-- chb-review reviewed:abc -->"))
+        self.assertLess(body.index("the summary"), body.index(REACTION_LINE))
+
+    def test_the_reaction_line_is_the_one_the_ticket_asks_for(self) -> None:
+        self.assertEqual(
+            REACTION_LINE,
+            "Owner: react 👍 if you agree with this verdict, 👎 if not. On 👎, reply with what it missed or got wrong.",
+        )
+
+    def test_a_failing_review_also_asks_for_a_reaction(self) -> None:
+        verdict = evaluate(_envelope(_fixture("critical.json")), SCHEMA)
+
+        self.assertIn(REACTION_LINE, comment_body(verdict, head_sha="abc", summary="s") or "")
+
+    def test_no_comment_without_a_valid_review(self) -> None:
+        for verdict in (evaluate("", SCHEMA), evaluate(_envelope(_fixture("valid.json")), SCHEMA, claude_exit_code=1)):
+            with self.subTest(verdict.reasons):
+                self.assertIsNone(comment_body(verdict, head_sha="abc", summary="s"))
+
+    def test_the_comment_has_no_mention(self) -> None:
+        verdict = evaluate(_envelope(_fixture("valid.json")), SCHEMA)
+        summary = render_summary(verdict, risk="feature", round_number=1)
+
+        self.assertNotIn("@", (comment_body(verdict, head_sha="abc", summary=summary) or "").replace("@\u200b", ""))
+
+
+class MainTest(unittest.TestCase):
+    def _run(self, tmp: Path, result: str, exit_code: int = 0) -> Path:
+        (tmp / "result.json").write_text(result)
+        (tmp / "names.z").write_text("backend/app.py\0")
+        (tmp / "runs.json").write_text("[]")
+        comment = tmp / "comment.md"
+        args = [
+            "--result", str(tmp / "result.json"), "--claude-exit-code", str(exit_code),
+            "--schema", str(Path(__file__).resolve().parents[1] / "review" / "schema.json"),
+            "--changed-files", str(tmp / "names.z"), "--prior-runs", str(tmp / "runs.json"),
+            "--app-slug", "chb-factory-reviewer", "--head-sha", "abc", "--out", str(tmp / "check-run.json"),
+            "--comment-out", str(comment),
+        ]  # fmt: skip
+        with contextlib.redirect_stdout(io.StringIO()):
+            main(args)
+        return comment
+
+    def test_writes_the_comment_for_a_model_review(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            comment = self._run(Path(tmp), _envelope(_fixture("valid.json")))
+
+            text = comment.read_text(encoding="utf-8")
+            summary = json.loads((Path(tmp) / "check-run.json").read_text())["output"]["summary"]
+
+        self.assertTrue(text.startswith(summary))
+        self.assertIn(REACTION_LINE, text)
+
+    def test_writes_no_comment_without_a_valid_review(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            comment = self._run(Path(tmp), "", exit_code=1)
+
+            self.assertFalse(comment.exists())
 
 
 if __name__ == "__main__":

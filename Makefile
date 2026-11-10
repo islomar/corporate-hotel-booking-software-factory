@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := help
 SHELL := /bin/bash
 
-.PHONY: help setup check-npm dev down up check check-backend check-frontend check-deps test e2e format mutate infra-plan infra-apply
+.PHONY: help setup check-npm dev down up check check-backend check-frontend check-deps test e2e format mutate review-agreement infra-plan infra-apply
 
 help: ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-16s %s\n", $$1, $$2}'
@@ -53,6 +53,10 @@ format: ## Format all code
 
 mutate: ## Mutation testing for the backend
 	cd backend && uv run --locked mutmut run
+
+# SINCE=YYYY-MM-DD changes the first merge date. See factory/review/agreement.py and ADR-ea8c, stage 1.
+review-agreement: ## Owner agreement with the review verdict on merged PRs (ADR-ea8c stage 1)
+	python3 -I factory/review/agreement.py $(if $(SINCE),--since $(SINCE))
 
 TF_ENV = GOOGLE_OAUTH_ACCESS_TOKEN=$$(CLOUDSDK_ACTIVE_CONFIG_NAME=chb gcloud auth print-access-token) \
 	TF_VAR_billing_account=$$(CLOUDSDK_ACTIVE_CONFIG_NAME=chb gcloud billing projects describe chb-factory-a92932 --format='value(billingAccountName)' | sed 's\#billingAccounts/\#\#')
