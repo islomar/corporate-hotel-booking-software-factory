@@ -75,10 +75,13 @@ The list must match exactly. A missing or an extra address fails.
 
 `github/guards.tf` fails the plan when a setting Terraform cannot manage is off, for example CodeQL default setup.
 `github/tests/guards.tftest.hcl` checks each guard against stubbed GitHub responses. It needs no credentials.
-`make check` and CI do not run it yet. Run it after a change to `guards.tf`:
+`make check` runs it (`scripts/check_guard_tests.py`, CHB-158). CI does not run it yet.
+The script needs Terraform at the version in `github/.terraform-version`, network access to download the provider, and no credentials.
+It removes GitHub and Google credentials from the environment and keeps `.terraform` out of the checkout.
+Run it alone:
 
 ```sh
-cd ~/workspace/corporate-hotel-booking-software-factory/infra/github && terraform init -backend=false && terraform test
+python3 -I ~/workspace/corporate-hotel-booking-software-factory/scripts/check_guard_tests.py
 ```
 
 ## Rules
