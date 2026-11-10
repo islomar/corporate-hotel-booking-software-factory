@@ -21,7 +21,26 @@ class MakeDevTest(unittest.TestCase):
         self.assertLess(mkdir, up)
 
     def test_the_backend_container_writes_no_bytecode_into_the_bind_mount(self) -> None:
-        self.assertIn('PYTHONDONTWRITEBYTECODE: "1"', (ROOT / "compose.yaml").read_text())
+        self.assertIn('PYTHONDONTWRITEBYTECODE: "1"', _service_environment("backend"))
+
+
+def _service_environment(service: str) -> list[str]:
+    """The uncommented `KEY: value` lines under services.<service>.environment in compose.yaml.
+
+    A small reader for this file's layout (2-space indent), since `python3 -I` has no YAML parser."""
+    lines, in_service, in_environment = [], False, False
+    for line in (ROOT / "compose.yaml").read_text().splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if indent <= 2:
+            in_service, in_environment = indent == 2 and stripped == f"{service}:", False
+        elif in_service and indent == 4:
+            in_environment = stripped == "environment:"
+        elif in_environment and indent == 6:
+            lines.append(stripped)
+    return lines
 
 
 class CleanDevTest(unittest.TestCase):

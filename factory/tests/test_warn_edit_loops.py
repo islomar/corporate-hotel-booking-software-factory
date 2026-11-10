@@ -203,6 +203,17 @@ class PruneTest(unittest.TestCase):
         with self.assertRaises(PermissionError):
             hook.remove_stale(str(self.folder), now=self.NOW)
 
+    def test_the_prune_flag_reports_an_unsafe_folder_in_one_line(self) -> None:
+        os.chmod(self.folder, 0o777)
+        self.addCleanup(os.chmod, self.folder, 0o700)
+        err = io.StringIO()
+
+        with mock.patch.dict(os.environ, {hook.STATE_DIR_ENV: str(self.folder)}), contextlib.redirect_stderr(err):
+            code = hook.main(["--prune"])
+
+        self.assertEqual(code, 1)
+        self.assertEqual(err.getvalue(), f"warn_edit_loops: prune refused: {self.folder} is open to other users\n")
+
     def test_the_prune_flag_cleans_the_configured_folder(self) -> None:
         old = self._file("old.json", 8, now=time.time())
         new = self._file("new.json", 0, now=time.time())

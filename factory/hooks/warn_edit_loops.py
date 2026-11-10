@@ -94,8 +94,13 @@ def shown(path: str, cwd: str) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     if argv == ["--prune"]:
-        removed = remove_stale(state_dir(), time.time())
-        print(f"removed {len(removed)} loop-detector state file(s) older than 7 days from {state_dir()}")
+        folder = state_dir()
+        try:
+            removed = remove_stale(folder, time.time())
+        except PermissionError as error:
+            print(f"warn_edit_loops: prune refused: {error}", file=sys.stderr)
+            return 1
+        print(f"removed {len(removed)} loop-detector state file(s) older than 7 days from {folder}")
         return 0
     try:
         context = _context(sys.stdin.read())
