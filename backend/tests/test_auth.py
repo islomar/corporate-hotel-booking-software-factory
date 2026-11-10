@@ -1,3 +1,4 @@
+import time
 from collections.abc import Mapping
 
 import pytest
@@ -124,3 +125,19 @@ def test_verify_reports_a_cert_fetch_failure_apart_from_bad_tokens(issuer: Token
 def test_reject_all_rejects_every_token(issuer: TokenIssuer) -> None:
     with pytest.raises(InvalidTokenError):
         RejectAll().verify(issuer.token())
+
+
+def test_verify_tolerates_a_little_clock_skew(issuer: TokenIssuer) -> None:
+    soon = int(time.time()) + 5
+
+    user = verifier(issuer).verify(issuer.token(iat=soon, auth_time=soon))
+
+    assert user.uid == "user-123"
+
+
+@pytest.mark.parametrize("claim", ["iat", "auth_time"])
+def test_verify_rejects_a_token_from_the_future(issuer: TokenIssuer, claim: str) -> None:
+    later = int(time.time()) + 60
+
+    with pytest.raises(InvalidTokenError):
+        verifier(issuer).verify(issuer.token(**{claim: later}))

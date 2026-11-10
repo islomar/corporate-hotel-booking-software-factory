@@ -117,6 +117,21 @@ def test_every_route_outside_the_public_lists_is_closed(tmp_path: Path) -> None:
         assert response.status_code == 401, f"{method} {path} answered {response.status_code}"
 
 
+def test_no_plain_route_or_mount_bypasses_the_check_under_api(tmp_path: Path) -> None:
+    """App-wide dependencies run on API routes only: a plain route or a mount would be open."""
+    (tmp_path / "index.html").write_text("<h1>frontend</h1>")
+    app = create_app(static_dir=tmp_path, web_config=WebConfig("key", "example.firebaseapp.com"))
+    unchecked = [
+        getattr(route, "path", "")
+        for route in app.routes
+        if not isinstance(route, APIRoute)
+        and getattr(route, "path", "").startswith("/api")
+        and getattr(route, "path", "") not in PUBLIC_PATHS
+    ]
+
+    assert unchecked == []
+
+
 def test_without_a_project_every_closed_route_rejects_tokens(issuer: TokenIssuer) -> None:
     client = TestClient(create_app())
 

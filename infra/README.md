@@ -69,7 +69,28 @@ Cloud Run gets the key and the auth domain as environment variables; the backend
 The key is public by design: it names the project, it grants nothing.
 
 The Google provider is not in Terraform: its resource needs the OAuth client secret, and Terraform would store it in the state.
-The owner creates the OAuth client and adds the provider in the console. The steps are in CHB-20.
+The owner creates the OAuth client and adds the provider in the console, once, after `make infra-apply`:
+
+1. Consent screen: open <https://console.cloud.google.com/auth/branding?project=chb-factory-a92932>.
+   If it says "Google Auth platform not configured yet", click **Get Started**: app name `Corporate Hotel Booking`, your support email, **Next**,
+   audience **External**, **Next**, your contact email, **Next**, accept the User Data Policy, **Continue**, **Create**.
+   Google does not let you remove a consent screen once configured.
+2. Publish: open <https://console.cloud.google.com/auth/audience?project=chb-factory-a92932>, **Publish app**, confirm.
+   In "Testing" only listed test users can sign in. The app asks only for name, email and profile: no Google verification.
+3. OAuth client: open <https://console.cloud.google.com/auth/clients?project=chb-factory-a92932>, **Create client**.
+   Type **Web application**, name `chb-identity-platform`.
+   Authorized JavaScript origins: `https://chb-1027266991110.europe-west1.run.app` and `http://localhost:5173`.
+   Authorized redirect URIs: `https://chb-factory-a92932.firebaseapp.com/__/auth/handler`. **Create**.
+   Copy the client ID and the client secret into a new 1Password item. Nowhere else.
+4. Provider: open <https://console.cloud.google.com/customer-identity/providers?project=chb-factory-a92932>, **Add a provider**, **Google**.
+   Paste the Web Client ID and the Web Client Secret, **Save**.
+5. Check: <https://chb-factory-a92932.firebaseapp.com/__/auth/handler> answers with a page, not a 404. The Google popup needs it; email and password does not.
+6. Check: <https://console.cloud.google.com/apis/credentials?project=chb-factory-a92932> lists one browser key, `CHB browser sign-in (Terraform)`.
+   Google warns against two keys restricted to websites. Report any key created by Identity Platform; do not delete it without a ticket.
+
+If `make infra-apply` fails on `google_identity_platform_config` with a message about enabling Identity Platform:
+open <https://console.cloud.google.com/marketplace/details/google-cloud-platform/customer-identity?project=chb-factory-a92932>, click **Enable Identity Platform**, then run `make infra-plan` again.
+The plan may then want to import the config: report it, do not apply.
 
 Until `make infra-apply` has run, the app runs signed out and every closed `/api` route answers 401.
 

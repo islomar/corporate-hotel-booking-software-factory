@@ -28,6 +28,9 @@ CERTS_URL = (
     "https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com"
 )
 
+# Google's clock and ours differ a little: a token minted right now can look issued in the future.
+CLOCK_SKEW_SECONDS = 10
+
 type CertsFetch = Callable[[], tuple[Mapping[str, str], float]]
 
 
@@ -106,7 +109,10 @@ class FirebaseTokenVerifier:
             raise CertsUnavailableError(repr(exc)) from exc
         try:
             claims: Mapping[str, Any] = jwt.decode(  # pyright: ignore[reportUnknownMemberType]
-                token, certs=certs, audience=self._project_id
+                token,
+                certs=certs,
+                audience=self._project_id,
+                clock_skew_in_seconds=CLOCK_SKEW_SECONDS,
             )
         except (ValueError, exceptions.GoogleAuthError) as exc:
             raise InvalidTokenError(str(exc)) from exc
@@ -116,7 +122,7 @@ class FirebaseTokenVerifier:
         if not isinstance(uid, str) or not uid:
             raise InvalidTokenError("no subject")
         auth_time = claims.get("auth_time")
-        if not isinstance(auth_time, int | float) or auth_time > time.time():
+        if not isinstance(auth_time, int | float) or auth_time > time.time() + CLOCK_SKEW_SECONDS:
             raise InvalidTokenError("sign-in time missing or in the future")
         email = claims.get("email")
         return User(uid=uid, email=email if isinstance(email, str) else None)

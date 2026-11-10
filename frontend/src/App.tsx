@@ -10,6 +10,7 @@ type HealthState =
 type AuthState =
   | { kind: "loading" }
   | { kind: "unavailable" }
+  | { kind: "failed"; message: string }
   | { kind: "ready"; client: AuthClient; user: SignedInUser | null };
 
 type Props = { loadAuth?: () => Promise<AuthClient | null> };
@@ -43,8 +44,8 @@ export default function App({ loadAuth = loadAuthClient }: Props) {
           setAuth({ kind: "ready", client: loaded, user }),
         );
       })
-      .catch(() => {
-        if (!run.cancelled) setAuth({ kind: "unavailable" });
+      .catch((error: unknown) => {
+        if (!run.cancelled) setAuth({ kind: "failed", message: String(error) });
       });
     return () => {
       run.cancelled = true;
@@ -83,6 +84,9 @@ function SignIn({ auth }: { auth: AuthState }) {
         <h2 id="sign-in">Sign in</h2>
         <p>You are signed out.</p>
         {auth.kind === "unavailable" && <p>Sign-in is not available yet.</p>}
+        {auth.kind === "failed" && (
+          <p role="alert">Sign-in could not load: {auth.message}</p>
+        )}
       </section>
     );
   }

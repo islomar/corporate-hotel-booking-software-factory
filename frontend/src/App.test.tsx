@@ -76,6 +76,21 @@ describe("App", () => {
     expect(screen.queryByRole("button", { name: /Google/ })).toBeNull();
   });
 
+  it("tells a failed sign-in load apart from a missing config", async () => {
+    stubApi(healthy);
+
+    render(
+      <App
+        loadAuth={() => Promise.reject(new Error("auth/invalid-api-key"))}
+      />,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Sign-in could not load: Error: auth/invalid-api-key",
+    );
+    expect(screen.queryByText("Sign-in is not available yet.")).toBeNull();
+  });
+
   it("signs in with Google", async () => {
     stubApi(healthy);
     const auth = new FakeAuth();
