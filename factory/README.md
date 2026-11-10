@@ -12,6 +12,7 @@
     - [Board rules on transition](#board-rules-on-transition)
     - [Hook against raw Jira writes](#hook-against-raw-jira-writes)
   - [Hook: commands for the owner work from any folder](#hook-commands-for-the-owner-work-from-any-folder)
+  - [Hook: act on the WIP minimums](#hook-act-on-the-wip-minimums)
   - [Hook: no personal agent memory](#hook-no-personal-agent-memory)
   - [Hook: branch names follow the ticket key](#hook-branch-names-follow-the-ticket-key)
   - [Hook: related tests only while iterating](#hook-related-tests-only-while-iterating)
@@ -205,7 +206,7 @@ It reads the open tickets first and exits 4, with no write, while another ticket
 The move skips `before_transition`: it passes Backlog and Ready and every column limit, so a full column goes over its max by one.
 Then it comments `Expedite: <reason>`, assigns the ticket to the agent, and prints `CHB-<n> -> In Progress (expedite). Tell the owner now: <reason>`.
 A failed move after the create is a notice with exit 0: the owner moves the ticket in the Jira UI.
-A failed comment or assign after the move is a notice that names the command to run; the ticket is in In Progress.
+A failed comment or assign after the move is a notice that names the command to run; the ticket is already in the In Progress column.
 After the move it reads the open tickets again and prints `more than one open expedite ticket: ...` when two agents created one at the same moment.
 `priority CHB-<n> Highest` and `create --priority Highest` exit 2 and name `create --expedite`.
 
@@ -319,6 +320,23 @@ These pass: a command after `cd /absolute/folder` in the same block, a line that
 Put a block that you do not want pasted in a `text` block.
 
 The hook blocks once per reply and never on bad input, so it cannot loop. Like the Jira hook, it is a guardrail that reads text only.
+
+## Hook: act on the WIP minimums
+
+`.claude/settings.json` runs `factory/hooks/check_wip_minimums.py` when the agent finishes a reply (Stop hook, CHB-162).
+On 2026-11-10 the agent ended its turn four times with the wrapper's "below its minimum" line on screen, and the owner had to push it.
+
+The hook reads the column minimums from the board and the open tickets as the agent account (one 1Password read, two Jira reads). It exits 2 with a reason when:
+
+- In Progress is below its minimum and Ready has a ticket that can start. The reason names the top ticket and the `transition` command.
+  It stays quiet while In Progress, In Review or Validating is at its max.
+- Ready is below its minimum and the reply does not contain "Ready is low" with the result of the Backlog scan.
+
+It fails open with one line on stderr when Jira or 1Password cannot be reached. It refuses once per session for the same findings: the second stop with the same findings passes
+(state in `<temp dir>/chb-wip-minimums-<uid>/`, folder override `CHB_WIP_MINIMUMS_STATE_DIR`). Like the other hooks it is a guardrail: it reads the reply text only.
+
+`factory/bin/jira transition` exits 4 for a WIP limit with a wait command in the message: `until factory/bin/jira transition CHB-<n> '<status>'; do [ $? -eq 4 ] || break; sleep 120; done`.
+The agent runs it in the background. It ends when the move succeeds or fails with an error other than exit 4.
 
 ## Hook: no personal agent memory
 

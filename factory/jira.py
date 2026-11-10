@@ -89,6 +89,7 @@ import copy
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import urllib.error
@@ -1378,12 +1379,26 @@ def before_transition(jira: Jira, key: str, status: str, *, status_id: str, trig
         where = source.name if source else issue["status"]["name"]
         raise BlockedError(
             f"{key} cannot move to {status}: {'; '.join(full)}. "
-            f"Leave {key} in {where}, comment on it, tell the owner and start nothing else. "
+            f"Leave {key} in {where}, comment on it and start nothing else. Do not hand the wait to the owner: "
+            f"run this in the background (run_in_background) and carry on; it moves {key} when a slot frees "
+            f"and ends with the move or with an error: {wait_command(key, status)} "
             "Only the owner overrides a limit, in the Jira UI, with a comment on the ticket (docs/process/kanban.md)."
         )
     if target.name == IN_PROGRESS and source is not None and source == pull:
         check_top_of_to_do(jira, key, issue, columns)
     return move
+
+
+WAIT_SECONDS = 120  # between two tries of the wait command (CHB-162)
+
+
+def wait_command(key: str, status: str) -> str:
+    """The shell loop that retries a blocked move until a slot is free (CHB-162).
+
+    It stops on exit 0 (moved) and on any exit other than 4 (a real error). Exit 4 keeps it waiting:
+    a full column, or a ticket that is not yet the top of Ready.
+    """
+    return f"until factory/bin/jira transition {key} {shlex.quote(status)}; do [ $? -eq 4 ] || break; sleep {WAIT_SECONDS}; done"
 
 
 def check_ready_maximum(jira: Jira, key: str, pull: Column) -> None:
