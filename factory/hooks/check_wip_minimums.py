@@ -8,7 +8,7 @@ The hook reads the board through factory/jira.py (the column minimums from the b
 the open tickets from one search) and refuses to end the turn, exit 2 with the reason on stderr, when:
 - In Progress is below its minimum and Ready has a ticket that can start. The reason names the top one
   (todo_order, the same order a start checks) and the command. Nothing is demanded while In Progress,
-  In Review or Validating is at its max: a start would exit 4.
+  In Review or Validating is at its max: a start would exit 5.
 - Ready is below its minimum and the reply does not report the Backlog trigger scan: the words
   "Ready is low" with the result (docs/process/kanban.md, Ready).
 Epics count toward no column (keys of the board, CHB-157). A column without a minimum is not checked.

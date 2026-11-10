@@ -69,13 +69,13 @@ Exit codes:
      reason that does not start with one of the three cases)
   3  no credential: no service account token in the keyring (keyring locked, item absent)
      or `op` failed. The agent stops and reports.
-  4  a board rule blocks the transition: the target column is at its WIP limit, the
-     description lacks the section the target status requires, a move from Backlog other than to Ready, Done or Discarded, or a start
+  4  a board rule blocks the transition: the description lacks the section the target status requires, a move from Backlog other than to Ready, Done or Discarded, or a start
      from the pull list that is not its top ticket, or has no "Why it matters" first section or
      no acceptance criteria (docs/process/kanban.md); `ready` on a ticket whose Definition of Ready
      has a box unticked or a check that fails (no "Why it matters", no acceptance criteria, an open
      blocker). The message names each open box. The ticket stays where it is. Also a move into the
      pull list while it holds its max (CHB-157), and `create --expedite` while an expedite ticket is open.
+  5  the target column is at its WIP limit (In Progress, In Review, Validating or Needs human). Waiting clears it (CHB-162).
 
 `transition` reads the column limits from the board configuration (board 2) on every call.
 After a move it prints the free In Progress slots and the next tickets of the pull list (CHB-125).
@@ -184,6 +184,7 @@ EXIT_JIRA = 1
 EXIT_USAGE = 2
 EXIT_CREDENTIAL = 3
 EXIT_BLOCKED = 4
+EXIT_WIP_LIMIT = 5
 
 
 class JiraError(Exception):
@@ -199,7 +200,14 @@ class CredentialError(Exception):
 
 
 class BlockedError(Exception):
-    """A board rule blocks the transition: a full column or a missing section. Exit code 4."""
+    """A board rule blocks the transition: a missing section, a start out of order. Exit code 4."""
+
+
+class WipLimitError(BlockedError):
+    """A full In Progress, In Review, Validating or Needs human column blocks the move. Exit code 5 (CHB-162).
+
+    Only this refusal clears by itself when a ticket leaves a column, so only it is worth waiting for.
+    """
 
 
 @dataclass(frozen=True)
@@ -1377,7 +1385,7 @@ def before_transition(jira: Jira, key: str, status: str, *, status_id: str, trig
             full.append(f"column {column.name!r} is at its WIP limit ({len(others)}/{column.max}): {', '.join(others)}")
     if full:
         where = source.name if source else issue["status"]["name"]
-        raise BlockedError(
+        raise WipLimitError(
             f"{key} cannot move to {status}: {'; '.join(full)}. "
             f"Leave {key} in {where}, comment on it and start nothing else. Do not hand the wait to the owner: "
             f"run this in the background (run_in_background) and carry on; it moves {key} when a slot frees "
@@ -1390,15 +1398,24 @@ def before_transition(jira: Jira, key: str, status: str, *, status_id: str, trig
 
 
 WAIT_SECONDS = 120  # between two tries of the wait command (CHB-162)
+WAIT_LIMIT_SECONDS = 3600  # the wait command gives up after an hour: the owner hears of a longer wait
 
 
 def wait_command(key: str, status: str) -> str:
-    """The shell loop that retries a blocked move until a slot is free (CHB-162).
+    """The shell loop that retries a move blocked by a WIP limit until a slot is free (CHB-162).
 
-    It stops on exit 0 (moved) and on any exit other than 4 (a real error). Exit 4 keeps it waiting:
-    a full column, or a ticket that is not yet the top of Ready.
+    It retries only on exit 5 (WIP limit). Any other exit ends it at once with that exit code: 0 (moved), or
+    a refusal that waiting does not clear (exit 4: not the top ticket, a missing section, a blocked ticket),
+    which the transition already printed. After WAIT_LIMIT_SECONDS it prints one line and exits 1.
     """
-    return f"until factory/bin/jira transition {key} {shlex.quote(status)}; do [ $? -eq 4 ] || break; sleep {WAIT_SECONDS}; done"
+    move = f"factory/bin/jira transition {key} {shlex.quote(status)}"
+    return (
+        f"end=$(( $(date +%s) + {WAIT_LIMIT_SECONDS} )); "
+        f"while {move}; rc=$?; [ $rc -eq {EXIT_WIP_LIMIT} ]; do "
+        "[ $(date +%s) -lt $end ] || "
+        f"{{ echo \"{key}: the slot is still full after {WAIT_LIMIT_SECONDS // 60} minutes; tell the owner\"; exit 1; }}; "
+        f"sleep {WAIT_SECONDS}; done; exit $rc"
+    )
 
 
 def check_ready_maximum(jira: Jira, key: str, pull: Column) -> None:
@@ -2081,7 +2098,7 @@ def main(
         return EXIT_CREDENTIAL
     except BlockedError as error:
         print(f"jira: blocked: {error}", file=sys.stderr)
-        return EXIT_BLOCKED
+        return EXIT_WIP_LIMIT if isinstance(error, WipLimitError) else EXIT_BLOCKED
     except JiraError as error:
         print(f"jira: {error}", file=sys.stderr)
         return EXIT_JIRA
