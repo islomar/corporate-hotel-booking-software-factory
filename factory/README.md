@@ -3,6 +3,7 @@
 **Table of Contents** *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Factory](#factory)
+  - [Identities at a glance](#identities-at-a-glance)
   - [Credentials: the 1Password service account](#credentials-the-1password-service-account)
     - [Rotating the token](#rotating-the-token)
   - [Acting as the agent](#acting-as-the-agent)
@@ -11,6 +12,7 @@
   - [Acting in Jira as the agent](#acting-in-jira-as-the-agent)
     - [Board rules on transition](#board-rules-on-transition)
     - [Hook against raw Jira writes](#hook-against-raw-jira-writes)
+  - [Hooks at a glance](#hooks-at-a-glance)
   - [Hook: commands for the owner work from any folder](#hook-commands-for-the-owner-work-from-any-folder)
   - [Hook: act on the WIP minimums](#hook-act-on-the-wip-minimums)
   - [Hook: no personal agent memory](#hook-no-personal-agent-memory)
@@ -28,6 +30,42 @@
 # Factory
 
 Agent workflows, the orchestrator and the notifier live here. Built in phases 3 to 7.
+
+## Identities at a glance
+
+The owner's logins carry full rights, and the agent and the workflows must not borrow them.
+Each actor therefore has its own account, reached through one wrapper or one token exchange.
+The diagram shows who acts, through what, as which account and in which system.
+The sections below describe each path.
+
+```mermaid
+flowchart TD
+    OWNER["Owner"] --> OWNLOGINS["Owner logins<br/>GitHub owner account<br/>Jira owner login used by acli<br/>1Password desktop app"]
+    AGENT["Agent in a Claude Code session"] --> ASAGENT["factory/bin/as-agent"]
+    AGENT --> JIRAWRAP["factory/bin/jira"]
+    CIWF["CI workflows<br/>review.yml and deploy.yml"]
+    DEPBOT["Dependabot"] --> DEPWF["dependabot-auto-merge.yml"]
+
+    ASAGENT --> OPSA["1Password service account chb-factory-agent<br/>read only on the vault chb-factory"]
+    JIRAWRAP --> OPSA
+    OPSA --> KEYITEM["Item chb-factory-agent.2026-11-06.private-key<br/>GitHub App key"]
+    OPSA --> JIRAITEM["Item chb-jira-claude.api-token<br/>Jira email and token"]
+
+    KEYITEM --> AGENTAPP["GitHub App chb-factory-agent<br/>commits as chb-factory-agent[bot]<br/>opens PRs, enables auto-merge"]
+    JIRAITEM --> JIRAACC["Jira account Claude (CHB agent)<br/>islomar.atlassian.net, project CHB"]
+
+    AGENTAPP --> GH["GitHub repository"]
+    JIRAACC --> JIRA["Jira"]
+    OWNLOGINS --> GH
+    OWNLOGINS --> JIRA
+
+    DEPWF -- "App token, when its Dependabot secrets exist" --> AGENTAPP
+    CIWF -- "review job, reviewer environment" --> REVAPP["GitHub App chb-factory-reviewer<br/>posts the review check run"]
+    REVAPP --> GH
+    CIWF -- "deploy job, OIDC token" --> WIF["Workload Identity Federation<br/>trusts only refs/heads/main"]
+    WIF --> DEPLOYER["GCP service account github-deployer"]
+    DEPLOYER --> GCP["Google Cloud Run"]
+```
 
 ## Credentials: the 1Password service account
 
@@ -307,6 +345,40 @@ The hook is a guardrail, not a boundary: it reads the command text only. A scrip
 It matches anywhere in the command, so it also denies a commit message that quotes a denied command. Use a message file.
 An error inside the hook denies the command. If `python3` cannot start, the command goes through: Claude Code treats that as a non-blocking error.
 Sessions started in another directory do not load this hook.
+
+## Hooks at a glance
+
+Ten hooks guard a Claude Code session, and each section below describes one.
+The diagram puts them side by side by Claude Code event, so a denied command or a refused end of turn can be traced to its hook.
+Each node names the hook file, the tool matcher of `.claude/settings.json` and what the hook blocks or reports.
+`factory/tests/test_readme_diagrams.py` fails when a registered hook is missing from the diagram.
+
+```mermaid
+flowchart TD
+    subgraph SS["SessionStart: adds context"]
+        VS["validating_sweep.py<br/>matcher: none<br/>reports the Validating tickets that are due"]
+    end
+    subgraph PRE["PreToolUse: denies the tool call"]
+        DJ["deny_raw_jira_writes.py<br/>matcher: Bash<br/>blocks acli writes and raw REST writes to Jira"]
+        DB["deny_bad_branch_names.py<br/>matcher: Bash<br/>blocks a branch not named CHB-n-slug"]
+        DT["deny_full_test_suite.py<br/>matcher: Bash<br/>blocks a test run that nothing narrows"]
+        DM["deny_agent_memory_writes.py<br/>matcher: Write, Edit, MultiEdit, NotebookEdit<br/>blocks writes to personal agent memory"]
+        DH["deny_harness_edits.py<br/>matcher: Write, Edit, MultiEdit, NotebookEdit, Bash<br/>blocks edits of .claude, factory and .github on a product ticket branch"]
+        DS["deny_secret_reads.py<br/>matcher: Read, Bash<br/>blocks reads and prints of secret files"]
+    end
+    subgraph POST["PostToolUse: adds context"]
+        WE["warn_edit_loops.py<br/>matcher: Write, Edit, MultiEdit<br/>warns on the 5th and 8th edit of one file"]
+    end
+    subgraph STOP["Stop: refuses the end of the turn"]
+        CO["check_owner_commands.py<br/>matcher: none<br/>flags owner commands that depend on the current folder"]
+        CW["check_wip_minimums.py<br/>matcher: none<br/>refuses while a board column is below its minimum"]
+    end
+    SS --> PRE
+    PRE --> POST
+    POST --> STOP
+```
+
+`shell_words.py`, `harness_bash_writes.py` and `private_folder.py` are helpers that hooks import. They are not registered.
 
 ## Hook: commands for the owner work from any folder
 
