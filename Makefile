@@ -49,6 +49,7 @@ check-deps:
 	python3 -I scripts/check_sessions_redacted.py
 	python3 -I scripts/check_doctoc_title.py
 	python3 -I scripts/check_release_age.py backend/uv.lock
+	python3 -I scripts/check_guard_tests.py
 
 test: check ## Alias for check
 
