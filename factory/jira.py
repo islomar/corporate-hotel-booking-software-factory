@@ -3,7 +3,7 @@
 
 Usage:
   factory/bin/jira view CHB-12 [--json]
-  factory/bin/jira search 'project = CHB AND status = "In Review"' [--json]
+  factory/bin/jira search 'status = "In Review"' [--json]   (sent as project = CHB AND (<jql>))
   factory/bin/jira create --parent CHB-27 --summary TEXT --description-file FILE --priority High|Medium|Low
   factory/bin/jira transition CHB-12 "In Review"
   factory/bin/jira comment CHB-12 --body-file FILE      (FILE "-" reads stdin)
@@ -36,8 +36,9 @@ Descriptions, comments and section bodies are Markdown: headings, bullet and num
 Exit codes:
   0  done
   1  Jira refused or failed (HTTP error, unknown status, parent is not an epic,
-     an issue that could not be ranked)
-  2  usage error (also a bad section heading, an empty body, a duplicate rank key)
+     an issue that could not be ranked, a search answer with an issue outside CHB)
+  2  usage error (also a bad section heading, an empty body or summary, a file that is not
+     UTF-8, a duplicate rank key, JQL whose parentheses or quotes do not balance)
   3  no credential: no service account token in the keyring (keyring locked, item absent)
      or `op` failed. The agent stops and reports.
   4  a board rule blocks the transition: the target column is at its WIP limit, or the
@@ -83,6 +84,7 @@ PRIORITIES = ("High", "Medium", "Low")  # Highest and Lowest exist in Jira but C
 HEADING_PATTERN = re.compile(r"^(#{1,6}) +(\S.*?)\s*$")
 BULLET_PATTERN = re.compile(r"^- (?P<text>.*)$")
 ORDERED_PATTERN = re.compile(r"^([1-9][0-9]*)\. (?P<text>.*)$")
+ORDER_BY_PATTERN = re.compile(r"\border\s+by\b", re.IGNORECASE)
 PULL_URL = "https://github.com/islomar/corporate-hotel-booking-software-factory/pull/"
 REFERENCE_PATTERN = re.compile(
     URL_PATTERN.pattern
@@ -277,6 +279,65 @@ def _blocks(text: str) -> list[list[str]]:
         if current:
             blocks.append(current)
     return blocks
+
+
+def scope_jql(jql: str) -> str:
+    """The JQL limited to the CHB project: project = CHB AND (<jql>) [ORDER BY ...].
+
+    Refuses (UsageError, exit 2) JQL that could leave the parentheses: a ")" without its "(",
+    a "(" never closed, an unterminated quote, a backslash outside quotes (Jira may read it
+    as an escape the scanner does not), or a parenthesis after ORDER BY (an ORDER BY inside
+    parentheses would close them). A trailing ORDER BY stays outside them. The check of the
+    answer's issue keys in Jira.search is the final guard.
+    """
+    masked = []  # the JQL with the text inside quotes blanked, so only the syntax is left
+    quote = ""
+    escaped = False
+    depth = 0
+    for char in jql:
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = ""
+                masked.append(char)
+                continue
+            masked.append(" ")
+            continue
+        if char in "\"'":
+            quote = char
+        elif char == "\\":
+            raise UsageError("search JQL has a backslash outside quotes")
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth < 0:
+                raise UsageError("search JQL has a ')' without its '('")
+        masked.append(char)
+    if quote:
+        raise UsageError("search JQL has a quote that is never closed")
+    if depth:
+        raise UsageError("search JQL has a '(' that is never closed")
+    syntax = "".join(masked)
+    order = ORDER_BY_PATTERN.search(syntax)
+    if order and any(char in "()" for char in syntax[order.start() :]):
+        raise UsageError("search JQL has a parenthesis after ORDER BY")
+    where, order_by = (jql[: order.start()], " " + jql[order.start() :].strip()) if order else (jql, "")
+    where = where.strip()
+    return f"project = {PROJECT}{f' AND ({where})' if where else ''}{order_by}"
+
+
+def check_summary(summary: str) -> None:
+    if not summary.strip():
+        raise UsageError("summary is empty")
+
+
+def check_comment_body(body: str) -> None:
+    if not body.strip():
+        raise UsageError("comment body is empty")
 
 
 def check_comment_id(comment_id: str) -> str:
@@ -508,6 +569,8 @@ class Jira:
         return self.request("GET", f"/rest/api/3/issue/{check_key(key)}?fields={fields}")
 
     def search(self, jql: str, limit: int = 500) -> list[dict[str, Any]]:
+        """Issues of the CHB project that match the JQL (scope_jql). An issue outside CHB raises JiraError."""
+        jql = scope_jql(jql)
         issues: list[dict[str, Any]] = []
         page_token = None
         while len(issues) < limit:
@@ -515,7 +578,10 @@ class Jira:
             if page_token:
                 body["nextPageToken"] = page_token
             page = self.request("POST", "/rest/api/3/search/jql", body)
-            issues.extend(page.get("issues", []))
+            for issue in page.get("issues", []):
+                if not KEY_PATTERN.fullmatch(str(issue.get("key", ""))):
+                    raise JiraError(f"search answered with an issue outside {PROJECT}; nothing printed")
+                issues.append(issue)
             page_token = page.get("nextPageToken")
             if page.get("isLast", True) or not page_token:
                 break
@@ -523,8 +589,7 @@ class Jira:
 
     def create(self, parent: str, summary: str, description: str, priority: str) -> str:
         check_priority(priority)
-        if not summary.strip():
-            raise JiraError("summary is empty")
+        check_summary(summary)
         epic = self.request("GET", f"/rest/api/3/issue/{check_key(parent)}?fields=issuetype")
         if epic["fields"]["issuetype"]["name"] != "Epic":
             raise JiraError(f"parent {parent} is a {epic['fields']['issuetype']['name']}, not an Epic")
@@ -575,12 +640,11 @@ class Jira:
         if not column.status_ids:
             return []
         ids = ", ".join(sorted(column.status_ids))
-        jql = f"project = {PROJECT} AND status in ({ids}) AND key != {check_key(excluding)} ORDER BY key ASC"
+        jql = f"status in ({ids}) AND key != {check_key(excluding)} ORDER BY key ASC"
         return [str(issue["key"]) for issue in self.search(jql, limit=100)]
 
     def comment(self, key: str, body: str) -> str:
-        if not body.strip():
-            raise JiraError("comment body is empty")
+        check_comment_body(body)
         created = self.request("POST", f"/rest/api/3/issue/{check_key(key)}/comment", {"body": text_to_adf(body)})
         return str(created["id"])
 
@@ -618,8 +682,7 @@ class Jira:
         The account is a project Administrator, so Jira would let it edit anyone's comment.
         The wrapper refuses a comment by another author (exit 1) before any write.
         """
-        if not body.strip():
-            raise UsageError("comment body is empty")
+        check_comment_body(body)
         path = f"/rest/api/3/issue/{check_key(key)}/comment/{check_comment_id(comment_id)}"
         author = self.request("GET", path).get("author", {}).get("accountId")
         if author != self.myself()["accountId"]:
@@ -801,13 +864,17 @@ def _print_issue(issue: dict[str, Any]) -> None:
 
 
 def _read_text(path: str) -> str:
-    if path == "-":
-        return sys.stdin.read()
+    """The file, or stdin for "-", as UTF-8 text. An unreadable or non-UTF-8 file is a UsageError."""
+    name = "stdin" if path == "-" else path
     try:
+        if path == "-":
+            return sys.stdin.read()
         with open(path, encoding="utf-8") as handle:
             return handle.read()
+    except UnicodeDecodeError as error:
+        raise UsageError(f"{name} is not valid UTF-8 (byte {error.start})") from None
     except OSError as error:
-        raise UsageError(f"cannot read {path}: {error.strerror}") from None
+        raise UsageError(f"cannot read {name}: {error.strerror}") from None
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -870,6 +937,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def run(args: argparse.Namespace, jira: Jira) -> None:
+    """Run the command. main() reads the input files into args first (body, description, text)."""
     if args.command == "view":
         issue = jira.view(args.key)
         if args.json:
@@ -885,14 +953,14 @@ def run(args: argparse.Namespace, jira: Jira) -> None:
             fields = issue["fields"]
             print(f"{issue['key']}\t{fields['status']['name']}\t{_name(fields.get('assignee'))}\t{fields['summary']}")
     elif args.command == "create":
-        print(jira.create(args.parent, args.summary, _read_text(args.description_file), args.priority))
+        print(jira.create(args.parent, args.summary, args.description, args.priority))
     elif args.command == "transition":
         target, notices = jira.transition(args.key, args.status)
         print(f"{args.key} -> {target}")
         for notice in notices:
             print(notice)
     elif args.command == "comment":
-        print(f"{args.key} comment {jira.comment(args.key, _read_text(args.body_file))}")
+        print(f"{args.key} comment {jira.comment(args.key, args.body)}")
     elif args.command == "assign":
         account_id = jira.myself()["accountId"] if args.me else args.account_id
         jira.assign(args.key, account_id)
@@ -930,6 +998,14 @@ def main(
                 check_key(key)  # before 1Password and before reading any file
         if args.command == "rank":
             check_rank_input(args.keys, args.before or args.after)
+        if args.command == "search":
+            scope_jql(args.jql)
+        if args.command == "create":
+            check_summary(args.summary)
+            args.description = _read_text(args.description_file)
+        if args.command == "comment":
+            args.body = _read_text(args.body_file)
+            check_comment_body(args.body)
         if args.command == "section":
             args.body = _read_text(args.body_file)
             check_section_input(args.heading, args.body)
@@ -937,6 +1013,7 @@ def main(
         if args.command == "edit-comment":
             check_comment_id(args.comment_id)
             args.text = _read_text(args.body_file)
+            check_comment_body(args.text)
         if args.command == "description":
             args.text = _read_text(args.file)
             if not args.text.strip():
