@@ -4,7 +4,7 @@
 
 - [Factory](#factory)
   - [Credentials: the 1Password service account](#credentials-the-1password-service-account)
-    - [Renewing the token](#renewing-the-token)
+    - [Rotating the token](#rotating-the-token)
   - [Acting as the agent](#acting-as-the-agent)
   - [Acting in Jira as the agent](#acting-in-jira-as-the-agent)
     - [Board rules on transition](#board-rules-on-transition)
@@ -41,18 +41,30 @@ The agent stops and reports.
 
 The pop-up was also a human check on every read. Without it, any process that runs as the owner's user while the keyring is unlocked can read the two items in `chb-factory`, and nothing else.
 
-### Renewing the token
+### Rotating the token
 
-A service account token can expire. When it expires, every agent commit, push and Jira write stops with exit 3.
-The owner checks the expiry in 1Password (<https://my.1password.com> > Developer > Service accounts > `chb-factory-agent`) and renews it before that date:
+The token does not expire, on purpose: an expiry would stop every agent commit, push and Jira write on a fixed date (owner decision, 2026-11-07).
+The token is read-only and reaches only the vault `chb-factory`. The remaining risk is a leak, so the owner rotates the token:
 
-1. Create a new token for `chb-factory-agent` in the same place, with the same vault access (`chb-factory`, Read Items only).
-2. In your own terminal, store it under the same attributes; this replaces the old one:
+- once a year (next: by 2027-11-07), and
+- at once on a suspected leak (the token appeared in a chat, log, file, screenshot or commit).
+
+Owner steps, about 5 minutes:
+
+1. Rotate the token. WHERE: <https://my.1password.com> > Developer > Service accounts > `chb-factory-agent` > Rotate token.
+   HOW: for "Expire existing token" pick "in 3 days", or "now" if the token leaked.
+   If the screen offers an expiry for the new token, pick "Never".
+   Copy the new token. Do not paste it into the Claude chat. Do not change the vault access (`chb-factory`, read only).
+2. Store it in your own terminal, never in the Claude chat and never with `!`. This replaces the old one:
    `secret-tool store --label="chb-factory 1Password service account" service chb-factory key op-service-account-token`
-3. Check: `factory/bin/jira view CHB-97` exits 0.
-4. Revoke the old token in 1Password.
+   Paste the token at the `Password:` prompt.
+3. Check, in your terminal from any folder:
+   `~/workspace/corporate-hotel-booking-software-factory/factory/bin/jira view CHB-97` exits 0, and
+   `~/workspace/corporate-hotel-booking-software-factory/factory/bin/as-agent gh api /rate_limit --jq .rate.limit` prints a number.
+4. If a leak was the reason, tell Claude, so it checks where the token appeared.
+5. Tell Claude in the chat: "token rotated". Claude writes the date on the rotation ticket and creates the next yearly rotation ticket.
 
-Ticket: CHB-121.
+Tickets: CHB-121, CHB-123.
 
 ## Acting as the agent
 
