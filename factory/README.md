@@ -1,6 +1,6 @@
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
-**Table of Contents** *generated with [DocToc](https://github.com/thlorenz/doctoc)*
+## Contents
 
 - [Factory](#factory)
   - [Credentials: the 1Password service account](#credentials-the-1password-service-account)
@@ -10,6 +10,7 @@
     - [Board rules on transition](#board-rules-on-transition)
     - [Hook against raw Jira writes](#hook-against-raw-jira-writes)
   - [Hook: commands for the owner work from any folder](#hook-commands-for-the-owner-work-from-any-folder)
+  - [Hook: no personal agent memory](#hook-no-personal-agent-memory)
   - [Automated PR review (shadow mode)](#automated-pr-review-shadow-mode)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -163,6 +164,14 @@ These pass: a command after `cd /absolute/folder` in the same block, a line that
 Put a block that you do not want pasted in a `text` block.
 
 The hook blocks once per reply and never on bad input, so it cannot loop. Like the Jira hook, it is a guardrail that reads text only.
+
+## Hook: no personal agent memory
+
+`.claude/settings.json` runs `factory/hooks/deny_agent_memory_writes.py` before every Write, Edit, MultiEdit and NotebookEdit call (CHB-136).
+On 2026-11-07 a session saved a work-in-progress snapshot to Claude Code's per-user memory. It went stale within a day, and a later session read it.
+
+The hook denies any path under `.claude/projects/<project>/memory/`. Work state goes in Jira with `factory/bin/jira`. Learnings go in `docs/knowledge/`, a hook or a check (ADR-eedb).
+Writes through Bash (`>`, `cp`, `sed -i`) are not covered: the hook stops accidents, not a deliberate bypass.
 
 ## Automated PR review (shadow mode)
 
