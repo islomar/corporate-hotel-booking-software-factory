@@ -17,6 +17,7 @@ All work is tracked in Jira space `CHB` (see `TODO.md`). Move tickets only as `d
 
 - Learnings go in this repository, never in personal agent memory. See `docs/decisions/ADR-eedb-learnings-live-in-the-repo.md`.
 - A correction becomes a hook or a check before it becomes prose.
+- At session start, if the context says "Rules health check is due", follow `docs/process/rules-health.md` after the owner's current request.
 - A dependency update that breaks something gets an automated test in the fix. See `docs/knowledge/dependency-update-breaks-get-a-test.md`.
 - Work outside-in: an acceptance test first, then unit tests, one public method at a time.
 - Branch from `main`. Start dependent work after the parent PR merges.

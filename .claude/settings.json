@@ -9,6 +9,16 @@
             "timeout": 15
           }
         ]
+      },
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I \"${CLAUDE_PROJECT_DIR}/factory/hooks/rules_health_due.py\"",
+            "timeout": 15
+          }
+        ]
       }
     ],
     "PreToolUse": [
