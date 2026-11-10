@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from check_guard_tests import ROOT, TF_DIR, main, scrubbed_env
+from check_guard_tests import ROOT, TF_DIR, TF_DIRS, main, scrubbed_env, stray_planner_references
 
 
 def done(returncode=0, stdout=""):
@@ -39,8 +39,9 @@ class MainTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-        (self.root / TF_DIR).mkdir(parents=True)
-        (self.root / TF_DIR / ".terraform-version").write_text("1.17.1\n")
+        for tf_dir in TF_DIRS:
+            (self.root / tf_dir).mkdir(parents=True, exist_ok=True)
+            (self.root / tf_dir / ".terraform-version").write_text("1.17.1\n")
 
     def call(self, fakes, environ=None):
         out = io.StringIO()
@@ -48,18 +49,14 @@ class MainTest(unittest.TestCase):
             code = main(self.root, environ or {}, fakes.run, fakes.capture)
         return code, out.getvalue()
 
-    def test_runs_init_then_test_in_the_terraform_folder(self):
+    def test_runs_init_then_test_in_every_terraform_folder(self):
         fakes = Fakes()
         code, _ = self.call(fakes)
         self.assertEqual(code, 0)
-        self.assertEqual(
-            [c for c, _ in fakes.commands],
-            [
-                ["terraform", "init", "-backend=false", "-input=false", "-no-color"],
-                ["terraform", "test", "-no-color"],
-            ],
-        )
-        self.assertEqual({cwd for _, cwd in fakes.commands}, {self.root / TF_DIR})
+        init = ["terraform", "init", "-backend=false", "-input=false", "-no-color"]
+        test = ["terraform", "test", "-no-color"]
+        self.assertEqual([c for c, _ in fakes.commands], [init, test, init, test])
+        self.assertEqual([cwd for _, cwd in fakes.commands], [self.root / d for d in TF_DIRS for _ in range(2)])
 
     def test_failing_test_fails_the_check(self):
         code, out = self.call(Fakes(failing="test"))
@@ -71,6 +68,24 @@ class MainTest(unittest.TestCase):
         code, _ = self.call(fakes)
         self.assertEqual(code, 1)
         self.assertEqual(len(fakes.commands), 1)
+
+    def test_a_planner_reference_outside_the_planner_files_fails_without_running(self):
+        gcp = self.root / "infra/gcp"
+        (gcp / "planner.tf").write_text("resource \"google_service_account\" \"planner\" {}\n")
+        (gcp / "extra.tf").write_text("member = google_service_account.planner.member\n")
+        fakes = Fakes()
+        code, out = self.call(fakes)
+        self.assertEqual(code, 1)
+        self.assertEqual(fakes.commands, [])
+        self.assertIn("infra/gcp/extra.tf", out)
+        self.assertNotIn("planner.tf,", out)
+        self.assertEqual(stray_planner_references(self.root), ["infra/gcp/extra.tf"])
+
+    def test_the_planner_files_may_name_the_planner(self):
+        gcp = self.root / "infra/gcp"
+        (gcp / "planner.tf").write_text("member = google_service_account.planner.member\n")
+        (gcp / "guards.tf").write_text("x = google_iam_workload_identity_pool.github_pr\n")
+        self.assertEqual(stray_planner_references(self.root), [])
 
     def test_wrong_terraform_version_fails_without_running(self):
         fakes = Fakes(version="1.9.0")
@@ -105,7 +120,11 @@ class MainTest(unittest.TestCase):
 class RepositoryTest(unittest.TestCase):
     def test_the_real_pin_and_test_file_exist(self):
         self.assertTrue((ROOT / TF_DIR / ".terraform-version").is_file())
-        self.assertTrue((ROOT / TF_DIR / "tests" / "guards.tftest.hcl").is_file())
+        for tf_dir in TF_DIRS:
+            self.assertTrue((ROOT / tf_dir / "tests" / "guards.tftest.hcl").is_file())
+
+    def test_the_real_repository_has_no_stray_planner_reference(self):
+        self.assertEqual(stray_planner_references(ROOT), [])
 
 
 if __name__ == "__main__":
