@@ -249,7 +249,7 @@ The 1Password service account narrows who can read it to processes that can read
 
 ### Board rules on transition
 
-`before_transition` in `jira.py` runs before every transition (CHB-108). It exits 4 and does not move the ticket when:
+`before_transition` in `jira.py` runs before every transition (CHB-108). It exits 4 (exit 5 for the two full-column cases below) and does not move the ticket when:
 
 - the target status is Validating and the description has no section headed "Acceptance criteria (Validating)" with text under it;
 - the target status is Needs human and the description has no section headed "Needs human: owner steps" with text under it;
@@ -335,8 +335,9 @@ The hook reads the column minimums from the board and the open tickets as the ag
 It fails open with one line on stderr when Jira or 1Password cannot be reached. It refuses once per session for the same findings: the second stop with the same findings passes
 (state in `<temp dir>/chb-wip-minimums-<uid>/`, folder override `CHB_WIP_MINIMUMS_STATE_DIR`). Like the other hooks it is a guardrail: it reads the reply text only.
 
-`factory/bin/jira transition` exits 4 for a WIP limit with a wait command in the message: `until factory/bin/jira transition CHB-<n> '<status>'; do [ $? -eq 4 ] || break; sleep 120; done`.
-The agent runs it in the background. It ends when the move succeeds or fails with an error other than exit 4.
+`factory/bin/jira transition` exits 5 for a WIP limit (a full In Progress, In Review, Validating or Needs human) and 4 for every other board refusal. The exit 5 message names a wait command:
+a bash loop that retries the move every 120 seconds while the exit code is 5. It ends at once on any other code (0 moved; 4 not the top ticket, a missing section or a blocked ticket, printed),
+and after 60 minutes it prints that the slot is still full and exits 1. The agent runs it in the background.
 
 ## Hook: no personal agent memory
 
