@@ -4,7 +4,7 @@
 CLAUDE.md: do not edit `.claude/`, `factory/` or `.github/` as part of a feature ticket. A harness
 change made inside a feature PR changes the rules the agent works under without a ticket of its own.
 
-Denied: Write, Edit and MultiEdit of a path whose first folder, relative to the top of its own git
+Denied: Write, Edit, MultiEdit and NotebookEdit of a path whose first folder, relative to the top of its own git
 worktree, is `.claude`, `factory` or `.github`, when that worktree's branch is `CHB-<n>-...` and
 CHB-<n> is a product epic or its Jira parent is one (PRODUCT_EPICS).
 Allowed: other paths, paths outside a git repository, other branches (`main`, `worktree-agent-...`:
@@ -33,7 +33,7 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from warn_edit_loops import _private_folder  # noqa: E402
+from private_folder import private_folder  # noqa: E402
 
 # The product epics (owner, CHB-30): Walking skeleton, Observability with OpenTelemetry,
 # Security and authentication, Kata specification. Every other epic is factory work.
@@ -41,6 +41,7 @@ PRODUCT_EPICS = frozenset({"CHB-4", "CHB-14", "CHB-19", "CHB-50"})
 HARNESS = {".claude", "factory", ".github"}
 TICKET_BRANCH = re.compile(r"^(CHB-[0-9]+)-")
 PARENT_LINE = re.compile(r"^Parent: (CHB-[0-9]+)\s*$", re.MULTILINE)
+PATH_KEYS = ("file_path", "notebook_path")
 
 CACHE_DIR_ENV = "CHB_HARNESS_EPIC_CACHE_DIR"
 JIRA = posixpath.join(posixpath.dirname(posixpath.dirname(posixpath.abspath(__file__))), "bin", "jira")
@@ -92,7 +93,7 @@ def jira_parent(ticket: str) -> str | None:
 def _cache_file(branch: str) -> str | None:
     try:
         folder = cache_dir()
-        _private_folder(folder)
+        private_folder(folder)
     except OSError:
         return None
     return posixpath.join(folder, re.sub(r"[^A-Za-z0-9_-]", "_", branch) + ".json")
@@ -200,8 +201,9 @@ def _decide(raw: str) -> int:
         print("Blocked: the harness edit hook could not read its input.", file=sys.stderr)
         return 2
     tool_input = event.get("tool_input") if isinstance(event, dict) else None
-    path = tool_input.get("file_path") if isinstance(tool_input, dict) else None
-    if not isinstance(path, str) or not path:
+    paths = [tool_input.get(k) for k in PATH_KEYS] if isinstance(tool_input, dict) else []
+    path = next((p for p in paths if isinstance(p, str) and p), None)
+    if path is None:
         return 0
     cwd = event.get("cwd") if isinstance(event.get("cwd"), str) and event.get("cwd") else os.getcwd()
     why = reason(path, cwd=cwd)

@@ -295,7 +295,7 @@ The hook never blocks. Bad input, an unreadable state file or an internal error 
 
 ## Hook: no harness edits in feature tickets
 
-`.claude/settings.json` runs `factory/hooks/deny_harness_edits.py` before every Write, Edit and MultiEdit call (CHB-30).
+`.claude/settings.json` runs `factory/hooks/deny_harness_edits.py` before every Write, Edit, MultiEdit and NotebookEdit call (CHB-30).
 CLAUDE.md: do not edit `.claude/`, `factory/` or `.github/` as part of a feature ticket.
 
 The hook denies the edit when all of these hold:
@@ -329,10 +329,14 @@ The hook exits 2 for:
 - input redirected from a secret path (`< .env`), whatever the program;
 - `secret-tool lookup` and `op read` run directly.
 
-These pass even with a secret path: `ls`, `stat`, `test`, `[`, `chmod`, `chown`, `mkdir`, `touch`, `rm`, `echo`, `printf`, `ssh` and `ssh-add`. They do not print the file.
+The hook also checks the body of every `$(...)` and backtick substitution, quoted or not, the arguments of `bash -c`, `sh -c` and `eval`, and the remote command of `ssh`.
+
+These pass even with a secret path: `ls`, `stat`, `test`, `[`, `chmod`, `chown`, `mkdir`, `touch`, `rm`, `echo`, `printf` and `ssh-add`. They do not print the file.
+`ssh` and `scp` may name a key or config file with `-i`, `-F` or `-o IdentityFile=`.
 `factory/bin/as-agent`, `factory/bin/jira` and `make` are not blocked.
 
-Known false denials: `grep .env docs/` (the pattern reads as a path), and a heredoc line that names a secret path, such as a commit message. Write such a message to a file with the Write tool.
+Known false denials: `grep .env docs/` (the pattern reads as a path) and a single-quoted `'$(cat .env)'`.
+A heredoc line that names a secret path, such as a line of a commit message, is denied too. Write such a message to a file with the Write tool.
 Known gaps: a path built at run time, `cd ~/.ssh` followed by a relative name, a script that reads the file, the Grep tool, and `op` subcommands other than `read`.
 Like the other Bash hooks, it reads the command text only, denies on unreadable input or an internal error, and lets the call run if `python3` cannot start.
 

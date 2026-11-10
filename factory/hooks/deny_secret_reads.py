@@ -11,10 +11,13 @@ Denied:
 - Read of a secret path; a relative path resolves against the event's `cwd`;
 - a Bash simple command with a secret path as a word, an `--option=<path>` value or the part
   after `:` (`git show HEAD:.env`, `scp host:~/.ssh/id`), unless the program only reads metadata
-  or writes (METADATA: `ls`, `stat`, `test`, `chmod`, `ssh`, `echo`, ...);
+  or writes (METADATA: `ls`, `stat`, `test`, `chmod`, `ssh-add`, `echo`, ...);
 - input redirected from a secret path (`< .env`), whatever the program;
 - `secret-tool lookup` and `op read` run directly.
 Launchers (`rtk`, `env`, `uv run`, `factory/bin/as-agent`) are stripped first (shell_words).
+The body of every `$(...)` and backtick substitution, quoted or not, the arguments of `bash -c`,
+`sh -c` and `eval`, and the remote command of `ssh` are checked the same way. The key and config
+file options of `ssh` and `scp` (`-i`, `-F`, `-o IdentityFile=`) may name a secret path.
 
 A guardrail, not a boundary: it reads the command text only. A path built at run time, a `cd` into
 `~/.ssh` followed by a relative name, or a script that reads the file passes.
@@ -29,6 +32,7 @@ from __future__ import annotations
 import json
 import os
 import posixpath
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -40,9 +44,13 @@ ENV_EXAMPLE = ".env.example"
 HOME_FORMS = ("~", "$HOME", "${HOME}")
 GLOB = "*?["
 
-# Programs that take a secret path without printing the file: metadata, permissions, ssh itself, writes.
-METADATA = {"ls", "stat", "test", "[", "chmod", "chown", "mkdir", "touch", "rm", "echo", "printf", "ssh", "ssh-add"}
-SECRET_TOOL_VALUE_OPTIONS: set[str] = set()
+# Programs that take a secret path without printing the file: metadata, permissions, the ssh agent, writes.
+METADATA = {"ls", "stat", "test", "[", "chmod", "chown", "mkdir", "touch", "rm", "echo", "printf", "ssh-add"}
+SHELLS = {"bash", "sh", "zsh", "dash", "eval"}  # their arguments are commands
+KEY_FILE_PROGRAMS = {"ssh", "scp"}
+KEY_FILE_OPTIONS = {"-i", "-F"}
+SUBSTITUTION = re.compile(r"\$\(([^()]*)\)|`([^`]*)`")
+MAX_DEPTH = 4
 OP_VALUE_OPTIONS = {"--account", "--config", "--session", "--encoding", "--format", "--cache"}
 
 ADVICE = (
@@ -97,12 +105,35 @@ def _vault_lookup(words: list[str]) -> bool:
     """True for `secret-tool lookup` and `op read`. Returns a bool so no value reaches the message."""
     prog, args = name(words[0]), words[1:]
     if prog == "secret-tool":
-        return positionals(args, SECRET_TOOL_VALUE_OPTIONS)[:1] == ["lookup"]
+        return positionals(args, set())[:1] == ["lookup"]  # secret-tool has no option that takes a value
     return prog == "op" and positionals(args, OP_VALUE_OPTIONS)[:1] == ["read"]
 
 
-def bash_reason(command: str, *, home: str) -> str | None:
+def _without_key_files(args: list[str]) -> list[str]:
+    """ssh and scp arguments without `-i <key>`, `-F <config>` and `-o IdentityFile=<key>`."""
+    out: list[str] = []
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg in KEY_FILE_OPTIONS or (arg == "-o" and args[i + 1 : i + 2] and args[i + 1].lower().startswith("identityfile")):
+            i += 2
+            continue
+        if arg[:2] in KEY_FILE_OPTIONS or arg.lower().startswith("-oidentityfile"):
+            i += 1
+            continue
+        out.append(arg)
+        i += 1
+    return out
+
+
+def bash_reason(command: str, *, home: str, depth: int = 0) -> str | None:
     """Why the command is denied, or None when it may run."""
+    if depth > MAX_DEPTH:
+        return None
+    for match in SUBSTITUTION.finditer(command):
+        why = bash_reason(match.group(1) if match.group(1) is not None else match.group(2), home=home, depth=depth + 1)
+        if why:
+            return why
     words = tokens(command)
     for op, target in zip(words, words[1:]):
         if op and all(c in "<>&|;()\n" for c in op) and "<" in op and "(" not in op and secret_path(target, home=home):
@@ -110,11 +141,18 @@ def bash_reason(command: str, *, home: str) -> str | None:
     for simple in simple_commands(command):
         if _vault_lookup(simple):
             return f"Blocked: `secret-tool lookup` and `op read` print a secret. {ADVICE}"
-        if name(simple[0]) in METADATA:
+        prog, args = name(simple[0]), simple[1:]
+        if prog in METADATA:
             continue
-        for word in simple[1:]:
+        if prog in KEY_FILE_PROGRAMS:
+            args = _without_key_files(args)
+        for word in args:
             if any(secret_path(c, home=home) for c in _candidates(word)):
                 return f"Blocked: the command names `{word}`, a secret file. {ADVICE}"
+            if prog in SHELLS or prog == "ssh":
+                why = bash_reason(word, home=home, depth=depth + 1)
+                if why:
+                    return why
     return None
 
 

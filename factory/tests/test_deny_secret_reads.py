@@ -74,6 +74,15 @@ DENIED = [
     "op --account my read op://vault/item/field",
     "TOKEN=$(op read op://v/i/f) && echo ok",
     "rtk proxy op read op://v/i/f",
+    'echo "$(cat .env)"',
+    'X="$(cat ~/.ssh/id_rsa)"; echo $X',
+    "echo `cat ~/.ssh/id_rsa`",
+    'echo "token: `op read op://v/i/f`"',
+    "bash -c 'cat .env'",
+    'sh -c "head ~/.ssh/config"',
+    "ssh localhost cat ~/.ssh/id_rsa",
+    "ssh host 'cat .env'",
+    "ssh -i ~/.ssh/id_ed25519 host cat .env",
 ]
 
 ALLOWED = [
@@ -87,6 +96,11 @@ ALLOWED = [
     "test -f .env && echo yes",
     "chmod 600 ~/.ssh/id_ed25519",
     "ssh -i ~/.ssh/id_ed25519 host",
+    "ssh -i~/.ssh/id_ed25519 -F ~/.ssh/config host uptime",
+    "ssh -o IdentityFile=~/.ssh/id_ed25519 host",
+    "scp -i ~/.ssh/id_ed25519 build.tar host:/srv/",
+    'echo "$(date)"',
+    "bash -c 'make check'",
     "ssh-add ~/.ssh/id_ed25519",
     "echo .env >> .gitignore",
     "printf '%s\\n' .env >> .gitignore",

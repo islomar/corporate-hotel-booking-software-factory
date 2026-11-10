@@ -262,6 +262,12 @@ class ContractTest(unittest.TestCase):
         with mock.patch.object(hook, "reason", return_value="Blocked: x"):
             self.assertEqual(_main(_event(file_path="/repo/factory/x.py")), (2, "", "Blocked: x\n"))
 
+    def test_a_notebook_path_is_checked_too(self) -> None:
+        with mock.patch.object(hook, "reason", return_value="Blocked: x") as reason:
+            self.assertEqual(_main(_event("NotebookEdit", notebook_path="/repo/factory/x.ipynb"))[0], 2)
+
+        reason.assert_called_once_with("/repo/factory/x.ipynb", cwd="/repo")
+
     def test_an_allowed_edit_exits_0_silently(self) -> None:
         self.assertEqual(_main(_event(file_path="/repo/backend/x.py")), (0, "", ""))
 
@@ -283,7 +289,7 @@ class ContractTest(unittest.TestCase):
         settings = json.loads((ROOT / ".claude" / "settings.json").read_text())
         (group,) = [g for g in settings["hooks"]["PreToolUse"] if "deny_harness_edits.py" in g["hooks"][0]["command"]]
 
-        self.assertEqual(set(group["matcher"].split("|")), {"Write", "Edit", "MultiEdit"})
+        self.assertEqual(set(group["matcher"].split("|")), {"Write", "Edit", "MultiEdit", "NotebookEdit"})
         self.assertIn("python3 -I", group["hooks"][0]["command"])
         self.assertIn("factory/hooks/deny_harness_edits.py", group["hooks"][0]["command"])
 
