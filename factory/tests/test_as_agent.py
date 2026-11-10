@@ -1,4 +1,5 @@
 import base64
+import io
 import json
 import subprocess
 import sys
@@ -9,6 +10,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from as_agent import (
+    EXIT_NO_AUTO_MERGE,
     KEY_COMMAND,
     AppKeyError,
     agent_env,
@@ -16,6 +18,7 @@ from as_agent import (
     noreply_email,
     read_private_key,
     read_private_key_with_override,
+    run,
 )
 from op_service_account import ServiceAccountError
 
@@ -129,6 +132,112 @@ class KeyCommandOverrideTest(unittest.TestCase):
             with self.assertRaises(AppKeyError) as caught:
                 read_private_key_with_override("my-key", {}, run)
             self.assertNotIn("secret", str(caught.exception))
+
+
+URL = "https://github.com/islomar/corporate-hotel-booking-software-factory/pull/61"
+
+
+def _gh(create_code: int = 0, create_out: str = f"Creating pull request\n{URL}\n", merge_code: int = 0) -> Any:
+    """A fake subprocess.run: `gh pr create` prints create_out, `gh pr merge` exits merge_code."""
+    calls: list[dict[str, Any]] = []
+
+    def fake(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        calls.append({"command": command, **kwargs})
+        if command[1:3] == ["pr", "merge"]:
+            return subprocess.CompletedProcess(command, merge_code, None, None)
+        captured = kwargs.get("stdout") == subprocess.PIPE
+        return subprocess.CompletedProcess(command, create_code, create_out if captured else None, None)
+
+    fake.calls = calls  # type: ignore[attr-defined]
+    return fake
+
+
+class AutoMergeTest(unittest.TestCase):
+    env = {"GH_TOKEN": "ghs_agent"}
+
+    def _run(self, argv: list[str], fake: Any, env: dict[str, str] | None = None) -> tuple[int, str, str]:
+        out, err = io.StringIO(), io.StringIO()
+        code = run(argv, env or self.env, runner=fake, out=out, err=err)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_a_new_pr_gets_auto_merge_squash_with_the_same_token(self) -> None:
+        fake = _gh()
+
+        code, out, err = self._run(["gh", "pr", "create", "--title", "t", "--body", "b"], fake)
+
+        self.assertEqual(code, 0)
+        self.assertIn(URL, out)
+        self.assertIn("auto-merge (squash) enabled", err)
+        create, merge = fake.calls
+        self.assertEqual(merge["command"], ["gh", "pr", "merge", "--auto", "--squash", URL])
+        self.assertEqual(merge["env"], self.env)
+        self.assertEqual(create["env"], self.env)
+
+    def test_gh_pr_new_is_the_same_command(self) -> None:
+        fake = _gh()
+
+        self.assertEqual(self._run(["/usr/bin/gh", "pr", "new", "--fill"], fake)[0], 0)
+        self.assertEqual(len(fake.calls), 2)
+
+    def test_base_main_gets_auto_merge(self) -> None:
+        for base in (["--base", "main"], ["-B", "main"], ["--base=main"]):
+            fake = _gh()
+            self._run(["gh", "pr", "create", "--fill", *base], fake)
+            self.assertEqual(len(fake.calls), 2, base)
+
+    def test_skipped_for_opt_out_draft_stacked_pr_and_web(self) -> None:
+        cases = [
+            ("AGENT_NO_AUTO_MERGE", ["--fill"], {"AGENT_NO_AUTO_MERGE": "1"}),
+            ("draft", ["--fill", "--draft"], {}),
+            ("draft", ["--fill", "-d"], {}),
+            ("not main", ["--fill", "--base", "CHB-1-parent"], {}),
+            ("not main", ["--fill", "--base=CHB-1-parent"], {}),
+            ("command line", ["--web"], {}),
+        ]
+        for reason, args, extra in cases:
+            fake = _gh()
+            code, _, err = self._run(["gh", "pr", "create", *args], fake, {**self.env, **extra})
+            self.assertEqual(code, 0, reason)
+            self.assertIn(reason, err)
+            (call,) = fake.calls
+            self.assertNotIn("stdout", call, "stdout is not captured when auto-merge is skipped")
+
+    def test_a_failed_create_returns_its_exit_code_and_merges_nothing(self) -> None:
+        fake = _gh(create_code=1, create_out="")
+
+        code, _, _ = self._run(["gh", "pr", "create", "--fill"], fake)
+
+        self.assertEqual(code, 1)
+        self.assertEqual(len(fake.calls), 1)
+
+    def test_no_pr_url_in_the_output_is_a_distinct_exit_code(self) -> None:
+        fake = _gh(create_out="done\n")
+
+        code, _, err = self._run(["gh", "pr", "create", "--fill"], fake)
+
+        self.assertEqual(code, EXIT_NO_AUTO_MERGE)
+        self.assertEqual(len(fake.calls), 1)
+        self.assertIn("no PR URL", err)
+
+    def test_a_failed_merge_says_the_pr_is_open_and_how_to_retry(self) -> None:
+        fake = _gh(merge_code=1)
+
+        code, out, err = self._run(["gh", "pr", "create", "--fill"], fake)
+
+        self.assertEqual(code, EXIT_NO_AUTO_MERGE)
+        self.assertIn(URL, out)
+        self.assertIn("Do not open it again", err)
+        self.assertIn(f"factory/bin/as-agent gh pr merge --auto --squash {URL}", err)
+
+    def test_other_commands_pass_through_without_capturing_stdout(self) -> None:
+        for argv in (["git", "push"], ["gh", "pr", "checks", "61", "--watch"], ["gh", "pr", "merge", "61"]):
+            fake = _runner(returncode=7)
+            code, out, err = self._run(argv, fake)
+            self.assertEqual(code, 7)
+            self.assertEqual((out, err), ("", ""))
+            (call,) = fake.calls
+            self.assertEqual(call["command"], argv)
+            self.assertNotIn("stdout", call)
 
 
 class NoreplyEmailTest(unittest.TestCase):

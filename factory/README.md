@@ -6,6 +6,7 @@
   - [Credentials: the 1Password service account](#credentials-the-1password-service-account)
     - [Rotating the token](#rotating-the-token)
   - [Acting as the agent](#acting-as-the-agent)
+    - [Auto-merge on agent PRs](#auto-merge-on-agent-prs)
   - [Subagent models](#subagent-models)
   - [Acting in Jira as the agent](#acting-in-jira-as-the-agent)
     - [Board rules on transition](#board-rules-on-transition)
@@ -78,6 +79,39 @@ The private key is read at run time from the vault `chb-factory` with the servic
 factory/bin/as-agent git push -u origin CHB-71-agent-token
 factory/bin/as-agent gh pr create --fill
 ```
+
+### Auto-merge on agent PRs
+
+`factory/bin/as-agent gh pr create` (or `gh pr new`) enables auto-merge (squash) on the PR it opens (CHB-120).
+The step lives in `factory/as_agent.py` (`run`), so every agent gets it. Tests: `factory/tests/test_as_agent.py`.
+It runs `gh pr merge --auto --squash <PR URL>` with the App token.
+A merge by the App token triggers the push-to-`main` workflows, so `main` deploys. A merge by `GITHUB_TOKEN` would not.
+
+Auto-merge removes only the click after approval.
+The `main` ruleset still requires the code-owner approval, approval of the last push and green required checks.
+
+as-agent reads the PR URL from the output of `gh pr create`.
+It captures that output and prints it again, so `gh` cannot prompt: pass `--title` and `--body` (or `--body-file`, or `--fill`).
+
+as-agent skips auto-merge and prints why in these cases:
+
+- `AGENT_NO_AUTO_MERGE=1` is set: the opt-out for one PR.
+- `--draft` or `-d`: GitHub does not auto-merge a draft.
+- `--base` names a branch other than `main`: a stacked PR. Only `main` has the review ruleset.
+  When GitHub retargets the PR to `main` after its parent merges, enable auto-merge by hand with the command below.
+- `--web` or `--dry-run`: gh opens no PR from the command line.
+
+```sh
+# Open one PR without auto-merge.
+AGENT_NO_AUTO_MERGE=1 factory/bin/as-agent gh pr create --title "CHB-1: title" --body-file body.md
+# Turn auto-merge off on an open PR. The owner can also click "Disable auto-merge".
+factory/bin/as-agent gh pr merge --disable-auto 61
+# Turn it on by hand, for example on a stacked PR retargeted to main.
+factory/bin/as-agent gh pr merge --auto --squash 61
+```
+
+If the PR opens but auto-merge fails, as-agent exits 5 and prints the command to retry.
+The PR is open: do not create it again.
 
 ## Subagent models
 
