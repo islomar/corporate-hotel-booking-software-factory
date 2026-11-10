@@ -937,7 +937,8 @@ def check_top_of_to_do(jira: Jira, key: str, fields: dict[str, Any], columns: li
 
     The ticket's own description and links (`fields`) come from the read just made, so a stale
     search answer cannot change its blockers or criteria. Its rank comes from the search.
-    It sorts To Do first (apply_todo_order, CHB-148) and takes the top ticket from the sorted order.
+    After the refusals that do not depend on the order (blocked, epic, missing from the search), it
+    sorts To Do (apply_todo_order, CHB-148) and takes the top ticket from the sorted order.
     """
     description = fields.get("description")
     issues = jira.open_issues()
