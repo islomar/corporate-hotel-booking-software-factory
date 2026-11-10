@@ -9,8 +9,8 @@ the open tickets from one search) and refuses to end the turn, exit 2 with the r
 - In Progress is below its minimum and Ready has a ticket that can start. The reason names the top one
   (todo_order, the same order a start checks) and the command. Nothing is demanded while In Progress,
   In Review or Validating is at its max: a start would exit 5.
-- Ready is below its minimum and the reply does not report the Backlog trigger scan: the words
-  "Ready is low" with the result (docs/process/kanban.md, Ready).
+- Ready is below its minimum (CHB-164: the minimum is a quota). Nothing the reply says passes it: the agent
+  refills Ready from Backlog (trigger 5, `factory/bin/jira ready`). The reason lists the candidates.
 Epics count toward no column (keys of the board, CHB-157). A column without a minimum is not checked.
 
 It fails open: when Jira or 1Password is unreachable, or anything unexpected happens, it prints one line
@@ -23,7 +23,7 @@ A second refusal for the same findings is allowed with one line. A board with no
 refusal. A state folder it cannot use means it allows the stop.
 
 Contract (https://code.claude.com/docs/en/hooks, Stop): the event arrives as JSON on stdin with
-`last_assistant_message` and `session_id`. Exit code 2 blocks the stop and feeds stderr to the agent.
+`session_id` (the reply text is no longer read, CHB-164). Exit code 2 blocks the stop and feeds stderr to the agent.
 """
 
 from __future__ import annotations
@@ -50,7 +50,6 @@ import validating_sweep  # noqa: E402
 from private_folder import private_folder  # noqa: E402
 
 STATE_DIR_ENV = "CHB_WIP_MINIMUMS_STATE_DIR"
-SCAN_REPORT = re.compile(r"\bready is low\b", re.IGNORECASE)
 
 Read = Callable[[], "tuple[Sequence[jira.Column], list[dict[str, Any]]]"]
 
@@ -61,7 +60,7 @@ def read_board() -> tuple[Sequence[jira.Column], list[dict[str, Any]]]:
     return client.board_columns(), client.open_issues()
 
 
-def findings(columns: Sequence[jira.Column], issues: list[dict[str, Any]], message: str) -> list[str]:
+def findings(columns: Sequence[jira.Column], issues: list[dict[str, Any]]) -> list[str]:
     """What the agent must still do, one line each. Empty when the board needs nothing."""
     by_name = {column.name: column for column in columns}
     counts = {
@@ -88,12 +87,8 @@ def findings(columns: Sequence[jira.Column], issues: list[dict[str, Any]], messa
                 f"{pull.name if pull else jira.TO_DO} has a ticket that can start: {top}. "
                 f'Start it now: factory/bin/jira transition {top} "{jira.IN_PROGRESS}".'
             )
-    if pull is not None and pull.min is not None and counts[pull.name] < pull.min and not SCAN_REPORT.search(message):
-        lines.append(
-            f"{pull.name} is below its minimum ({counts[pull.name]}/{pull.min}) and your reply does not report the "
-            "Backlog scan. Look for Backlog tickets with a trigger (docs/process/kanban.md, Backlog) and say "
-            '"Ready is low" with the result: which ticket you moved with `ready`, or that nothing in Backlog has a trigger.'
-        )
+    if pull is not None and pull.min is not None and counts[pull.name] < pull.min:
+        lines.append("\n".join(jira.refill_lines(pull, counts[pull.name], issues, columns)))
     return lines
 
 
@@ -145,13 +140,11 @@ def main(stdin: TextIO = sys.stdin, read: Read | None = None, state_dir: str | N
         return 0
     if not isinstance(event, dict):
         return 0
-    message = event.get("last_assistant_message")
-    message = message if isinstance(message, str) else ""
     session_id = event.get("session_id")
     session_id = session_id if isinstance(session_id, str) else ""
     try:
         columns, issues = (read or read_board)()
-        lines = findings(columns, issues, message)
+        lines = findings(columns, issues)
     except BaseException as error:  # noqa: BLE001 - fail open on anything
         print(f"WIP minimums check skipped: {_reason(error)}", file=sys.stderr)
         return 0

@@ -37,9 +37,12 @@ All work is tracked in Jira space `CHB` (see `TODO.md`). Move tickets only as `d
   If it lacks acceptance criteria, write them (`docs/process/kanban.md`, Ready).
   Every ticket opens with a non-empty "Why it matters" section: the pain, who feels it, the value of solving it, in plain words. `create` and a start refuse a ticket without it.
   Ready stays sorted: ready tickets High, Medium, Low, then blocked tickets. `create` and a start run `factory/bin/jira sort-todo`.
-  New tickets go to Backlog (not needed yet). A ticket moves to Ready only with one of the four triggers of `docs/process/kanban.md`, Backlog,
+  New tickets go to Backlog (not needed yet). A ticket moves to Ready only with one of the five triggers of `docs/process/kanban.md`, Backlog,
   and only when every box of its "Definition of Ready" holds: `factory/bin/jira tick CHB-<n> <box>`, then
-  `factory/bin/jira ready CHB-<n> --trigger "<which and evidence>"`. Never pull from Backlog.
+  `factory/bin/jira ready CHB-<n> --trigger "<which and evidence>"`. Never pull from Backlog outside those triggers.
+  Ready always holds its minimum (trigger 5): a `factory/bin/jira` move that leaves Ready below it prints the refill candidates and exits 6.
+  Refill from the top: the highest-priority, highest-ranked Backlog tickets that can meet the Definition of Ready
+  (write missing acceptance criteria, or split, first). Do not end a turn with Ready below its minimum; a Stop hook refuses.
   Leave the ticket, comment, and report. Moves into In Review and Validating are never blocked by a limit. See `docs/process/kanban.md`.
   If `factory/bin/jira` fails (for example no 1Password service account token in the keyring, exit code 3), stop and report.
 - For any step that deletes or changes something, name the exact item, the system and location (URL or menu path), and the command or clicks. Say what must not be deleted when similar items exist.

@@ -75,7 +75,10 @@ Exit codes:
      has a box unticked or a check that fails (no "Why it matters", no acceptance criteria, an open
      blocker). The message names each open box. The ticket stays where it is. Also a move into the
      pull list while it holds its max (CHB-157), and `create --expedite` while an expedite ticket is open.
+     Also `ready` with trigger 5 ("5. ...") while Ready holds its minimum or has none (CHB-164).
   5  the target column is at its WIP limit (In Progress, In Review, Validating or Needs human). Waiting clears it (CHB-162).
+  6  the move is done and Ready is below its minimum (CHB-164). The output lists the Backlog tickets
+     to refill it with (key, priority, missing sections). Refill with `ready` and trigger 5 until it exits 0.
 
 `transition` reads the column limits from the board configuration (board 2) on every call.
 After a move it prints the free In Progress slots and the next tickets of the pull list (CHB-125).
@@ -185,6 +188,7 @@ EXIT_USAGE = 2
 EXIT_CREDENTIAL = 3
 EXIT_BLOCKED = 4
 EXIT_WIP_LIMIT = 5
+EXIT_REFILL = 6  # the move is done and Ready is below its minimum: refill it (CHB-164)
 
 
 class JiraError(Exception):
@@ -1066,6 +1070,8 @@ class Jira:
         backlog, pull = backlog_column(columns), pull_list(columns)
         if backlog is None or pull is None or str(fields["status"]["id"]) not in backlog.status_ids:
             raise UsageError(f"ready moves a ticket from {BACKLOG} to {pull.name if pull else READY}; {key} is in {fields['status']['name']}")
+        if is_refill_trigger(trigger):
+            check_refill_trigger(self, key, pull)
         description = fields.get("description")
         blocking = open_blockers(fields, {str(issue["key"]) for issue in self.open_issues()}) if blockers(fields) else []
         problems = readiness_problems(key, description, blocking)
@@ -1302,6 +1308,81 @@ def backlog_column(columns: Sequence[Column]) -> Column | None:
     return next((column for column in columns if column.name == BACKLOG), None)
 
 
+REFILL_TRIGGER = re.compile(r"\s*5(?!\d)")
+
+
+class RefillNotice(str):
+    """The first line of the Ready refill notice. A move that prints it exits 6 (CHB-164)."""
+
+
+def is_refill_trigger(trigger: str | None) -> bool:
+    """True when the trigger text names trigger 5: "5. Ready is below its minimum (0/3)" (docs/process/kanban.md, Backlog)."""
+    return bool(trigger and REFILL_TRIGGER.match(trigger))
+
+
+def check_refill_trigger(jira: Jira, key: str, pull: Column | None) -> None:
+    """Trigger 5 holds only while Ready is below its minimum. Refuses (BlockedError, exit 4) otherwise (CHB-164)."""
+    if pull is None or pull.min is None:
+        raise BlockedError(f"trigger 5 needs a {READY} minimum on the board, and there is none")
+    count = len(jira.keys_in(pull, excluding=key))
+    if count >= pull.min:
+        raise BlockedError(
+            f"trigger 5 (Ready is below its minimum) does not hold: {pull.name} holds {count} of its minimum {pull.min}. "
+            "Name trigger 1, 2, 3 or 4 with its evidence, or leave the ticket in Backlog (docs/process/kanban.md, Backlog)."
+        )
+
+
+def _missing_for_ready(fields: dict[str, Any]) -> list[str]:
+    """The sections a Backlog ticket still needs before `ready` accepts it, by name."""
+    description = fields.get("description")
+    missing = []
+    if why_problem(description):
+        missing.append(WHY_HEADING)
+    if not has_acceptance_criteria(description):
+        missing.append("Acceptance criteria")
+    if checklist_count(description) != 1:
+        missing.append(DOR_HEADING)
+    return missing
+
+
+def refill_lines(
+    pull: Column, count: int, issues: list[dict[str, Any]], columns: Sequence[Column], *, exclude: str | None = None
+) -> list[str]:
+    """The refill notice (CHB-164): Ready holds `count` of its minimum. Its first line is a RefillNotice.
+
+    The candidates are the Backlog tickets that can meet the Definition of Ready: no epic, no open blocker.
+    Highest priority first, then rank order (open_issues is in rank order), as many as Ready lacks.
+    A candidate lists the sections it still lacks: the agent writes the acceptance criteria, or splits the ticket, first.
+    """
+    minimum = pull.min or 0
+    lines = [
+        RefillNotice(
+            f"{pull.name} is below its minimum ({count}/{minimum}): refill it from {BACKLOG} now, "
+            f'factory/bin/jira ready CHB-<n> --trigger "5. {pull.name} is below its minimum ({count}/{minimum})" '
+            "(docs/process/kanban.md, Backlog). Candidates, highest priority and rank first:"
+        )
+    ]
+    backlog = backlog_column(columns)
+    open_keys = {str(issue["key"]) for issue in issues}
+    found = [
+        issue
+        for issue in issues
+        if backlog is not None
+        and str(issue["fields"]["status"]["id"]) in backlog.status_ids
+        and issue["key"] != exclude
+        and issue["fields"]["issuetype"]["name"] != "Epic"
+        and not open_blockers(issue["fields"], open_keys)
+    ]
+    found.sort(key=_priority_order)
+    for issue in found[: max(minimum - count, 1)]:
+        missing = _missing_for_ready(issue["fields"])
+        state = f"missing {', '.join(missing)}" if missing else "complete"
+        lines.append(f"  {issue['key']} ({_priority_name(issue) or 'Medium'}): {state}")
+    if len(lines) == 1:
+        lines.append(f"  none: no {BACKLOG} ticket can meet the {DOR_HEADING}; tell the owner")
+    return lines
+
+
 def check_trigger(key: str, move: Move, trigger: str | None) -> str | None:
     """The trigger comment for a move from Backlog into the pull list, or None for any other move (CHB-153).
 
@@ -1317,7 +1398,7 @@ def check_trigger(key: str, move: Move, trigger: str | None) -> str | None:
         raise UsageError(
             f'{key} moves from {BACKLOG} to {name} only with factory/bin/jira ready {key} --trigger "<which trigger and its evidence>", '
             f"once every box of its {DOR_HEADING} is ticked. Triggers: 1. something is broken; 2. the owner asked for it; "
-            "3. it unblocks work in progress; 4. the same pain appeared twice (docs/process/kanban.md, Backlog)."
+            "3. it unblocks work in progress; 4. the same pain appeared twice; 5. Ready is below its minimum (docs/process/kanban.md, Backlog)."
         )
     if trigger and not promotes:
         raise JiraError(f"{key} left {BACKLOG} while ready checked it; nothing moved. Check its status and run ready again")
@@ -1655,24 +1736,20 @@ def has_acceptance_criteria(description: Any) -> bool:
 
 def after_transition(jira: Jira, key: str, move: Move) -> list[str]:
     """Notices after a move: a column left below its minimum, then the free In Progress slots."""
-    return _minimum_notice(jira, key, move) + _free_slot_notice(jira, key, move)
+    return _minimum_notice(jira, key, move) + _refill_notice(jira, key, move) + _free_slot_notice(jira, key, move)
 
 
 def _minimum_notice(jira: Jira, key: str, move: Move) -> list[str]:
-    """After a move between columns, say when the column it left, or the pull list it entered, is below its board minimum.
+    """After a move between columns, say when the column it left is below its board minimum (not Ready: _refill_notice).
 
-    The minimum is a signal, never a block: a failed count becomes a notice, not an error, and nothing is
-    promoted to reach it. Epics are not counted (keys_in). The moved key is left out of the count because
-    Jira search can still list it in its old status for a moment; in the pull list it entered it is counted
-    by hand. For the pull list the line says what to do (CHB-157).
+    The minimum is a signal, never a block: a failed count becomes a notice, not an error. Epics are not
+    counted (keys_in). The moved key is left out of the count because Jira search can still list it in its
+    old status for a moment.
     """
     source, target = move.source, move.target
     if source == target:
         return []
-    pull = pull_list(move.columns)
-    checks = [(source, source.min, 0)] if source is not None and source.min is not None else []
-    if target is not None and target.min is not None and target == pull:
-        checks.append((target, target.min, 0 if move.epic else 1))
+    checks = [(source, source.min, 0)] if source is not None and source.min is not None and source != pull_list(move.columns) else []
     notices = []
     for column, minimum, added in checks:
         try:
@@ -1680,13 +1757,29 @@ def _minimum_notice(jira: Jira, key: str, move: Move) -> list[str]:
         except JiraError as error:  # the move is done: report, do not fail it
             notices.append(f"could not check the {column.name} minimum: {error}")
             continue
-        if count >= minimum:
-            continue
-        line = f"{column.name} is below its minimum ({count}/{minimum})"
-        if column == pull:
-            line += ": look for Backlog tickets with a trigger; none qualify means tell the owner"
-        notices.append(line)
+        if count < minimum:
+            notices.append(f"{column.name} is below its minimum ({count}/{minimum})")
     return notices
+
+
+def _refill_notice(jira: Jira, key: str, move: Move) -> list[str]:
+    """After a move between columns, the refill notice while Ready is below its board minimum (CHB-164).
+
+    It follows every such move, not only a move out of Ready: the minimum is a quota. The first line is a
+    RefillNotice, which makes the command exit 6. Epics are not counted (keys_in). The moved key is left out of
+    the count because Jira search can still list it in its old status; in Ready it entered it is counted by hand.
+    A failed read becomes a notice, not an error: the move is done.
+    """
+    pull = pull_list(move.columns)
+    if pull is None or pull.min is None or move.source == move.target:
+        return []
+    try:
+        count = len(jira.keys_in(pull, excluding=key)) + (1 if move.target == pull and not move.epic else 0)
+        if count >= pull.min:
+            return []
+        return refill_lines(pull, count, jira.open_issues(), move.columns, exclude=key)
+    except JiraError as error:
+        return [f"could not check the {pull.name} minimum: {error}"]
 
 
 def _free_slot_notice(jira: Jira, key: str, move: Move) -> list[str]:
@@ -1807,10 +1900,12 @@ def _link_lines(links: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
-def _print_move(key: str, target: str, notices: list[str]) -> None:
+def _print_move(key: str, target: str, notices: list[str]) -> bool:
+    """Print the move and its notices. True when a notice asks for a Ready refill (exit 6, CHB-164)."""
     print(f"{key} -> {target}")
     for notice in notices:
         print(notice)
+    return any(isinstance(notice, RefillNotice) for notice in notices)
 
 
 def _checklist(jira: Jira, keys: list[str]) -> None:
@@ -1934,8 +2029,11 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def run(args: argparse.Namespace, jira: Jira) -> None:
-    """Run the command. main() reads the input files into args first (body, description, text)."""
+def run(args: argparse.Namespace, jira: Jira) -> int:
+    """Run the command. main() reads the input files into args first (body, description, text).
+
+    Return EXIT_REFILL when a move is done and left Ready below its minimum (CHB-164), else 0.
+    """
     if args.command == "view":
         issue = jira.view(args.key)
         if args.json:
@@ -1946,7 +2044,7 @@ def run(args: argparse.Namespace, jira: Jira) -> None:
         issues = jira.search(args.jql, args.limit)
         if args.json:
             print(json.dumps(issues, indent=2))
-            return
+            return 0
         for issue in issues:
             fields = issue["fields"]
             print(f"{issue['key']}\t{fields['status']['name']}\t{_name(fields.get('assignee'))}\t{fields['summary']}")
@@ -1962,7 +2060,7 @@ def run(args: argparse.Namespace, jira: Jira) -> None:
                 f"could not start {key} as expedite: {error}. Tell the owner now; the owner moves it to {IN_PROGRESS} "
                 f"in the Jira UI, because transition refuses a start from {BACKLOG}"
             )
-            return
+            return 0
         print(f"{key} -> {IN_PROGRESS} (expedite). Tell the owner now: {args.expedite.strip()}")
         for notice in jira.finish_expedite(key, args.expedite):
             print(notice)
@@ -1974,10 +2072,10 @@ def run(args: argparse.Namespace, jira: Jira) -> None:
             column = jira.place_created(key)
         except (JiraError, KeyError, TypeError, AttributeError) as error:
             print(f'could not place {key}: {error}. Move it: factory/bin/jira transition {key} "{BACKLOG}"')
-            return
+            return 0
         if column is not None and column.name == BACKLOG:
             print(f"{key} in {BACKLOG}")
-            return
+            return 0
         # The ticket exists: a failed sort is a notice, never an exit code that invites a second create.
         # KeyError, TypeError and AttributeError mean an answer of unexpected shape, as in main().
         try:
@@ -1992,9 +2090,9 @@ def run(args: argparse.Namespace, jira: Jira) -> None:
         state = f"sorted ({sent} rank requests)" if sent else "already sorted"
         print(f"{order.column} {state}: {', '.join(order.desired) or 'empty'}")
     elif args.command == "transition":
-        _print_move(args.key, *jira.transition(args.key, args.status))
+        return EXIT_REFILL if _print_move(args.key, *jira.transition(args.key, args.status)) else 0
     elif args.command == "ready":
-        _print_move(args.key, *jira.ready(args.key, args.trigger))
+        return EXIT_REFILL if _print_move(args.key, *jira.ready(args.key, args.trigger)) else 0
     elif args.command == "tick":
         changed = jira.tick(args.key, args.box)
         print(f"{args.key} box {args.box!r} {'ticked' if changed else 'unchanged'}")
@@ -2024,6 +2122,7 @@ def run(args: argparse.Namespace, jira: Jira) -> None:
     elif args.command == "priority":
         jira.set_priority(args.key, args.priority)
         print(f"{args.key} priority {args.priority}")
+    return 0
 
 
 def main(
@@ -2092,7 +2191,7 @@ def main(
             if not args.text.strip():
                 raise UsageError("description is empty")
         jira = Jira(*credentials_reader(), opener_factory())
-        run(args, jira)
+        code = run(args, jira)
     except CredentialError as error:
         print(f"jira: no Jira credential: {error}. STOP: do not use another Jira login. Report to the owner.", file=sys.stderr)
         return EXIT_CREDENTIAL
@@ -2108,7 +2207,7 @@ def main(
     except UsageError as error:
         print(f"jira: {error}", file=sys.stderr)
         return EXIT_USAGE
-    return 0
+    return code
 
 
 if __name__ == "__main__":
