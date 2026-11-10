@@ -1,0 +1,18 @@
+{
+  "title": "Implementation stage output (CHB-62)",
+  "description": "factory/workflow/route.py: any check false asks for another implementation round.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["typesClean", "lintClean", "testsGreen"],
+  "properties": {
+    "typesClean": {
+      "type": "boolean"
+    },
+    "lintClean": {
+      "type": "boolean"
+    },
+    "testsGreen": {
+      "type": "boolean"
+    }
+  }
+}
