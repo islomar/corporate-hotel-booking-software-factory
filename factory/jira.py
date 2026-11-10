@@ -710,7 +710,7 @@ def after_transition(jira: Jira, key: str, move: Move) -> list[str]:
         return []
     notice = f"{source.name} is below its minimum ({count}/{source.min})"
     if source.name == IN_PROGRESS:
-        notice += ": idle, ask the owner for the next ticket"
+        notice += ": idle, pull the top ticket of To Do"
     return [notice]
 
 

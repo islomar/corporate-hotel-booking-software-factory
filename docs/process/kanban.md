@@ -41,8 +41,10 @@ A WIP limit stops pulling new work. It never stops the board from recording what
 - A move back into In Progress (review asked for changes, a live check failed, the owner answered) is not new work and is never blocked.
 - Moves within one column, out of a column, or into a column without a max are never blocked.
 - The max values live on the board only. This document does not repeat them.
-- Min: a signal only. When a move leaves In Progress below its min, the wrapper prints "idle, ask the owner for the next ticket".
-  The agent asks the owner and never pulls a ticket without the owner's go.
+- Min: a signal only. When a move leaves In Progress below its min, the wrapper prints "idle, pull the top ticket of To Do".
+- Pulling work: the agent fills In Progress up to its max, one agent per ticket, in parallel where it can (owner rule, 2026-11-10).
+  It pulls the top tickets of To Do in rank order and needs no go per ticket. The owner can say stop at any time.
+  Finishing comes first: before it pulls a ticket, the agent drives what it can in Validating, In Review and In Progress (live checks, review fixes, owner steps).
 - Owner override: the owner moves the ticket in the Jira UI and writes why in a comment on the ticket.
 
 Jira Free only colours a column over its limit. The check lives in `factory/bin/jira`.

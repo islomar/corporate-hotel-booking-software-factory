@@ -33,6 +33,9 @@ All work is tracked in Jira space `CHB` (see `TODO.md`). Move tickets only as `d
   If `factory/bin/jira transition` exits 4, a board rule blocks the move: a WIP limit blocks starting work (or entering a full Needs human), or a required section is missing.
   Leave the ticket, comment, and report. Moves into In Review and Validating are never blocked by a limit. See `docs/process/kanban.md`.
   If `factory/bin/jira` fails (for example no 1Password service account token in the keyring, exit code 3), stop and report.
+- For any step that deletes or changes something, name the exact item, the system and location (URL or menu path), and the command or clicks. Say what must not be deleted when similar items exist.
+- The owner does not read PR bodies closely. Before a merge, state the PR's risks, side effects and merge order in the chat, in plain words.
+- Report anything that will cost money (a trial ending, a paid plan, a free-tier limit about to be passed) with the date and amount, even when found during other work.
 - A command for the owner to paste works from any folder: absolute paths, `git -C <repo>`, `make -C <repo>`, or a leading `cd ~/workspace/<repo> &&`.
   A Stop hook (`factory/hooks/check_owner_commands.py`) checks the shell blocks of every reply. See CHB-126.
 - Run `make check` before every commit. Gates read exit codes, not output text.
