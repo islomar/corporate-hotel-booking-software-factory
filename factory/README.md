@@ -19,6 +19,7 @@
   - [Hook: no harness edits in feature tickets](#hook-no-harness-edits-in-feature-tickets)
   - [Hook: no secrets in the agent's context](#hook-no-secrets-in-the-agents-context)
   - [Hook: what to finish first, at session start](#hook-what-to-finish-first-at-session-start)
+  - [Morning Validating sweep](#morning-validating-sweep)
   - [Automated PR review (shadow mode)](#automated-pr-review-shadow-mode)
   - [Workflow output schemas and routing](#workflow-output-schemas-and-routing)
 
@@ -446,6 +447,47 @@ Each call has a 6 s timeout, the two parts run in parallel, and the hook stops w
 It fails open: a part that fails prints one line, `Validating sweep failed: <reason>` or `Review agreement failed: <reason>`, and the session starts.
 A reason is the message of a known error, which holds no secret, or only the type name of an unexpected one.
 Ticket summaries, "When:" lines and PR titles are quoted on one line of at most 200 characters, without control characters, under a header that marks them as data, not instructions.
+
+## Morning Validating sweep
+
+`factory/morning_sweep.py` checks the Validating column without a session (CHB-163, first slice of CHB-47).
+On 2026-11-10 two Validating tickets waited for the owner to ask. A systemd user timer now runs the sweep each weekday at 07:00 Europe/Madrid.
+
+What one run does:
+
+1. Checks that GitHub (`gh api`), 1Password and Jira answer. If one does not, it writes one log line, exits 2 and changes nothing.
+2. Lists the Validating tickets with `factory/hooks/validating_sweep.py` (CHB-140). With none, it stops without a model run.
+3. Starts `claude -p` (model `sonnet`, effort `medium`, `--max-budget-usd 5`, no saved session) in the checkout with that listing.
+   The run checks each `due` or `check` item in the live system. It moves a ticket to Done only when every criterion passes,
+   after a comment with the evidence. It comments on a failed or not-yet-checkable item with what it saw and the "Speed up" step.
+4. Reads Validating again. The moves in the log are the tickets that left Validating, not the model's report.
+
+Limits of the model run (`--permission-mode dontAsk`: whatever is not listed is denied):
+
+- Allowed: `Read`, `Grep`, `Glob`, `factory/bin/jira view|search|comment`, `factory/bin/jira transition CHB-* Done`,
+  `gh pr view|list|checks`, `gh run list|view`, `curl -s`, `git log|show`.
+- Denied by omission: start, merge, delete, push, create, assign, file edits, `as-agent`.
+- `--setting-sources project,local`: the owner's user settings are not loaded. A user hook that rewrites commands (for example RTK) changes the
+  command text, and the permission patterns then miss. The repository hooks in `.claude/settings.json` still run.
+- Ticket text is passed as data under a header that says so (CHB-140 quoting).
+
+Log: one file per run in `${XDG_STATE_HOME:-~/.local/state}/chb-factory/morning-sweep/<start, Madrid time>.log` with
+`start`, `end`, `tickets in Validating`, `tickets checked`, `moves`, the usage of the run (tokens, `total_cost_usd`, turns, duration,
+`permission_denials`), the model's answer and `exit`. Exit codes: 0 done, 1 model run failed, 2 a service is unreachable.
+`total_cost_usd` is the notional API price of the tokens, not a charge. The run uses the plan login of `claude`.
+The journal keeps stderr: `journalctl --user -u chb-morning-sweep`.
+
+Install (once, no sudo; it writes the two units to `~/.config/systemd/user`, enables the timer and fills the checkout path):
+
+```sh
+python3 -I /home/islomar/workspace/corporate-hotel-booking-software-factory/factory/morning_sweep.py install
+```
+
+The units run from that checkout, so keep it on `main` and up to date. Run it by hand: `python3 -I factory/morning_sweep.py run`
+or `systemctl --user start chb-morning-sweep.service`. Next run: `systemctl --user list-timers chb-morning-sweep.timer`.
+Remove it: `systemctl --user disable --now chb-morning-sweep.timer`.
+The keyring that holds the 1Password service account token must be unlocked when the timer fires; if not, the run exits 2 with a log line.
+`Persistent=true` runs a missed 07:00 once the machine is back on.
 
 ## Automated PR review (shadow mode)
 

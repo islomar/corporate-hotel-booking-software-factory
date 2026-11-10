@@ -220,6 +220,8 @@ Meaning: the change is merged and deployed, but nobody has yet confirmed that it
 - Leave to In Progress: the check fails. A new or reopened PR fixes it.
 - Some checks need time (for example a background cleanup that runs within a day). The ticket stays in Validating until then.
 - At session start, the SessionStart hook lists each "When:" line as due, check, or unmarked while its date is ahead, and the agent sweeps the due and check items first (CHB-140, `factory/hooks/validating_sweep.py`).
+- Each weekday at 07:00 Europe/Madrid a scheduled headless run does the same sweep without a session (CHB-163, `factory/morning_sweep.py`, see `factory/README.md`).
+  It moves a ticket to Done only when every criterion passes, with the evidence as a comment. It comments on a failed or not-yet-checkable item and starts, merges and deletes nothing.
 - WIP limit: a max on the board. A full Validating blocks starting work, never recording a merge.
   The agent then checks live results or tells the owner how to speed them up before it starts another ticket.
 

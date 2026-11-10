@@ -1,0 +1,9 @@
+[Unit]
+Description=CHB morning Validating sweep, weekdays 07:00 Madrid (CHB-163)
+
+[Timer]
+OnCalendar=Mon..Fri 07:00 Europe/Madrid
+Persistent=true
+
+[Install]
+WantedBy=timers.target

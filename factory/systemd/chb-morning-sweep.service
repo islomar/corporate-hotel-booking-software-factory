@@ -1,0 +1,10 @@
+[Unit]
+Description=CHB morning Validating sweep (CHB-163)
+Documentation=file://@REPO@/factory/README.md
+
+[Service]
+Type=oneshot
+WorkingDirectory=@REPO@
+Environment=PATH=@PATH@
+ExecStart=@PYTHON@ -I @REPO@/factory/morning_sweep.py run
+TimeoutStartSec=45min
