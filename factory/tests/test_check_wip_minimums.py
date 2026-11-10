@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
@@ -46,11 +47,42 @@ def board(issues: list[dict]):
     return lambda: (list(COLUMNS), issues)
 
 
-def run(message="Done.", read=None, state="", session="s1", active=False):
+NOW = datetime(2026, 11, 10, 12, 0, tzinfo=timezone.utc)  # 13:00 in Madrid, day 2026-11-10
+SECTION = "Acceptance criteria (Validating)"
+
+
+def validating_issue(key: str, *whens: str, section: bool = True, status: str = "5", kind: str = "Task") -> dict:
+    """A Validating ticket whose section holds one "When:" line per argument."""
+    content = [{"type": "heading", "attrs": {"level": 2}, "content": [{"type": "text", "text": "Why it matters"}]}]
+    if section:
+        items = [
+            {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": f"When: {w}"}]}]}
+            for w in whens
+        ]
+        content.append({"type": "heading", "attrs": {"level": 2}, "content": [{"type": "text", "text": SECTION}]})
+        content.append({"type": "bulletList", "content": items})
+    found = issue(key, status, kind=kind)
+    found["fields"]["description"] = {"type": "doc", "version": 1, "content": content}
+    return found
+
+
+def comments_at(*times: str):
+    """read_comments seam: the agent account's comment times for every ticket, and the keys asked about."""
+    asked: list[str] = []
+
+    def read(key: str):
+        asked.append(key)
+        return [datetime.fromisoformat(t) for t in times]
+
+    read.asked = asked  # type: ignore[attr-defined]
+    return read
+
+
+def run(message="Done.", read=None, state="", session="s1", active=False, read_comments=None, now=NOW):
     event = {"last_assistant_message": message, "session_id": session, "stop_hook_active": active}
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-        code = hook.main(io.StringIO(json.dumps(event)), read=read, state_dir=state)
+        code = hook.main(io.StringIO(json.dumps(event)), read=read, state_dir=state, read_comments=read_comments, now=now)
     return code, out.getvalue(), err.getvalue()
 
 
@@ -204,6 +236,150 @@ class NoLoop(StateCase):
         self.assertEqual(err.count("\n"), 1)
 
 
+class ValidatingDue(StateCase):
+    """CHB-163: a Validating ticket with a due item and no agent comment today blocks the stop."""
+
+    OK = [issue(f"CHB-{n}", "2") for n in (20, 21, 22)] + [issue("CHB-8", "3")]  # no WIP finding
+
+    def test_refuses_and_names_the_ticket_and_the_due_item(self):
+        issues = self.OK + [validating_issue("CHB-140", "2026-11-09 the Dependabot run shows green", "2026-12-01 later")]
+        code, _, err = run(read=board(issues), read_comments=comments_at(), state=self.state)
+        self.assertEqual(code, 2)
+        self.assertIn("CHB-140", err)
+        self.assertIn("2026-11-09 the Dependabot run shows green", err)
+        self.assertNotIn("2026-12-01", err)
+
+    def test_each_ticket_and_each_due_item_is_named(self):
+        issues = self.OK + [
+            validating_issue("CHB-140", "2026-11-09 first", "2026-11-10 second"),
+            validating_issue("CHB-141", "2026-11-08 third"),
+        ]
+        code, _, err = run(read=board(issues), read_comments=comments_at(), state=self.state)
+        self.assertEqual(code, 2)
+        for text in ("CHB-140", "CHB-141", "first", "second", "third"):
+            self.assertIn(text, err)
+
+    def test_a_comment_by_the_agent_today_passes(self):
+        issues = self.OK + [validating_issue("CHB-140", "2026-11-09 due")]
+        code, _, err = run(read=board(issues), read_comments=comments_at("2026-11-10T09:30:00+01:00"), state=self.state)
+        self.assertEqual((code, err), (0, ""))
+
+    def test_the_day_is_the_madrid_day(self):
+        issues = self.OK + [validating_issue("CHB-140", "2026-11-09 due")]
+        late = NOW.replace(hour=23, minute=30)  # 00:30 on 2026-11-11 in Madrid
+        yesterday_evening = "2026-11-10T22:00:00+00:00"  # 23:00 on 2026-11-10 in Madrid
+        code, _, _ = run(read=board(issues), read_comments=comments_at(yesterday_evening), state=self.state, now=late)
+        self.assertEqual(code, 2)
+        code, _, _ = run(read=board(issues), read_comments=comments_at(yesterday_evening), state=self.state, now=NOW, session="s2")
+        self.assertEqual(code, 0)
+
+    def test_a_comment_from_an_earlier_day_does_not_pass(self):
+        issues = self.OK + [validating_issue("CHB-140", "2026-11-09 due")]
+        code, _, _ = run(read=board(issues), read_comments=comments_at("2026-11-09T23:00:00+01:00"), state=self.state)
+        self.assertEqual(code, 2)
+
+    def test_items_not_yet_due_never_block(self):
+        issues = self.OK + [validating_issue("CHB-140", "2026-11-11 tomorrow", "2026-11-10 14:00 Europe/Madrid this afternoon")]
+        comments = comments_at()
+        code, _, err = run(read=board(issues), read_comments=comments, state=self.state)
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(comments.asked, [])
+
+    def test_an_item_with_no_date_is_not_due(self):
+        issues = self.OK + [validating_issue("CHB-140", "after the next deploy")]
+        code, _, _ = run(read=board(issues), read_comments=comments_at(), state=self.state)
+        self.assertEqual(code, 0)
+
+    def test_tickets_without_a_section_and_other_columns_are_ignored(self):
+        issues = self.OK + [
+            validating_issue("CHB-140", section=False),
+            validating_issue("CHB-141", "2026-11-09 due", status="3"),
+            validating_issue("CHB-142", "2026-11-09 due", kind="Epic"),
+        ]
+        code, _, _ = run(read=board(issues), read_comments=comments_at(), state=self.state)
+        self.assertEqual(code, 0)
+
+    def test_comments_are_read_only_for_tickets_with_a_due_item(self):
+        issues = self.OK + [validating_issue("CHB-140", "2026-11-09 due"), validating_issue("CHB-141", "2026-12-01 later")]
+        comments = comments_at()
+        run(read=board(issues), read_comments=comments, state=self.state)
+        self.assertEqual(comments.asked, ["CHB-140"])
+
+    def test_the_second_stop_for_the_same_state_is_allowed(self):
+        issues = self.OK + [validating_issue("CHB-140", "2026-11-09 due")]
+        first = run(read=board(issues), read_comments=comments_at(), state=self.state)
+        second = run(read=board(issues), read_comments=comments_at(), state=self.state)
+        self.assertEqual(first[0], 2)
+        self.assertEqual(second[0], 0)
+        self.assertIn("allowing the stop", second[2])
+
+    def test_a_new_due_item_is_refused_again(self):
+        one = self.OK + [validating_issue("CHB-140", "2026-11-09 due")]
+        two = one + [validating_issue("CHB-141", "2026-11-08 due")]
+        run(read=board(one), read_comments=comments_at(), state=self.state)
+        self.assertEqual(run(read=board(two), read_comments=comments_at(), state=self.state)[0], 2)
+
+    def test_comment_read_failure_allows_with_one_line(self):
+        def broken(key):
+            raise jira.JiraError("HTTP 503 from Jira")
+
+        issues = self.OK + [validating_issue("CHB-140", "2026-11-09 due")]
+        code, _, err = run(read=board(issues), read_comments=broken, state=self.state)
+        self.assertEqual(code, 0)
+        self.assertEqual(err.count("\n"), 1)
+        self.assertIn("HTTP 503 from Jira", err)
+
+    def test_comment_read_failure_keeps_the_wip_finding(self):
+        def broken(key):
+            raise jira.JiraError("HTTP 503 from Jira")
+
+        issues = [validating_issue("CHB-140", "2026-11-09 due")]  # Ready and In Progress are empty
+        code, _, err = run(read=board(issues), read_comments=broken, state=self.state)
+        self.assertEqual(code, 2)
+        self.assertIn("Ready is below its minimum", err)
+
+    def test_both_findings_in_one_reason(self):
+        issues = [validating_issue("CHB-140", "2026-11-09 due")]
+        code, _, err = run(read=board(issues), read_comments=comments_at(), state=self.state)
+        self.assertEqual(code, 2)
+        self.assertIn("Ready is below its minimum", err)
+        self.assertIn("CHB-140", err)
+
+
+class AgentCommentTimes(unittest.TestCase):
+    """The real read: Jira.agent_comment_times keeps only the agent account's comments."""
+
+    def test_filters_by_author_and_parses_times(self):
+        answers = {
+            "/rest/api/3/myself": {"accountId": "me"},
+            "/rest/api/3/issue/CHB-1/comment?orderBy=-created&maxResults=100": {
+                "comments": [
+                    {"author": {"accountId": "me"}, "created": "2026-11-10T16:30:04.324+0100"},
+                    {"author": {"accountId": "owner"}, "created": "2026-11-10T17:00:00.000+0100"},
+                ]
+            },
+        }
+
+        class Response:
+            def __init__(self, body):
+                self.body = body
+
+            def read(self):
+                return json.dumps(self.body).encode()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return None
+
+        def opener(request):
+            return Response(answers[request.full_url.removeprefix(jira.SITE)])
+
+        times = jira.Jira("a@example.com", "t", opener).agent_comment_times("CHB-1")
+        self.assertEqual(times, [datetime.fromisoformat("2026-11-10T16:30:04.324+01:00")])
+
+
 class Wiring(unittest.TestCase):
     def test_settings_run_the_hook_on_stop(self):
         settings = json.loads((ROOT / ".claude" / "settings.json").read_text())
@@ -213,6 +389,10 @@ class Wiring(unittest.TestCase):
     def test_script_runs_isolated_and_fails_open_on_bad_input(self):
         result = subprocess.run([sys.executable, "-I", str(HOOK)], input="not json", capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0)
+
+    def test_kanban_and_readme_describe_the_validating_check(self):
+        for path in (ROOT / "docs" / "process" / "kanban.md", ROOT / "factory" / "README.md"):
+            self.assertIn("CHB-163", path.read_text(), str(path))
 
     def test_kanban_names_the_hook_in_the_min_rules(self):
         text = (ROOT / "docs" / "process" / "kanban.md").read_text()
