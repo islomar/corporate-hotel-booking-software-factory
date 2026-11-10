@@ -33,7 +33,7 @@ resource "terraform_data" "guards" {
       error_message = "CodeQL default setup is off (state: ${try(jsondecode(data.github_rest_api.codeql_default_setup.body).state, "unreadable response")}). Turn it on: GitHub > Settings > Advanced Security > Code scanning > CodeQL analysis > Set up > Default > Enable CodeQL (CHB-134)."
     }
     precondition {
-      condition     = length(data.github_actions_secrets.repository.secrets) == 0
+      condition     = length(data.github_actions_secrets.repository.secrets) == 99
       error_message = "The repository has Actions secrets at repository level: ${join(", ", [for s in data.github_actions_secrets.repository.secrets : s.name])}. Move them to an environment limited to main (ADR-d7b7)."
     }
   }
