@@ -1,0 +1,35 @@
+{
+  "title": "Analysis stage output (CHB-62)",
+  "description": "factory/workflow/route.py: a non-empty blockingQuestions stops the workflow and notifies the owner.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["planFile", "acceptanceCriteria", "isVerifiable", "blockingQuestions"],
+  "properties": {
+    "planFile": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300
+    },
+    "acceptanceCriteria": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1000
+      }
+    },
+    "isVerifiable": {
+      "type": "boolean"
+    },
+    "blockingQuestions": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1000
+      }
+    }
+  }
+}

@@ -17,6 +17,7 @@
   - [Hook: related tests only while iterating](#hook-related-tests-only-while-iterating)
   - [Hook: warn on repeated edits of one file](#hook-warn-on-repeated-edits-of-one-file)
   - [Automated PR review (shadow mode)](#automated-pr-review-shadow-mode)
+  - [Workflow output schemas and routing](#workflow-output-schemas-and-routing)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -350,3 +351,23 @@ Run the gate on a saved result:
 python3 -I factory/review/gate.py --result result.json --claude-exit-code 0 --schema factory/review/schema.json \
   --changed-files names.z --prior-runs runs.json --app-slug chb-factory-reviewer --head-sha HEAD_SHA --out check-run.json
 ```
+
+## Workflow output schemas and routing
+
+No workflow runs on this code yet. CHB-44 (ticket-to-PR workflow) will call it. Ticket: CHB-62.
+
+Each stage of the workflow returns typed JSON. `workflow/schemas/<stage>.json` defines it: it lists every field as required and rejects any other field.
+`workflow/route.py` has one function, `next_step(stage, output)`. It validates the output with the validator of `review/gate.py` and returns a `Route` with a step and its reasons.
+
+| Stage | Fields | Rule | Step |
+|---|---|---|---|
+| `analysis` | `planFile`, `acceptanceCriteria[]`, `isVerifiable`, `blockingQuestions[]` | `blockingQuestions` not empty | `stop-and-notify` |
+| `implementation` | `typesClean`, `lintClean`, `testsGreen` | any check false | `another-round` |
+| `review` | `mergeSafety`, `scores`, `findings[{severity, suggestedFix}]` | `mergeSafety` below 8.5 or a critical finding | `triage` |
+| `triage` | `decision` (`fix`, `dismiss`, `doubt`), `fixableByAgent` | `decision` is `doubt` | `pr-caveats` |
+
+Otherwise the step is `next-stage`.
+An unknown stage, invalid output or an unreadable schema returns `stop`. `next_step` never raises.
+
+No rule reads `isVerifiable` or `fixableByAgent` yet. CHB-44 decides what they route to.
+`next_step` trusts the `mergeSafety` it receives. `review/gate.py` recomputes Merge Safety from the findings, so CHB-44 should pass the gate's value.

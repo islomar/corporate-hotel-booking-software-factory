@@ -1,0 +1,13 @@
+{
+  "title": "Triage stage output (CHB-62)",
+  "description": "factory/workflow/route.py: decision doubt goes to PR caveats. fix and dismiss go to the next stage.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["decision", "fixableByAgent"],
+  "properties": {
+    "decision": { "enum": ["fix", "dismiss", "doubt"] },
+    "fixableByAgent": {
+      "type": "boolean"
+    }
+  }
+}
