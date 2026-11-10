@@ -22,6 +22,7 @@
   - [Hook: no harness edits in feature tickets](#hook-no-harness-edits-in-feature-tickets)
   - [Hook: no secrets in the agent's context](#hook-no-secrets-in-the-agents-context)
   - [Hook: what to finish first, at session start](#hook-what-to-finish-first-at-session-start)
+  - [Hook: rules health check is due](#hook-rules-health-check-is-due)
   - [Automated PR review (shadow mode)](#automated-pr-review-shadow-mode)
   - [Workflow output schemas and routing](#workflow-output-schemas-and-routing)
 
@@ -564,6 +565,19 @@ Each call has a 6 s timeout, the two parts run in parallel, and the hook stops w
 It fails open: a part that fails prints one line, `Validating sweep failed: <reason>` or `Review agreement failed: <reason>`, and the session starts.
 A reason is the message of a known error, which holds no secret, or only the type name of an unexpected one.
 Ticket summaries, "When:" lines and PR titles are quoted on one line of at most 200 characters, without control characters, under a header that marks them as data, not instructions.
+
+## Hook: rules health check is due
+
+`.claude/settings.json` runs `factory/hooks/rules_health_due.py` on SessionStart events with source `startup` (CHB-167).
+Resume, `/clear` and compaction do not run it.
+It reads one Jira search as the agent account: the newest ticket whose summary starts with `Rules health check`.
+When none exists or the newest is 7 or more days old, it adds one line to the context: follow `docs/process/rules-health.md` after the owner's request.
+It writes nothing and runs no check itself. Cost: one 1Password read and one Jira search, under 15 s (Claude Code's limit), no tokens beyond the one line.
+It fails open: when Jira or 1Password is unreachable it prints `Rules health check skipped: <reason>` on stderr and adds nothing.
+
+`factory/rules_health.py` holds the deterministic checks (dead paths, dead `factory/bin/jira` and `make` commands, unknown exit codes, unregistered hooks).
+`make check` runs it on this repository through `factory/tests/test_rules_health.py`.
+Duplicates and contradictions are judged by the agent in the procedure.
 
 ## Automated PR review (shadow mode)
 
