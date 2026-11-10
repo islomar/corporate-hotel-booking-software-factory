@@ -8,6 +8,8 @@ services:
     environment:
       UV_PROJECT_ENVIRONMENT: /venv
       UV_LINK_MODE: copy
+      # The container runs as root: bytecode in the bind mount would be root-owned on the host.
+      PYTHONDONTWRITEBYTECODE: "1"
       # Telemetry to the lgtm container (ADR-c17d). Unset it to turn telemetry off.
       OTEL_EXPORTER_OTLP_ENDPOINT: http://lgtm:4318
       OTEL_LOGS_EXPORTER: otlp
