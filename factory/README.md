@@ -7,6 +7,7 @@
     - [Rotating the token](#rotating-the-token)
   - [Acting as the agent](#acting-as-the-agent)
     - [Auto-merge on agent PRs](#auto-merge-on-agent-prs)
+    - [Keeping agent PRs up to date](#keeping-agent-prs-up-to-date)
   - [Subagent models](#subagent-models)
   - [Acting in Jira as the agent](#acting-in-jira-as-the-agent)
     - [Board rules on transition](#board-rules-on-transition)
@@ -124,6 +125,31 @@ The PR is open: do not create it again.
 as-agent warns on stderr when a `-F`, `--file` or `--body-file` path lies in a Claude Code `scratchpad` folder without a `CHB-<n>` folder, for example `<scratchpad>/pr.md`.
 Parallel agents that share one scratch folder overwrite each other's files (CHB-138). The warning never blocks the command.
 `factory/bin/jira` does not check its `--body-file` paths.
+
+### Keeping agent PRs up to date
+
+`.github/workflows/pr-updates.yml` runs on every push to `main` and on manual dispatch, as the agent App (CHB-172).
+Why: an owner "Update branch" click makes the owner the last pusher, and the ruleset's `require_last_push_approval` then ignores the owner's approval.
+`docs/knowledge/conflicting-agent-prs-need-the-agent-not-the-owner.md` has the two cases that led to it.
+
+`factory/pr_updates.py` reads the open PRs and acts only on PRs opened by the App (a `Bot` author named `chb-factory-agent`), into `main`, from this repository:
+
+| PR state | Action |
+| --- | --- |
+| Behind `main`, mergeable, not approved | `updatePullRequestBranch` with `updateMethod: REBASE` and `expectedHeadOid` set to the head it read. A push in between makes GitHub refuse; the run logs "head moved" and goes on. |
+| Behind `main`, mergeable, approved | Nothing. `strict_required_status_checks_policy` is false, so it can merge, and a rebase would dismiss the approval. |
+| Conflicting | Adds the label `needs-rebase`. No update. |
+| Labelled `needs-rebase`, mergeable again | Removes the label. |
+| Mergeable `UNKNOWN` | Read again up to 3 times, 5 s apart; then left alone until the next push. |
+
+The SessionStart sweep lists open agent PRs labelled `needs-rebase` as "resolve first".
+The agent rebases them locally, pushes through `factory/bin/as-agent` and removes the label.
+Tests: `factory/tests/test_pr_updates.py`, `factory/tests/test_validating_sweep.py`.
+
+The App key reaches the job only through the `agent-pr-updates` environment, which admits only `main` (ADR-d7b7, `infra/github/environments.tf`).
+Secrets there: `AGENT_APP_CLIENT_ID` and `AGENT_APP_PRIVATE_KEY`. Until both exist the job prints a notice and does nothing.
+The token asks for `contents`, `pull-requests` and `workflows` write. `workflows` is needed to rebase a PR that edits a workflow file.
+The label `needs-rebase` is a Terraform resource in `infra/github/labels.tf`.
 
 ## Subagent models
 
@@ -485,11 +511,13 @@ The hook adds this to the agent's context before the first prompt:
   No mark: the date is still ahead. The date wins over an event named on the same line.
   `check`: the line has no absolute date, so it names an event.
   `no section`: the ticket has no such section.
+- Open agent PRs labelled `needs-rebase`, as "resolve first" (CHB-172).
 - The line of `make review-agreement`, and up to 5 merged PRs whose last review comment has no owner reaction, newest first, with links.
 
-It reads only: one Jira search as the agent account (credentials from 1Password, as `factory/bin/jira`) and one GitHub GraphQL query with the owner's `gh` login (up to 3 pages of 100 PRs).
-Each call has a 6 s timeout, the two parts run in parallel, and the hook stops waiting after 9 s. Claude Code kills it at 15 s.
-It fails open: a part that fails prints one line, `Validating sweep failed: <reason>` or `Review agreement failed: <reason>`, and the session starts.
+It reads only: one Jira search as the agent account (credentials from 1Password, as `factory/bin/jira`) and two GitHub GraphQL queries with the owner's `gh` login.
+The review agreement query reads up to 3 pages of 100 PRs. The `needs-rebase` query reads one page.
+Each call has a 6 s timeout, the three parts run in parallel, and the hook stops waiting after 9 s. Claude Code kills it at 15 s.
+It fails open: a part that fails prints one line, `Validating sweep failed: <reason>`, `Review agreement failed: <reason>` or `Needs-rebase list failed: <reason>`, and the session starts.
 A reason is the message of a known error, which holds no secret, or only the type name of an unexpected one.
 Ticket summaries, "When:" lines and PR titles are quoted on one line of at most 200 characters, without control characters, under a header that marks them as data, not instructions.
 
