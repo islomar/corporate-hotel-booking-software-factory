@@ -441,6 +441,7 @@ class ReadinessTest(unittest.TestCase):
             "none": "Do the thing.",
             "empty section": "## Acceptance criteria\n\n## Notes\n\nText.",
             "mid-line mention": "Rejects tickets without testable acceptance criteria.",
+            "prose that starts with the label": "Acceptance criteria are still to be written.\n\nMore text.",
             "only the Validating section": "## Acceptance criteria (Validating)\n\n- Live check.",
             "no description": None,
         }
@@ -600,6 +601,16 @@ class TopTicketTest(unittest.TestCase):
 
         self.assertEqual(code, 4)
         self.assertIn("CHB-12 is not in To Do in the search of open tickets yet", err)
+        self.assertEqual(fake.writes(), [])
+
+    def test_a_truncated_open_search_blocks_with_exit_1(self) -> None:
+        """Past the cap, a dependency would look closed: refuse instead of guessing."""
+        fake = transition_fake("To Do", {"To Do": ["CHB-12", "CHB-5", "CHB-6"]})
+        with mock.patch.object(jira, "OPEN_LIMIT", 2):
+            code, _, err = _run(["transition", "CHB-12", "In Progress"], fake)
+
+        self.assertEqual(code, 1)
+        self.assertIn("2 or more open tickets", err)
         self.assertEqual(fake.writes(), [])
 
     def test_a_failed_search_blocks_with_exit_1(self) -> None:

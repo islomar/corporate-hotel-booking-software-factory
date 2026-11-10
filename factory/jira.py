@@ -110,11 +110,13 @@ REQUIRED_SECTIONS = {
 }
 # The top ticket of To Do (CHB-125, docs/process/kanban.md, To Do) is the highest-ranked non-epic
 # ticket with no open ticket on a "Depends on" line. It starts once it has acceptance criteria: a
-# line that starts with "Acceptance criteria" (a heading or a paragraph, any case, optional bold,
-# not "Acceptance criteria (Validating)") with text under it.
+# heading that starts with "Acceptance criteria" (not "Acceptance criteria (Validating)"), or a line
+# that is only that label, with text under it.
+# A heading that starts with the label (not the Validating section), or a line that is only the label.
 ACCEPTANCE_PATTERN = re.compile(
-    r"^\s*(?:#{1,6} +)?(?:\*\*)?acceptance criteria\b(?!\s*\(validating\))", re.IGNORECASE
-)  # not the Validating section
+    r"^#{1,6} +(?:\*\*)?acceptance criteria\b(?!\s*\(validating\))|^\s*(?:\*\*)?acceptance criteria\s*:?\s*(?:\*\*)?\s*:?\s*$",
+    re.IGNORECASE,
+)
 DEPENDS_PATTERN = re.compile(r"^\s*(?:[-*]|\d+\.)?\s*(?:\*\*)?depends on\b", re.IGNORECASE)
 SENTENCE_END = re.compile(r"\.(?:\s|$)")
 KEY_IN_TEXT = re.compile(rf"(?<![\w-]){PROJECT}-[1-9][0-9]*(?![\w-])")
@@ -122,6 +124,7 @@ KEY_IN_TEXT = re.compile(rf"(?<![\w-]){PROJECT}-[1-9][0-9]*(?![\w-])")
 # Done status category, so it is not open.
 OPEN_JQL = "statusCategory != Done ORDER BY Rank ASC"
 OPEN_FIELDS = ("status", "issuetype", "description")
+OPEN_LIMIT = 1000  # a search answer this long may be cut off; the rank and dependency checks refuse it
 
 EXIT_JIRA = 1
 EXIT_USAGE = 2
@@ -655,8 +658,14 @@ class Jira:
         ]
 
     def open_issues(self) -> list[dict[str, Any]]:
-        """The CHB issues not in a Done-category status, in rank order, with status, type and description."""
-        return self.search(OPEN_JQL, fields=OPEN_FIELDS)
+        """The CHB issues not in a Done-category status, in rank order, with status, type and description.
+
+        A cut-off answer would hide open dependencies and ranks, so it raises JiraError instead.
+        """
+        issues = self.search(OPEN_JQL, limit=OPEN_LIMIT, fields=OPEN_FIELDS)
+        if len(issues) >= OPEN_LIMIT:
+            raise JiraError(f"{OPEN_LIMIT} or more open tickets: the search may be cut off, so ranks and dependencies are unknown")
+        return issues
 
     def keys_in(self, column: Column, *, excluding: str) -> list[str]:
         """Keys of the CHB issues in the column's statuses, without `excluding`."""
@@ -829,7 +838,7 @@ def check_top_of_to_do(jira: Jira, key: str, description: Any, columns: list[Col
         )
     if mine is None:
         raise BlockedError(f"{key} is missing from the search of open tickets, so its rank is unknown. Try again in a minute.")
-    queue = top_queue(issues, columns, fresh=(key, description))
+    queue = top_queue(issues, columns, descriptions={key: description})
     if key not in queue:  # the search still shows it outside To Do
         raise BlockedError(f"{key} is not in To Do in the search of open tickets yet, so its rank is unknown. Try again in a minute.")
     if queue[0] != key:
@@ -846,12 +855,12 @@ def check_top_of_to_do(jira: Jira, key: str, description: Any, columns: list[Col
         )
 
 
-def top_queue(issues: list[dict[str, Any]], columns: Sequence[Column], fresh: tuple[str, Any] | None = None) -> list[str]:
+def top_queue(issues: list[dict[str, Any]], columns: Sequence[Column], descriptions: dict[str, Any] | None = None) -> list[str]:
     """Keys of the To Do tickets that can be pulled, in rank order. `issues` is open_issues().
 
     A ticket is left out when it is an epic or a ticket on its "Depends on" line is open.
     Missing acceptance criteria do not leave it out: the agent writes them (CHB-125).
-    `fresh` is (key, description) from a read newer than the search; that description wins.
+    `descriptions` maps keys to descriptions from a read newer than the search; those win.
     """
     to_do = next((column for column in columns if column.name == TO_DO), None)
     if to_do is None:
@@ -862,7 +871,7 @@ def top_queue(issues: list[dict[str, Any]], columns: Sequence[Column], fresh: tu
         fields = issue["fields"]
         if str(fields["status"]["id"]) not in to_do.status_ids or fields["issuetype"]["name"] == "Epic":
             continue
-        description = fresh[1] if fresh and issue["key"] == fresh[0] else fields.get("description")
+        description = (descriptions or {}).get(issue["key"], fields.get("description"))
         if not open_dependencies(description, open_keys):
             queue.append(str(issue["key"]))
     return queue
@@ -874,9 +883,9 @@ def open_dependencies(description: Any, open_keys: set[str]) -> list[str]:
 
 
 def has_acceptance_criteria(description: Any) -> bool:
-    """True when a line starts with "Acceptance criteria" and a non-blank line follows it in its section.
+    """True when an "Acceptance criteria" heading or label line has a non-blank line under it.
 
-    The line is a heading or a paragraph, in any case, optionally bold. Its section ends at the next
+    ACCEPTANCE_PATTERN defines the heading and the label line, in any case. Its section ends at the next
     heading (of the same or a higher level, when the line is a heading itself).
     """
     lines = adf_to_text(description).splitlines()

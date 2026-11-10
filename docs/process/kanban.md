@@ -78,7 +78,8 @@ Meaning: accepted work that nobody has started.
   and the list under it when the line ends with ":". Open means a status outside the Done category; Done and Discarded are closed.
   Write every dependency on such a line, also an owner decision: make it a ticket and name it (for example `Depends on: CHB-141`).
   A dependency in prose is not checked.
-- Acceptance criteria: a line that starts with "Acceptance criteria" (a heading or a paragraph, any case, bold allowed) with text under it.
+- Acceptance criteria: a heading that starts with "Acceptance criteria", or a line that holds only that label (any case, bold and a colon allowed),
+  with text under it.
   "Acceptance criteria (Validating)" does not count. A top ticket without them is not skipped: the agent writes them
   (`factory/bin/jira section CHB-<n> --heading "Acceptance criteria" --body-file FILE`), derived from the ticket, its epic and the ADRs.
   It asks the owner only for decisions that are the owner's (owner rule, 2026-11-10).
