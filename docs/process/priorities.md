@@ -20,10 +20,12 @@ The Jira Free plan has no priority schemes, so the global list stays and this ru
 
 Leaving the ticket open risks harm now.
 
+- A bug that affects users in production. It goes to the top of To Do, above every other ticket, and the agent tells the owner at once.
+- The delivery pipeline is broken: CI on `main`, the deploy, a required check, or anything that stops a change from reaching production.
+- Something else is broken: a feature, check, link or command does not do what it says, or a document states something false.
 - Security: a secret, token or private data can leak; private content can reach a public repository; an authentication or permission bypass; a supply-chain path that merges unreviewed code.
 - Data loss or a destructive change: a command, script or Terraform plan can delete or overwrite data, infrastructure or repository state.
 - A broken guardrail: a factory rule (identity, branch, WIP limit, review) can be bypassed or fails without a signal.
-- Production or `main` broken: the deployed app is down or wrong, CI on `main` fails, or the agent cannot work.
 
 ## Medium
 
@@ -42,6 +44,8 @@ The ticket can wait indefinitely at no cost.
 
 ## Rules
 
+- A bug report is High from the start.
+- Among High tickets, production bugs come first, then a broken pipeline, then the rest by the owner's rank.
 - Priority informs the rank. The rank in To Do decides the order of work.
   A High ticket ranked below a Medium or Low ticket gets a comment that says why.
 - The agent sets the priority when it creates a ticket (`factory/bin/jira create --priority`), with the reason in one line of the description.
