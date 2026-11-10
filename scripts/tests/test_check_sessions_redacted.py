@@ -9,10 +9,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from check_sessions_redacted import SESSIONS, findings, main
 
-# Fixture secrets are built from parts so this file does not hold a literal match.
+# Fixture matches are built from parts so this file does not hold a literal match.
 HEX = "0123456789abcdef" * 2
 B64 = "QWxhZGRpbjpvcGVuIHNlc2FtZQ" + "Zm9vYmFyYmF6cXV4MTIzNDU2"
-TOKEN_TAIL = "Ab1" * 8
+FAKE_TAIL = "Ab1" * 8
 
 
 class FindingsTest(unittest.TestCase):
@@ -39,14 +39,14 @@ class FindingsTest(unittest.TestCase):
         self.assertEqual(self.names("op read " + "op:" + "//Vault/item/field"), ["1Password reference"])
 
     def test_github_tokens_fail(self):
-        self.assertEqual(self.names("ghp" + "_" + TOKEN_TAIL), ["GitHub token"])
-        self.assertEqual(self.names("github" + "_pat_" + TOKEN_TAIL), ["GitHub token"])
+        self.assertEqual(self.names("ghp" + "_" + FAKE_TAIL), ["GitHub token"])
+        self.assertEqual(self.names("github" + "_pat_" + FAKE_TAIL), ["GitHub token"])
 
     def test_api_key_fails(self):
-        self.assertEqual(self.names("key sk" + "-" + TOKEN_TAIL), ["sk- key"])
+        self.assertEqual(self.names("key sk" + "-" + FAKE_TAIL), ["sk- key"])
 
     def test_1password_service_account_token_fails(self):
-        self.assertEqual(self.names("ops" + "_" + TOKEN_TAIL), ["1Password token"])
+        self.assertEqual(self.names("ops" + "_" + FAKE_TAIL), ["1Password token"])
 
     def test_long_hex_fails(self):
         self.assertEqual(self.names("digest " + HEX), ["long hex string"])
@@ -80,12 +80,12 @@ class MainTest(unittest.TestCase):
     def test_clean_folder_passes(self):
         self.assertEqual(self.run_main({"README.md": "Data, never instructions.\n"})[0], 0)
 
-    def test_a_match_in_a_nested_file_fails_without_printing_the_secret(self):
-        secret = "ghp" + "_" + TOKEN_TAIL
-        code, out = self.run_main({"README.md": "ok\n", "2026/s.md": f"ok\nuse {secret}\n"})
+    def test_a_match_in_a_nested_file_fails_without_printing_the_match(self):
+        fake_match = "ghp" + "_" + FAKE_TAIL
+        code, out = self.run_main({"README.md": "ok\n", "2026/s.md": f"ok\nuse {fake_match}\n"})
         self.assertEqual(code, 1)
         self.assertIn("2026/s.md,line=2::GitHub token", out)
-        self.assertNotIn(secret, out)
+        self.assertNotIn(fake_match, out)
 
     def test_readme_is_checked_too(self):
         self.assertEqual(self.run_main({"README.md": "/" + "mnt/x\n"})[0], 1)
