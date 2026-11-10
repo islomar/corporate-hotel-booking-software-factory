@@ -41,7 +41,8 @@ A WIP limit stops pulling new work. It never stops the board from recording what
 - A move back into In Progress (review asked for changes, a live check failed, the owner answered) is not new work and is never blocked.
 - Moves within one column, out of a column, or into a column without a max are never blocked.
 - The max values live on the board only. This document does not repeat them.
-- Min: a signal only. When a move leaves a column below its min, the wrapper prints "In Progress is below its minimum (0/1)".
+- Min: a signal only. When a move leaves a column below its min, the wrapper prints `<column> is below its minimum (count/min)`,
+  for example `In Progress is below its minimum (0/1)`.
 - Free slots: after every move between columns, the wrapper prints the free In Progress slots and the next top tickets of To Do, one per free slot,
   for example `In Progress 2/3: 1 slot free; next: CHB-123` (CHB-125).
   A ticket without acceptance criteria is marked: `next: CHB-122 (needs acceptance criteria)`.

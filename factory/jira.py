@@ -116,6 +116,7 @@ ACCEPTANCE_PATTERN = re.compile(
     r"^\s*(?:#{1,6} +)?(?:\*\*)?acceptance criteria\b(?!\s*\(validating\))", re.IGNORECASE
 )  # not the Validating section
 DEPENDS_PATTERN = re.compile(r"^\s*(?:[-*]|\d+\.)?\s*(?:\*\*)?depends on\b", re.IGNORECASE)
+SENTENCE_END = re.compile(r"\.(?:\s|$)")
 KEY_IN_TEXT = re.compile(rf"(?<![\w-]){PROJECT}-[1-9][0-9]*(?![\w-])")
 # Open tickets in rank order, for the top of To Do and for the dependencies. Discarded is in the
 # Done status category, so it is not open.
@@ -828,9 +829,10 @@ def check_top_of_to_do(jira: Jira, key: str, description: Any, columns: list[Col
         )
     if mine is None:
         raise BlockedError(f"{key} is missing from the search of open tickets, so its rank is unknown. Try again in a minute.")
-    fresh = [{**issue, "fields": {**issue["fields"], "description": description}} if issue is mine else issue for issue in issues]
-    queue = top_queue(fresh, columns)
-    if queue and queue[0] != key:
+    queue = top_queue(issues, columns, fresh=(key, description))
+    if key not in queue:  # the search still shows it outside To Do
+        raise BlockedError(f"{key} is not in To Do in the search of open tickets yet, so its rank is unknown. Try again in a minute.")
+    if queue[0] != key:
         raise BlockedError(
             f"{key} is not the top ticket of To Do: {queue[0]} is. Pull {queue[0]}, or, with the owner's go, "
             f"rank {key} first (factory/bin/jira rank {key} --before {queue[0]}) and try again "
@@ -844,23 +846,26 @@ def check_top_of_to_do(jira: Jira, key: str, description: Any, columns: list[Col
         )
 
 
-def top_queue(issues: list[dict[str, Any]], columns: Sequence[Column]) -> list[str]:
+def top_queue(issues: list[dict[str, Any]], columns: Sequence[Column], fresh: tuple[str, Any] | None = None) -> list[str]:
     """Keys of the To Do tickets that can be pulled, in rank order. `issues` is open_issues().
 
     A ticket is left out when it is an epic or a ticket on its "Depends on" line is open.
     Missing acceptance criteria do not leave it out: the agent writes them (CHB-125).
+    `fresh` is (key, description) from a read newer than the search; that description wins.
     """
     to_do = next((column for column in columns if column.name == TO_DO), None)
     if to_do is None:
         return []
     open_keys = {str(issue["key"]) for issue in issues}
-    return [
-        str(issue["key"])
-        for issue in issues
-        if str(issue["fields"]["status"]["id"]) in to_do.status_ids
-        and issue["fields"]["issuetype"]["name"] != "Epic"
-        and not open_dependencies(issue["fields"].get("description"), open_keys)
-    ]
+    queue = []
+    for issue in issues:
+        fields = issue["fields"]
+        if str(fields["status"]["id"]) not in to_do.status_ids or fields["issuetype"]["name"] == "Epic":
+            continue
+        description = fresh[1] if fresh and issue["key"] == fresh[0] else fields.get("description")
+        if not open_dependencies(description, open_keys):
+            queue.append(str(issue["key"]))
+    return queue
 
 
 def open_dependencies(description: Any, open_keys: set[str]) -> list[str]:
@@ -900,7 +905,7 @@ def dependencies(description: Any) -> list[str]:
         for number, line in enumerate(lines):
             if not DEPENDS_PATTERN.match(line):
                 continue
-            keys.extend(KEY_IN_TEXT.findall(re.split(r"\.(?:\s|$)", line, maxsplit=1)[0]))  # first sentence only
+            keys.extend(KEY_IN_TEXT.findall(SENTENCE_END.split(line, maxsplit=1)[0]))  # first sentence only
             if not line.rstrip().rstrip("*").endswith(":"):
                 continue
             nested = []

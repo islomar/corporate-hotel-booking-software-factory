@@ -529,11 +529,11 @@ class TopTicketTest(unittest.TestCase):
         code, _, _ = _run(["transition", "CHB-12", "In Progress"], fake)
         self.assertEqual(code, 0)
 
-        refused = transition_fake("To Do", {"To Do": ["CHB-9", "CHB-49", "CHB-5", "CHB-12"], "In Progress": ["CHB-91"]}, epics=("CHB-9",))
-        refused.routes[("POST", SEARCH)] = keys_answer(
+        refused = transition_fake(
+            "To Do",
             {"To Do": ["CHB-9", "CHB-49", "CHB-5", "CHB-12"], "In Progress": ["CHB-91"]},
-            {"CHB-49": doc("Depends on CHB-91.")},
-            ("CHB-9",),
+            descriptions={"CHB-49": doc("Depends on CHB-91.")},
+            epics=("CHB-9",),
         )
         code, _, err = _run(["transition", "CHB-12", "In Progress"], refused)
         self.assertEqual(code, 4)
@@ -591,6 +591,15 @@ class TopTicketTest(unittest.TestCase):
 
         self.assertEqual(code, 4)
         self.assertIn("CHB-12 is missing from the search of open tickets", err)
+        self.assertEqual(fake.writes(), [])
+
+    def test_a_ticket_the_search_still_shows_outside_to_do_is_refused(self) -> None:
+        fake = transition_fake("To Do", {"To Do": ["CHB-5"]})
+        fake.routes[("POST", SEARCH)] = keys_answer({"Done": [], "In Review": ["CHB-12"], "To Do": ["CHB-5"]}, {"CHB-12": READY})
+        code, _, err = _run(["transition", "CHB-12", "In Progress"], fake)
+
+        self.assertEqual(code, 4)
+        self.assertIn("CHB-12 is not in To Do in the search of open tickets yet", err)
         self.assertEqual(fake.writes(), [])
 
     def test_a_failed_search_blocks_with_exit_1(self) -> None:
