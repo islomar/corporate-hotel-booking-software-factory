@@ -727,19 +727,26 @@ class Jira:
             raise JiraError(f"{OPEN_LIMIT} or more open tickets: the search may be cut off, so ranks and dependencies are unknown")
         return issues
 
-    def sort_todo(self, created: dict[str, Any] | None = None) -> TodoOrder:
-        """Sort To Do (apply_todo_order). `created` is a ticket just created, as a search would list it.
+    def sort_todo(self, created: tuple[str, str, str] | None = None) -> tuple[TodoOrder, int]:
+        """Sort To Do (apply_todo_order). Return the order and the number of rank requests sent.
 
-        The search can miss a ticket created a moment ago. Jira ranks a new ticket last, so it is
-        then sorted as the last ticket of To Do.
+        `created` is (key, Markdown description, priority) of a Task just created. The search can miss
+        a ticket created a moment ago. Jira ranks a new ticket last, so it is then sorted as the last
+        ticket of To Do.
         """
         columns = self.board_columns()
         issues = self.open_issues()
         to_do = next((column for column in columns if column.name == TO_DO), None)
         if created is not None and to_do is not None and to_do.status_ids:
-            if created["key"] not in {issue["key"] for issue in issues}:
-                created["fields"]["status"] = {"id": min(to_do.status_ids)}
-                issues.append(created)
+            key, description, priority = created
+            if key not in {issue["key"] for issue in issues}:
+                fields = {
+                    "status": {"id": min(to_do.status_ids)},
+                    "issuetype": {"name": "Task"},
+                    "description": text_to_adf(description),
+                    "priority": {"name": priority},
+                }
+                issues.append({"key": key, "fields": fields})
         return apply_todo_order(self, issues, columns)
 
     def keys_in(self, column: Column, *, excluding: str) -> list[str]:
@@ -930,11 +937,11 @@ def check_top_of_to_do(jira: Jira, key: str, fields: dict[str, Any], columns: li
 
     The ticket's own description and links (`fields`) come from the read just made, so a stale
     search answer cannot change its blockers or criteria. Its rank comes from the search.
-    It sorts To Do first (apply_todo_order, CHB-148) and takes the top ticket from the sorted order.
+    After the refusals that do not depend on the order (blocked, epic, missing from the search), it
+    sorts To Do (apply_todo_order, CHB-148) and takes the top ticket from the sorted order.
     """
     description = fields.get("description")
     issues = jira.open_issues()
-    order = apply_todo_order(jira, issues, columns, fresh={key: fields})
     blocking = open_blockers(fields, {str(issue["key"]) for issue in issues})
     mine = next((issue for issue in issues if issue["key"] == key), None)
     reason = f"it is blocked by open tickets: {', '.join(blocking)}" if blocking else None
@@ -946,6 +953,8 @@ def check_top_of_to_do(jira: Jira, key: str, fields: dict[str, Any], columns: li
         )
     if mine is None:
         raise BlockedError(f"{key} is missing from the search of open tickets, so its rank is unknown. Try again in a minute.")
+    # Sort only once the refusals that do not depend on the order have passed, so they write nothing.
+    order, _ = apply_todo_order(jira, issues, columns, fresh={key: fields})
     queue = order.ready  # top_queue's answer, in the sorted order
     if key not in queue:  # the search still shows it outside To Do
         raise BlockedError(f"{key} is not in To Do in the search of open tickets yet, so its rank is unknown. Try again in a minute.")
@@ -1099,12 +1108,17 @@ def _priority_order(issue: dict[str, Any]) -> int:
 
 def apply_todo_order(
     jira: Jira, issues: list[dict[str, Any]], columns: Sequence[Column], fresh: dict[str, dict[str, Any]] | None = None
-) -> TodoOrder:
-    """Rank To Do into todo_order, with the rank requests of TodoOrder.steps. No request when sorted."""
+) -> tuple[TodoOrder, int]:
+    """Rank To Do into todo_order, with the rank requests of TodoOrder.steps. No request when sorted.
+
+    Return the order and the number of rank requests sent. The steps re-rank every ticket from the
+    first misplaced one down, not only the moved ones: simpler, at the cost of more rank history.
+    """
     order = todo_order(issues, columns, fresh)
-    for keys, before, after in order.steps():
+    steps = order.steps()
+    for keys, before, after in steps:
         jira.rank(keys, before=before, after=after)
-    return order
+    return order, len(steps)
 
 
 def has_acceptance_criteria(description: Any) -> bool:
@@ -1368,22 +1382,18 @@ def run(args: argparse.Namespace, jira: Jira) -> None:
     elif args.command == "create":
         key = jira.create(args.parent, args.summary, args.description, args.priority)
         print(key)
-        created = {
-            "key": key,
-            "fields": {"issuetype": {"name": "Task"}, "description": text_to_adf(args.description), "priority": {"name": args.priority}},
-        }
         # The ticket exists: a failed sort is a notice, never an exit code that invites a second create.
         # KeyError, TypeError and AttributeError mean an answer of unexpected shape, as in main().
         try:
-            order = jira.sort_todo(created)
+            order, sent = jira.sort_todo((key, args.description, args.priority))
         except (JiraError, KeyError, TypeError, AttributeError) as error:
             print(f"could not sort To Do: {error}. Run factory/bin/jira sort-todo")
         else:
-            if order.steps():
+            if sent:
                 print(f"To Do sorted: {', '.join(order.desired)}")
     elif args.command == "sort-todo":
-        order = jira.sort_todo()
-        state = f"sorted ({len(order.steps())} rank requests)" if order.steps() else "already sorted"
+        order, sent = jira.sort_todo()
+        state = f"sorted ({sent} rank requests)" if sent else "already sorted"
         print(f"To Do {state}: {', '.join(order.desired) or 'empty'}")
     elif args.command == "transition":
         target, notices = jira.transition(args.key, args.status)
