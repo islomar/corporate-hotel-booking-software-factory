@@ -5,12 +5,14 @@ Usage:
   factory/bin/jira view CHB-12 [--json]
   factory/bin/jira search 'status = "In Review"' [--json]   (sent as project = CHB AND (<jql>))
   factory/bin/jira create --parent CHB-27 --summary TEXT --description-file FILE --priority High|Medium|Low
+                          [--ready --trigger TEXT]       (Backlog by default; --ready puts it in Ready)
   factory/bin/jira transition CHB-12 "In Review"
+  factory/bin/jira transition CHB-12 Ready --trigger TEXT  (from Backlog: which trigger, and its evidence)
   factory/bin/jira comment CHB-12 --body-file FILE      (FILE "-" reads stdin)
   factory/bin/jira assign CHB-12 --me | --account-id ID
   factory/bin/jira rank CHB-12 [CHB-13 ...] --before CHB-9 | --after CHB-9
   factory/bin/jira section CHB-12 --heading TEXT --body-file FILE [--first]
-  factory/bin/jira sort-todo                              (ready High, Medium, Low, then blocked, then epics)
+  factory/bin/jira sort-todo                              (Ready: ready High, Medium, Low, then blocked, then epics)
   factory/bin/jira priority CHB-12 High|Medium|Low
   factory/bin/jira description CHB-12 --file FILE        (replaces the whole description)
   factory/bin/jira edit-comment CHB-12 10071 --body-file FILE
@@ -29,8 +31,13 @@ writes, and no raw request command. Do not add one. `rank` changes only the rank
 issues. `section` writes only the description field, and changes only one section of it.
 In "Acceptance criteria (Validating)", `section` refuses a "When:" line without a "Speed up:" line.
 `priority` writes only the priority field, and only High, Medium or Low (docs/process/priorities.md).
-`sort-todo` changes only the rank of To Do issues. `create` runs it after creating, and a start from
-To Do runs it before the top-ticket check (CHB-148).
+The pull list is the board column "Ready", or "To Do" until the owner renames it (pull_list, CHB-153).
+"Backlog" holds work not needed yet: it is never sorted, never next and never started.
+`sort-todo` changes only the rank of pull-list issues. `create` runs it after creating a ticket in the
+pull list, and a start from the pull list runs it before the top-ticket check (CHB-148).
+`create` puts a new ticket in Backlog when the board has that column; `--ready --trigger` puts it in
+the pull list and posts the trigger as a comment. A move from Backlog to the pull list needs
+`--trigger`, posted as the comment "Moved to Ready. Trigger: <text>" (CHB-153).
 `create` refuses a description that does not open with a non-empty "Why it matters" section (CHB-148).
 `description` writes only the description field. `edit-comment` changes one comment body.
 `link` creates only "Blocks" links between two different CHB issues, and never removes one.
@@ -45,17 +52,18 @@ Exit codes:
      an issue that could not be ranked, a search answer with an issue outside CHB)
   2  usage error (also a bad section heading, an empty body or summary, a file that is not
      UTF-8, a duplicate rank key, JQL whose parentheses or quotes do not balance, a ticket
-     linked to itself)
+     linked to itself, a move from Backlog to Ready without --trigger, --trigger on another
+     move, --ready without --trigger)
   3  no credential: no service account token in the keyring (keyring locked, item absent)
      or `op` failed. The agent stops and reports.
   4  a board rule blocks the transition: the target column is at its WIP limit, the
-     description lacks the section the target status requires, or a start from To Do is not
-     the top ticket of To Do, or has no "Why it matters" first section or no acceptance criteria
-     (docs/process/kanban.md).
+     description lacks the section the target status requires, a start from Backlog, or a start
+     from the pull list that is not its top ticket, or has no "Why it matters" first section or
+     no acceptance criteria (docs/process/kanban.md).
      The ticket stays where it is.
 
 `transition` reads the column limits from the board configuration (board 2) on every call.
-After a move it prints the free In Progress slots and the next tickets of To Do (CHB-125).
+After a move it prints the free In Progress slots and the next tickets of the pull list (CHB-125).
 """
 
 from __future__ import annotations
@@ -104,7 +112,11 @@ REFERENCE_PATTERN = re.compile(
 INLINE_PATTERN = re.compile(r"`(?P<code>[^`]+)`|\*\*(?P<bold>[^*]+)\*\*")
 RANK_LIMIT = 50  # issues per rank request, the Jira Software limit
 BOARD_ID = 2  # the CHB board; its column configuration holds the WIP limits
+# The pull list (CHB-153): the column agents pull work from. It is "Ready", or "To Do" until the owner
+# renames that column. "Backlog" holds work not needed yet: never sorted, never next, never started.
+READY = "Ready"
 TO_DO = "To Do"
+BACKLOG = "Backlog"
 IN_PROGRESS = "In Progress"
 NEEDS_HUMAN = "Needs human"
 # Columns of started work. Starting a ticket (a move into In Progress from a column that is not
@@ -118,7 +130,7 @@ REQUIRED_SECTIONS = {
     "validating": "Acceptance criteria (Validating)",
     "needs human": "Needs human: owner steps",
 }
-# The top ticket of To Do (CHB-125, docs/process/kanban.md, To Do) is the highest-ranked non-epic
+# The top ticket of the pull list (CHB-125, docs/process/kanban.md, Ready) is the highest-ranked non-epic
 # ticket that no open ticket blocks (open_blockers). It starts once it has acceptance criteria: a
 # heading that starts with "Acceptance criteria" (not "Acceptance criteria (Validating)"), or a line
 # that is only that label, with text under it.
@@ -127,7 +139,7 @@ ACCEPTANCE_PATTERN = re.compile(
     r"^#{1,6} +(?:\*\*)?acceptance criteria\b(?!\s*\(validating\))|^\s*(?:\*\*)?acceptance criteria\s*:?\s*(?:\*\*)?\s*:?\s*$",
     re.IGNORECASE,
 )
-# Open tickets in rank order, for the top of To Do and for the dependencies. Discarded is in the
+# Open tickets in rank order, for the top of the pull list and for the dependencies. Discarded is in the
 # Done status category, so it is not open.
 OPEN_JQL = "statusCategory != Done ORDER BY Rank ASC"
 OPEN_FIELDS = ("status", "issuetype", "description", "issuelinks", "priority")
@@ -138,7 +150,7 @@ OPEN_LIMIT = 1000  # a search answer this long may be cut off; the rank and depe
 
 # Every ticket opens with this section: the pain, who feels it, the value of solving it (CHB-148).
 WHY_HEADING = "Why it matters"
-# To Do order (CHB-148): ready tickets by priority, then blocked tickets, then epics. A missing or
+# Pull-list order (CHB-148): ready tickets by priority, then blocked tickets, then epics. A missing or
 # unknown priority sorts as Medium, the default of docs/process/priorities.md.
 PRIORITY_ORDER = {"Highest": 0, "High": 0, "Medium": 1, "Low": 2, "Lowest": 2}
 
@@ -585,7 +597,7 @@ def check_why_text(text: str) -> None:
         raise UsageError(
             f"the description {problem}. Start it with '## {WHY_HEADING}' and 2 to 5 plain sentences: "
             "the pain, who feels it (the owner, users of the app, or agents) and the value of solving it "
-            "(docs/process/kanban.md, To Do)"
+            "(docs/process/kanban.md, Ready)"
         )
 
 
@@ -691,18 +703,61 @@ class Jira:
         )
         return str(created["key"])
 
-    def transition(self, key: str, status: str) -> tuple[str, list[str]]:
-        """Move the issue. Return the status name and notices to print (a minimum, the free slots)."""
+    def transition(self, key: str, status: str, trigger: str | None = None) -> tuple[str, list[str]]:
+        """Move the issue. Return the status name and notices to print (a minimum, the free slots).
+
+        `status` is a status name or, when no status has that name, a board column name (CHB-153).
+        A move from Backlog into the pull list needs `trigger`, posted as a comment after the move
+        (check_trigger). A trigger on any other move is a usage error. Both are refused before the move.
+        """
         check_key(key)
         transitions = self.request("GET", f"/rest/api/3/issue/{key}/transitions")["transitions"]
         matches = [t for t in transitions if t["to"]["name"].casefold() == status.casefold()]
+        if not matches:
+            column = next((c for c in self.board_columns() if c.name.casefold() == status.casefold()), None)
+            matches = [t for t in transitions if column is not None and str(t["to"]["id"]) in column.status_ids]
         if not matches:
             names = sorted({t["to"]["name"] for t in transitions})
             raise JiraError(f"{key} cannot move to {status!r}. Allowed: {', '.join(names) or 'none'}")
         target = matches[0]["to"]["name"]
         move = before_transition(self, key, target, status_id=str(matches[0]["to"]["id"]))
+        comment = check_trigger(key, move, trigger)
         self.request("POST", f"/rest/api/3/issue/{key}/transitions", {"transition": {"id": matches[0]["id"]}}, empty_ok=True)
+        if comment:
+            try:
+                self.comment(key, comment)
+            except JiraError as error:
+                raise JiraError(
+                    f"{key} moved to {move.target.name if move.target else target}, but the trigger comment failed: {error}. "
+                    f"Post it: factory/bin/jira comment {key} --body-file FILE with the line {comment!r}"
+                ) from None
         return target, after_transition(self, key, move)
+
+    def place_created(self, key: str, *, ready: bool) -> Column | None:
+        """Put a ticket just created in Backlog, or in the pull list when `ready` (CHB-153). Return its column.
+
+        Without a Backlog column (before the owner adds it), the ticket stays where Jira put it, the
+        pull list, and nothing is read. Jira may put a new ticket in either column, so the status is
+        read first and the ticket moves only when it is elsewhere. The move skips the board rules:
+        neither column has any.
+        """
+        columns = self.board_columns()
+        backlog = backlog_column(columns)
+        pull = pull_list(columns)
+        if backlog is None:
+            return pull
+        target = pull if ready else backlog
+        if target is None:
+            return None
+        status = self.request("GET", f"/rest/api/3/issue/{check_key(key)}?fields=status")["fields"]["status"]
+        if str(status["id"]) in target.status_ids:
+            return target
+        transitions = self.request("GET", f"/rest/api/3/issue/{key}/transitions")["transitions"]
+        match = next((t for t in transitions if str(t["to"]["id"]) in target.status_ids), None)
+        if match is None:
+            raise JiraError(f"{key} has no transition into {target.name}")
+        self.request("POST", f"/rest/api/3/issue/{key}/transitions", {"transition": {"id": match["id"]}}, empty_ok=True)
+        return target
 
     def board_columns(self) -> list[Column]:
         """The columns of the CHB board with their WIP limits. The board is the only source of limits."""
@@ -728,15 +783,15 @@ class Jira:
         return issues
 
     def sort_todo(self, created: tuple[str, str, str] | None = None) -> tuple[TodoOrder, int]:
-        """Sort To Do (apply_todo_order). Return the order and the number of rank requests sent.
+        """Sort the pull list (apply_todo_order). Return the order and the number of rank requests sent.
 
         `created` is (key, Markdown description, priority) of a Task just created. The search can miss
         a ticket created a moment ago. Jira ranks a new ticket last, so it is then sorted as the last
-        ticket of To Do.
+        ticket of the pull list.
         """
         columns = self.board_columns()
         issues = self.open_issues()
-        to_do = next((column for column in columns if column.name == TO_DO), None)
+        to_do = pull_list(columns)
         if created is not None and to_do is not None and to_do.status_ids:
             key, description, priority = created
             if key not in {issue["key"] for issue in issues}:
@@ -876,6 +931,39 @@ def _json_object(method: str, path: str, raw: bytes, *, empty_ok: bool) -> dict[
     return data
 
 
+def pull_list(columns: Sequence[Column]) -> Column | None:
+    """The column agents pull work from (CHB-153): "Ready", else "To Do". Never Backlog."""
+    by_name = {column.name: column for column in columns}
+    return by_name.get(READY) or by_name.get(TO_DO)
+
+
+def backlog_column(columns: Sequence[Column]) -> Column | None:
+    return next((column for column in columns if column.name == BACKLOG), None)
+
+
+def check_trigger(key: str, move: Move, trigger: str | None) -> str | None:
+    """The trigger comment for a move from Backlog into the pull list, or None for any other move (CHB-153).
+
+    Refuses (UsageError, exit 2) that move without a trigger, and a trigger on any other move.
+    """
+    columns = list(move.columns)
+    pull = pull_list(columns)
+    backlog = backlog_column(columns)
+    promotes = backlog is not None and move.source == backlog and move.target is not None and move.target == pull
+    if promotes and not trigger:
+        name = pull.name if pull else READY
+        raise UsageError(
+            f'{key} moves from {BACKLOG} to {name} only with a trigger: factory/bin/jira transition {key} "{name}" '
+            '--trigger "<which trigger and its evidence>". Triggers: 1. something is broken; 2. the owner asked for it; '
+            "3. it unblocks work in progress; 4. the same pain appeared twice (docs/process/kanban.md, Backlog)."
+        )
+    if trigger and not promotes:
+        raise UsageError(f"--trigger applies only to a move from {BACKLOG} to {pull.name if pull else READY}; {key} makes another move")
+    if not promotes or move.target is None:
+        return None
+    return f"Moved to {move.target.name}. Trigger: {trigger}"
+
+
 def before_transition(jira: Jira, key: str, status: str, *, status_id: str) -> Move:
     """Called with the target status just before every transition POST. Raise to block the move.
 
@@ -885,7 +973,7 @@ def before_transition(jira: Jira, key: str, status: str, *, status_id: str) -> M
       while In Progress, In Review or Validating holds at least its board maximum of other tickets;
     - a move into Needs human is blocked while Needs human is full.
     No other move is blocked by a limit: a column can go over its max.
-    A start from To Do must also be the top ticket of To Do, with acceptance criteria (CHB-125, check_top_of_to_do).
+    A start from the pull list must also be its top ticket, with acceptance criteria (CHB-125, check_top_of_to_do).
     A failed read of the board or of the open tickets raises JiraError and blocks too.
     """
     issue = jira.request("GET", f"/rest/api/3/issue/{key}?fields=status,description,issuelinks")["fields"]
@@ -905,6 +993,14 @@ def before_transition(jira: Jira, key: str, status: str, *, status_id: str) -> M
     move = Move(source, target, tuple(columns))
     if target is None or target == source:
         return move
+    pull = pull_list(columns)
+    if target.name == IN_PROGRESS and source is not None and source == backlog_column(columns):
+        name = pull.name if pull else READY
+        raise BlockedError(
+            f"{key} is in {BACKLOG}: move it to {name} first, with its trigger: "
+            f'factory/bin/jira transition {key} "{name}" --trigger "<which trigger and its evidence>". '
+            f"Then pull the top ticket of {name} (docs/process/kanban.md, Backlog)."
+        )
     if target.name == IN_PROGRESS and (source is None or source.name not in (*STARTED_WORK, NEEDS_HUMAN)):
         limited = [column for column in columns if column.name in STARTED_WORK]
     elif target.name == NEEDS_HUMAN:
@@ -925,22 +1021,24 @@ def before_transition(jira: Jira, key: str, status: str, *, status_id: str) -> M
             f"Leave {key} in {where}, comment on it, tell the owner and start nothing else. "
             "Only the owner overrides a limit, in the Jira UI, with a comment on the ticket (docs/process/kanban.md)."
         )
-    if target.name == IN_PROGRESS and source is not None and source.name == TO_DO:
+    if target.name == IN_PROGRESS and source is not None and source == pull:
         check_top_of_to_do(jira, key, issue, columns)
     return move
 
 
 def check_top_of_to_do(jira: Jira, key: str, fields: dict[str, Any], columns: list[Column]) -> None:
-    """Refuse (BlockedError) a start from To Do of a ticket that is not the top ticket of To Do,
+    """Refuse (BlockedError) a start from the pull list of a ticket that is not its top ticket,
     or of the top ticket while it has no "Why it matters" first section or no acceptance criteria
-    (docs/process/kanban.md, To Do).
+    (docs/process/kanban.md, Ready).
 
     The ticket's own description and links (`fields`) come from the read just made, so a stale
     search answer cannot change its blockers or criteria. Its rank comes from the search.
     After the refusals that do not depend on the order (blocked, epic, missing from the search), it
-    sorts To Do (apply_todo_order, CHB-148) and takes the top ticket from the sorted order.
+    sorts the pull list (apply_todo_order, CHB-148) and takes the top ticket from the sorted order.
     """
     description = fields.get("description")
+    pull = pull_list(columns)
+    name = pull.name if pull else TO_DO
     issues = jira.open_issues()
     blocking = open_blockers(fields, {str(issue["key"]) for issue in issues})
     mine = next((issue for issue in issues if issue["key"] == key), None)
@@ -949,29 +1047,29 @@ def check_top_of_to_do(jira: Jira, key: str, fields: dict[str, Any], columns: li
         reason = "it is an epic; start one of its tickets instead"
     if reason:
         raise BlockedError(
-            f"{key} cannot start: {reason}. Ranking it does not help; pull the top ticket of To Do (docs/process/kanban.md, To Do)."
+            f"{key} cannot start: {reason}. Ranking it does not help; pull the top ticket of {name} (docs/process/kanban.md, Ready)."
         )
     if mine is None:
         raise BlockedError(f"{key} is missing from the search of open tickets, so its rank is unknown. Try again in a minute.")
     # Sort only once the refusals that do not depend on the order have passed, so they write nothing.
     order, _ = apply_todo_order(jira, issues, columns, fresh={key: fields})
     queue = order.ready  # top_queue's answer, in the sorted order
-    if key not in queue:  # the search still shows it outside To Do
-        raise BlockedError(f"{key} is not in To Do in the search of open tickets yet, so its rank is unknown. Try again in a minute.")
+    if key not in queue:  # the search still shows it outside the pull list
+        raise BlockedError(f"{key} is not in {name} in the search of open tickets yet, so its rank is unknown. Try again in a minute.")
     if queue[0] != key:
         top = queue[0]
         raise BlockedError(
-            f"{key} is not the top ticket of To Do: {top} is. Pull {top}. To start {key} first, with the owner's go, "
+            f"{key} is not the top ticket of {name}: {top} is. Pull {top}. To start {key} first, with the owner's go, "
             f"raise its priority (factory/bin/jira priority {key} High) or, when both have the same priority, "
             f"rank it above {top} (factory/bin/jira rank {key} --before {top}), and try again. "
-            "Every start sorts To Do by priority, so a rank across priorities does not hold (docs/process/kanban.md, To Do)."
+            f"Every start sorts {name} by priority, so a rank across priorities does not hold (docs/process/kanban.md, Ready)."
         )
     problem = why_problem(description)
     if problem:
         raise BlockedError(
             f"{key} cannot start: its description {problem}. Write it first: "
             f'factory/bin/jira section {key} --heading "{WHY_HEADING}" --first --body-file FILE '
-            "(2 to 5 plain sentences: the pain, who feels it and the value of solving it; docs/process/kanban.md, To Do)."
+            "(2 to 5 plain sentences: the pain, who feels it and the value of solving it; docs/process/kanban.md, Ready)."
         )
     if not has_acceptance_criteria(description):
         raise BlockedError(
@@ -988,7 +1086,7 @@ def top_queue(
     *,
     moved: tuple[str, Column] | None = None,
 ) -> list[str]:
-    """Keys of the To Do tickets that can be pulled, in rank order. `issues` is the whole of open_issues().
+    """Keys of the pull-list tickets that can be pulled, in rank order. `issues` is the whole of open_issues().
 
     The start check and the free-slot notice both take the top tickets from here, so they cannot disagree (CHB-143).
     A ticket is left out when it is an epic or an open ticket blocks it (open_blockers).
@@ -997,7 +1095,7 @@ def top_queue(
     `moved` is a ticket that just moved and its new column. The search can still show its old status,
     so the new column wins: the ticket is open unless that column is in CLOSED, and it is never in the queue.
     """
-    to_do = next((column for column in columns if column.name == TO_DO), None)
+    to_do = pull_list(columns)
     if to_do is None:
         return []
     open_keys = {str(issue["key"]) for issue in issues}
@@ -1044,11 +1142,12 @@ def blockers(fields: dict[str, Any]) -> list[str]:
 
 @dataclass(frozen=True)
 class TodoOrder:
-    """The To Do keys in their current rank order and in the order sort-todo wants (CHB-148)."""
+    """The pull-list keys in their current rank order and in the order sort-todo wants (CHB-148)."""
 
     current: list[str]
     desired: list[str]
     ready: list[str]  # the top queue (top_queue), in the desired order
+    column: str = TO_DO  # the name of the pull list (pull_list): "Ready", or "To Do" before the rename
 
     def steps(self) -> list[tuple[list[str], str | None, str | None]]:
         """Rank requests (keys, before, after) that turn the current order into the desired one.
@@ -1080,14 +1179,14 @@ def todo_order(
     *,
     moved: tuple[str, Column] | None = None,
 ) -> TodoOrder:
-    """The To Do order of docs/process/kanban.md, To Do (CHB-148): tickets that can start (top_queue)
+    """The pull-list order of docs/process/kanban.md, Ready (CHB-148): tickets that can start (top_queue)
     first, High, then Medium, then Low; then blocked tickets; then epics. Each group keeps its rank order.
 
     `issues` is the whole of open_issues(). Readiness comes from top_queue (open_blockers) only, so
     the dependency rule lives in one place. A missing or unknown priority sorts as Medium. `fresh` and
     `moved` go to top_queue.
     """
-    to_do = next((column for column in columns if column.name == TO_DO), None)
+    to_do = pull_list(columns)
     if to_do is None:
         return TodoOrder([], [], [])
     in_to_do = {str(issue["key"]): issue for issue in issues if str(issue["fields"]["status"]["id"]) in to_do.status_ids}
@@ -1097,7 +1196,7 @@ def todo_order(
     rest = [key for key in current if key not in queue]
     blocked = [key for key in rest if in_to_do[key]["fields"]["issuetype"]["name"] != "Epic"]
     epics = [key for key in rest if key not in blocked]
-    return TodoOrder(current, ready + blocked + epics, ready)
+    return TodoOrder(current, ready + blocked + epics, ready, to_do.name)
 
 
 def _priority_order(issue: dict[str, Any]) -> int:
@@ -1109,7 +1208,7 @@ def _priority_order(issue: dict[str, Any]) -> int:
 def apply_todo_order(
     jira: Jira, issues: list[dict[str, Any]], columns: Sequence[Column], fresh: dict[str, dict[str, Any]] | None = None
 ) -> tuple[TodoOrder, int]:
-    """Rank To Do into todo_order, with the rank requests of TodoOrder.steps. No request when sorted.
+    """Rank the pull list into todo_order, with the rank requests of TodoOrder.steps. No request when sorted.
 
     Return the order and the number of rank requests sent. The steps re-rank every ticket from the
     first misplaced one down, not only the moved ones: simpler, at the cost of more rank history.
@@ -1199,7 +1298,8 @@ def _free_slot_notice(jira: Jira, key: str, move: Move) -> list[str]:
     free = in_progress.max - counts[IN_PROGRESS]
     descriptions = {issue["key"]: issue["fields"].get("description") for issue in issues}
     queue = [_with_missing_sections(top, descriptions[top]) for top in todo_order(issues, move.columns, moved=(key, move.target)).ready[:free]]
-    following = ", ".join(queue) or f"nothing to start in {TO_DO}"
+    pull = pull_list(move.columns)
+    following = ", ".join(queue) or f"nothing to start in {pull.name if pull else TO_DO}"
     return [f"{IN_PROGRESS} {counts[IN_PROGRESS]}/{in_progress.max}: {free} slot{'s' if free > 1 else ''} free; next: {following}"]
 
 
@@ -1315,10 +1415,13 @@ def _parser() -> argparse.ArgumentParser:
     create.add_argument("--summary", required=True)
     create.add_argument("--description-file", required=True)
     create.add_argument("--priority", required=True, choices=PRIORITIES)
+    create.add_argument("--ready", action="store_true", help="create in Ready, not Backlog; needs --trigger")
+    create.add_argument("--trigger", help="the trigger that makes it needed now, and its evidence")
 
     transition = commands.add_parser("transition", help="move an issue to a status, by status name")
     transition.add_argument("key")
     transition.add_argument("status")
+    transition.add_argument("--trigger", help="needed for a move from Backlog to Ready: which trigger, and its evidence")
 
     comment = commands.add_parser("comment", help="add a plain-text comment")
     comment.add_argument("key")
@@ -1342,7 +1445,7 @@ def _parser() -> argparse.ArgumentParser:
     section.add_argument("--body-file", required=True)
     section.add_argument("--first", action="store_true", help="put the section at the top (always for 'Why it matters')")
 
-    commands.add_parser("sort-todo", help="rank To Do: ready High, Medium, Low, then blocked tickets, then epics")
+    commands.add_parser("sort-todo", help="rank Ready (To Do before the rename): ready High, Medium, Low, then blocked, then epics")
 
     edit_comment = commands.add_parser("edit-comment", help="replace the body of one of the agent's comments")
     edit_comment.add_argument("key")
@@ -1382,21 +1485,37 @@ def run(args: argparse.Namespace, jira: Jira) -> None:
     elif args.command == "create":
         key = jira.create(args.parent, args.summary, args.description, args.priority)
         print(key)
+        # The ticket exists: from here on a failure is a notice, never an exit code that invites a second create.
+        try:
+            column = jira.place_created(key, ready=args.ready)
+        except (JiraError, KeyError, TypeError, AttributeError) as error:
+            where = READY if args.ready else BACKLOG
+            print(f'could not place {key}: {error}. Move it: factory/bin/jira transition {key} "{where}"')
+            return
+        if column is not None and column.name == BACKLOG:
+            print(f"{key} in {BACKLOG}")
+            return
+        if args.ready:
+            line = f"Created in {column.name if column else READY}. Trigger: {args.trigger}"
+            try:
+                jira.comment(key, line)
+            except JiraError as error:
+                print(f"could not post the trigger comment: {error}. Post it: factory/bin/jira comment {key} with {line!r}")
         # The ticket exists: a failed sort is a notice, never an exit code that invites a second create.
         # KeyError, TypeError and AttributeError mean an answer of unexpected shape, as in main().
         try:
             order, sent = jira.sort_todo((key, args.description, args.priority))
         except (JiraError, KeyError, TypeError, AttributeError) as error:
-            print(f"could not sort To Do: {error}. Run factory/bin/jira sort-todo")
+            print(f"could not sort {column.name if column else TO_DO}: {error}. Run factory/bin/jira sort-todo")
         else:
             if sent:
-                print(f"To Do sorted: {', '.join(order.desired)}")
+                print(f"{order.column} sorted: {', '.join(order.desired)}")
     elif args.command == "sort-todo":
         order, sent = jira.sort_todo()
         state = f"sorted ({sent} rank requests)" if sent else "already sorted"
-        print(f"To Do {state}: {', '.join(order.desired) or 'empty'}")
+        print(f"{order.column} {state}: {', '.join(order.desired) or 'empty'}")
     elif args.command == "transition":
-        target, notices = jira.transition(args.key, args.status)
+        target, notices = jira.transition(args.key, args.status, args.trigger)
         print(f"{args.key} -> {target}")
         for notice in notices:
             print(notice)
@@ -1446,6 +1565,10 @@ def main(
             check_rank_input(args.keys, args.before or args.after)
         if args.command == "search":
             scope_jql(args.jql)
+        if getattr(args, "trigger", None) is not None and not args.trigger.strip():
+            raise UsageError("trigger is empty: name the trigger and its evidence")
+        if args.command == "create" and args.ready != (args.trigger is not None):
+            raise UsageError('--ready and --trigger go together: --ready --trigger "<which trigger and its evidence>"')
         if args.command == "create":
             check_summary(args.summary)
             args.description = _read_text(args.description_file)

@@ -20,7 +20,7 @@ The Jira Free plan has no priority schemes, so the global list stays and this ru
 
 Leaving the ticket open risks harm now.
 
-- A bug that affects users in production. It goes to the top of To Do, above every other ticket, and the agent tells the owner at once.
+- A bug that affects users in production. It goes to Ready (trigger 1, something is broken) at the top, above every other ticket, and the agent tells the owner at once.
 - The delivery pipeline is broken: CI on `main`, the deploy, a required check, or anything that stops a change from reaching production.
 - The agent cannot work: `factory/bin/as-agent`, `factory/bin/jira`, a hook or a credential fails, and no agent can commit, push or update Jira.
 - Something else is broken: a feature, check, link or command does not do what it says, or a document states something false.
@@ -47,8 +47,8 @@ The ticket can wait indefinitely at no cost.
 
 - A bug report is High from the start.
 - Among High tickets, production bugs come first, then a broken pipeline, then the rest by the owner's rank.
-- Priority sets the rank. `factory/bin/jira sort-todo` keeps To Do in priority order: tickets that can start, High, Medium, then Low,
-  then blocked tickets (CHB-148, `kanban.md`, To Do). The rank within a priority decides the order of work there.
+- Priority sets the rank. `factory/bin/jira sort-todo` keeps Ready in priority order: tickets that can start, High, Medium, then Low,
+  then blocked tickets (CHB-148, `kanban.md`, Ready). Backlog is not sorted. The rank within a priority decides the order of work there.
   A High ticket sits below a Medium or Low ticket only while an open dependency blocks it.
 - The agent sets the priority when it creates a ticket (`factory/bin/jira create --priority`), with the reason in one line of the description.
 - Between two levels, take the higher one and say so in the ticket.

@@ -105,11 +105,39 @@ TRANSITIONS = {
 }
 
 
-def board_config(**limits: dict[str, int]) -> dict[str, Any]:
+# CHB-153: the owner adds a "Backlog" column first, then renames "To Do" to "Ready". The project is
+# team-managed, so a column is a status: Backlog is a new status, and the rename keeps the status id.
+# "before": today's board. "half": Backlog plus To Do. "after": Backlog plus Ready.
+BACKLOG_ID = "10009"  # as on the live board, 2026-11-10
+READY_ID = "10010"  # the live Ready column also holds a new status "Ready" next to "To Do" (10003)
+ALL_IDS = {**STATUS_IDS, "Backlog": BACKLOG_ID, "Ready": STATUS_IDS["To Do"]}
+BOARD_STATES = ("before", "half", "after")
+
+
+def state_ids(state: str = "before") -> dict[str, str]:
+    """Status names and ids, in board order, of one board state."""
+    if state == "before":
+        return dict(STATUS_IDS)
+    pull = "Ready" if state == "after" else "To Do"
+    rest = {name: status_id for name, status_id in STATUS_IDS.items() if name != "To Do"}
+    return {"Backlog": BACKLOG_ID, pull: STATUS_IDS["To Do"], **rest}
+
+
+def pull_name(state: str) -> str:
+    return "Ready" if state == "after" else "To Do"
+
+
+def transitions_of(state: str = "before") -> dict[str, Any]:
+    names = enumerate(state_ids(state).items(), 11)
+    return {"transitions": [{"id": str(n), "to": {"name": name, "id": status_id}} for n, (name, status_id) in names]}
+
+
+def board_config(*, state: str = "before", **limits: dict[str, int]) -> dict[str, Any]:
     """A board configuration with one column per status. Limits: board_config(**{"In Review": {"max": 3}})."""
     columns = []
-    for name, status_id in STATUS_IDS.items():
-        columns.append({"name": name, "statuses": [{"id": status_id, "self": "x"}], **limits.get(name, {})})
+    for name, status_id in state_ids(state).items():
+        ids = [status_id, READY_ID] if (state, name) == ("after", "Ready") else [status_id]
+        columns.append({"name": name, "statuses": [{"id": i, "self": "x"} for i in ids], **limits.get(name, {})})
     return {"id": 2, "columnConfig": {"columns": columns, "constraintType": "none"}}
 
 
@@ -130,7 +158,7 @@ def description_with(*headings: str, body: str = "Some text.") -> dict[str, Any]
 
 
 def issue_in(status: str, description: Any = None, links: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    fields = {"status": {"name": status, "id": STATUS_IDS[status]}, "description": description, "issuelinks": links or []}
+    fields = {"status": {"name": status, "id": ALL_IDS[status]}, "description": description, "issuelinks": links or []}
     return {"fields": fields}
 
 
@@ -186,7 +214,7 @@ def keys_answer(
                 {
                     "key": k,
                     "fields": {
-                        "status": {"name": name, "id": STATUS_IDS[name]},
+                        "status": {"name": name, "id": ALL_IDS[name]},
                         "issuetype": {"name": "Epic" if k in epics else "Task"},
                         "description": descriptions.get(k, READY),
                         "issuelinks": links.get(k, []),
@@ -199,7 +227,7 @@ def keys_answer(
             ]
             return {"issues": issues, "isLast": True}
         excluded = jql.split("key != ")[1].split()[0].rstrip(")")
-        keys = [k for name, ks in by_status.items() if f"({STATUS_IDS[name]})" in jql for k in ks if k != excluded]
+        keys = [k for name, ks in by_status.items() if f"({ALL_IDS[name]})" in jql for k in ks if k != excluded]
         return {"issues": [{"key": k} for k in keys], "isLast": True}
 
     return answer
@@ -214,18 +242,19 @@ def transition_fake(
     epics: tuple[str, ...] = (),
     links: dict[str, list[dict[str, Any]]] | None = None,
     priorities: dict[str, str | None] | None = None,
+    state: str = "before",
 ) -> FakeJira:
-    """CHB-12 sits in `current`. A ticket in To Do is listed in To Do unless the test places it."""
+    """CHB-12 sits in `current`. A ticket in the pull list is listed there unless the test places it."""
     by_status = dict(by_status or {})
-    if current == "To Do" and "CHB-12" not in by_status.get("To Do", []):
-        by_status["To Do"] = ["CHB-12", *by_status.get("To Do", [])]
+    if current in ("To Do", "Ready") and "CHB-12" not in by_status.get(current, []):
+        by_status[current] = ["CHB-12", *by_status.get(current, [])]
     descriptions = {"CHB-12": description, **(descriptions or {})}
     links = links or {}
     return FakeJira(
         {
-            ("GET", "/rest/api/3/issue/CHB-12/transitions"): TRANSITIONS,
+            ("GET", "/rest/api/3/issue/CHB-12/transitions"): transitions_of(state),
             ("GET", f"/rest/api/3/issue/CHB-12?fields={ISSUE_FIELDS}"): issue_in(current, description, links.get("CHB-12")),
-            ("GET", BOARD): board_config(**BOARD_LIMITS) if board is None else board,
+            ("GET", BOARD): board_config(state=state, **BOARD_LIMITS) if board is None else board,
             ("POST", SEARCH): keys_answer(by_status, descriptions, epics, links, priorities),
             ("POST", "/rest/api/3/issue/CHB-12/transitions"): None,
             ("PUT", RANK_PATH): None,
@@ -285,7 +314,12 @@ class TransitionTest(unittest.TestCase):
         self.assertEqual(out.splitlines()[0], "CHB-12 -> In Review")
 
     def test_unknown_status_fails_and_lists_the_allowed_ones(self) -> None:
-        fake = FakeJira({("GET", "/rest/api/3/issue/CHB-12/transitions"): {"transitions": TRANSITIONS["transitions"][1:3]}})
+        fake = FakeJira(
+            {
+                ("GET", "/rest/api/3/issue/CHB-12/transitions"): {"transitions": TRANSITIONS["transitions"][1:3]},
+                ("GET", BOARD): board_config(),  # no status matches, so the column names are tried (CHB-153)
+            }
+        )
         code, _, err = _run(["transition", "CHB-12", "Done"], fake)
 
         self.assertEqual(code, 1)
@@ -2151,11 +2185,11 @@ def _rank_writes(fake: FakeJira) -> list[Any]:
     return [body for method, path, body in fake.writes() if (method, path) == ("PUT", RANK_PATH)]
 
 
-def sort_fake(to_do: list[str], by_status: dict[str, list[str]] | None = None, **kwargs: Any) -> FakeJira:
+def sort_fake(to_do: list[str], by_status: dict[str, list[str]] | None = None, state: str = "before", **kwargs: Any) -> FakeJira:
     return FakeJira(
         {
-            ("GET", BOARD): board_config(**BOARD_LIMITS),
-            ("POST", SEARCH): keys_answer({"To Do": to_do, **(by_status or {})}, **kwargs),
+            ("GET", BOARD): board_config(state=state, **BOARD_LIMITS),
+            ("POST", SEARCH): keys_answer({pull_name(state): to_do, **(by_status or {})}, **kwargs),
             ("PUT", RANK_PATH): None,
         }
     )
@@ -2369,6 +2403,269 @@ class SectionFirstTest(unittest.TestCase):
 
         (_, _, sent), = fake.writes()
         self.assertEqual(sent["fields"]["description"]["content"][0], _heading(WHY))
+
+
+COMMENT_PATH = "/rest/api/3/issue/CHB-12/comment"
+NEW_STATUS = "/rest/api/3/issue/CHB-200?fields=status"
+NEW_MOVE = "/rest/api/3/issue/CHB-200/transitions"
+NEW_COMMENT = "/rest/api/3/issue/CHB-200/comment"
+
+
+def _comments(fake: FakeJira, path: str = COMMENT_PATH) -> list[str]:
+    return [adf_to_text(body["body"]) for method, where, body in fake.writes() if (method, where) == ("POST", path)]
+
+
+def backlog_create_fake(state: str, initial: str, pull: list[str] | None = None, **kwargs: Any) -> FakeJira:
+    """CHB-200 is created under CHB-27 and Jira puts it in `initial`."""
+    return FakeJira(
+        {
+            ("GET", "/rest/api/3/issue/CHB-27?fields=issuetype"): {"fields": {"issuetype": {"name": "Epic"}}},
+            ("POST", CREATE_PATH): {"key": "CHB-200"},
+            ("GET", BOARD): board_config(state=state, **BOARD_LIMITS),
+            ("GET", NEW_STATUS): {"fields": {"status": {"name": initial, "id": ALL_IDS[initial]}}},
+            ("GET", NEW_MOVE): transitions_of(state),
+            ("POST", NEW_MOVE): None,
+            ("POST", NEW_COMMENT): {"id": "7"},
+            ("POST", SEARCH): keys_answer({pull_name(state): pull or []}, **kwargs),
+            ("PUT", RANK_PATH): None,
+        }
+    )
+
+
+def _create_args(fake: FakeJira, *extra: str, credentials_reader: Any = lambda: CREDENTIALS, priority: str = "Medium") -> tuple[int, str, str]:
+    with tempfile.NamedTemporaryFile("w") as handle:
+        handle.write(f"## {WHY}\n\nThe owner waits.")
+        handle.flush()
+        argv = ["create", "--parent", "CHB-27", "--summary", "Do it", "--description-file", handle.name, "--priority", priority, *extra]
+        return _run(argv, fake, credentials_reader=credentials_reader)
+
+
+class PullListTest(unittest.TestCase):
+    """CHB-153 AC1: the pull list is the column Ready, else To Do; Backlog is never sorted and never next."""
+
+    def test_the_pull_list_in_each_board_state(self) -> None:
+        for state, expected in {"before": "To Do", "half": "To Do", "after": "Ready"}.items():
+            with self.subTest(state):
+                columns = Jira(EMAIL, TOKEN, FakeJira({("GET", BOARD): board_config(state=state)})).board_columns()
+                pull = jira.pull_list(columns)
+                self.assertIsNotNone(pull)
+                self.assertEqual(pull.name if pull else None, expected)
+
+    def test_a_board_with_only_backlog_has_no_pull_list(self) -> None:
+        self.assertIsNone(jira.pull_list([jira.Column("Backlog", frozenset({BACKLOG_ID}))]))
+
+    def test_sort_ranks_only_the_pull_list_never_backlog(self) -> None:
+        for state in BOARD_STATES:
+            with self.subTest(state):
+                by_status = {"Backlog": ["CHB-30", "CHB-31"]} if state != "before" else {}
+                fake = sort_fake(["CHB-1", "CHB-2"], by_status, state=state, priorities={"CHB-2": "High", "CHB-30": "High", "CHB-31": "High"})
+                code, out, _ = _run(["sort-todo"], fake)
+
+                self.assertEqual(code, 0)
+                touched = {key for body in _rank_writes(fake) for key in [*body["issues"], body.get("rankBeforeIssue"), body.get("rankAfterIssue")]}
+                self.assertEqual(touched - {None}, {"CHB-1", "CHB-2"})
+                self.assertIn(f"{pull_name(state)} sorted", out)
+                self.assertNotIn("CHB-30", out)
+
+    def test_a_backlog_ticket_is_never_the_top_ticket(self) -> None:
+        for state in ("half", "after"):
+            with self.subTest(state):
+                pull = pull_name(state)
+                fake = transition_fake(pull, {"Backlog": ["CHB-30"], pull: ["CHB-12"]}, priorities={"CHB-30": "High"}, state=state)
+                code, out, err = _run(["transition", "CHB-12", "In Progress"], fake)
+
+                self.assertEqual(code, 0, err)
+                self.assertEqual(out.splitlines()[0], "CHB-12 -> In Progress")
+                self.assertEqual(_write_paths(fake), [MOVE_PATH])
+
+    def test_a_start_from_the_pull_list_checks_the_top_ticket_of_that_list(self) -> None:
+        for state in BOARD_STATES:
+            with self.subTest(state):
+                pull = pull_name(state)
+                fake = transition_fake(pull, {pull: ["CHB-5", "CHB-12"]}, state=state)
+                code, _, err = _run(["transition", "CHB-12", "In Progress"], fake)
+
+                self.assertEqual(code, 4)
+                self.assertIn(f"CHB-12 is not the top ticket of {pull}: CHB-5 is", err)
+                self.assertEqual(fake.writes(), [])
+
+    def test_a_start_from_backlog_is_refused(self) -> None:
+        for state in ("half", "after"):
+            with self.subTest(state):
+                fake = transition_fake("Backlog", {"In Progress": ["CHB-1"]}, state=state)
+                code, out, err = _run(["transition", "CHB-12", "In Progress"], fake)
+
+                self.assertEqual(code, 4)
+                self.assertEqual(out, "")
+                self.assertIn(f"CHB-12 is in Backlog: move it to {pull_name(state)} first", err)
+                self.assertIn(f'factory/bin/jira transition CHB-12 "{pull_name(state)}" --trigger', err)
+                self.assertEqual(fake.writes(), [])
+
+    def test_the_free_slot_line_names_only_pull_list_tickets(self) -> None:
+        for state in BOARD_STATES:
+            with self.subTest(state):
+                pull = pull_name(state)
+                by_status = {"In Progress": ["CHB-1"], pull: ["CHB-7"], **({"Backlog": ["CHB-30", "CHB-31"]} if state != "before" else {})}
+                fake = transition_fake("In Progress", by_status, priorities={"CHB-30": "High"}, state=state)
+                code, out, _ = _run(["transition", "CHB-12", "In Review"], fake)
+
+                self.assertEqual(code, 0)
+                self.assertEqual(out.splitlines()[-1], "In Progress 1/3: 2 slots free; next: CHB-7")
+
+    def test_nothing_to_start_names_the_pull_list(self) -> None:
+        for state in BOARD_STATES:
+            with self.subTest(state):
+                by_status = {"In Progress": ["CHB-1"], **({"Backlog": ["CHB-30"]} if state != "before" else {})}
+                fake = transition_fake("In Progress", by_status, state=state)
+                code, out, _ = _run(["transition", "CHB-12", "In Review"], fake)
+
+                self.assertEqual(code, 0)
+                self.assertEqual(out.splitlines()[-1], f"In Progress 1/3: 2 slots free; next: nothing to start in {pull_name(state)}")
+
+
+class TriggerTest(unittest.TestCase):
+    """CHB-153 AC2: a move from Backlog to the pull list needs --trigger, posted as a comment."""
+
+    def test_backlog_to_the_pull_list_without_a_trigger_exits_2_and_writes_nothing(self) -> None:
+        for state in ("half", "after"):
+            with self.subTest(state):
+                fake = transition_fake("Backlog", state=state)
+                code, out, err = _run(["transition", "CHB-12", pull_name(state)], fake)
+
+                self.assertEqual(code, 2)
+                self.assertEqual(out, "")
+                self.assertIn("--trigger", err)
+                self.assertEqual(fake.writes(), [])
+
+    def test_with_a_trigger_it_moves_and_comments(self) -> None:
+        for state in ("half", "after"):
+            with self.subTest(state):
+                pull = pull_name(state)
+                fake = transition_fake("Backlog", state=state)
+                fake.routes[("POST", COMMENT_PATH)] = {"id": "5"}
+                code, out, err = _run(["transition", "CHB-12", pull, "--trigger", "1. broken: the build fails on main"], fake)
+
+                self.assertEqual(code, 0, err)
+                self.assertEqual(out.splitlines()[0], f"CHB-12 -> {pull}")
+                self.assertEqual(_write_paths(fake), [MOVE_PATH, COMMENT_PATH])
+                self.assertEqual(_comments(fake), [f"Moved to {pull}. Trigger: 1. broken: the build fails on main"])
+
+    def test_a_failed_trigger_comment_says_the_ticket_moved(self) -> None:
+        fake = transition_fake("Backlog", state="after")
+        fake.routes[("POST", COMMENT_PATH)] = 500
+        code, _, err = _run(["transition", "CHB-12", "Ready", "--trigger", "2. the owner asked"], fake)
+
+        self.assertEqual(code, 1)
+        self.assertIn("CHB-12 moved to Ready, but the trigger comment failed", err)
+        self.assertIn("factory/bin/jira comment CHB-12", err)
+
+    def test_a_move_into_backlog_needs_no_trigger(self) -> None:
+        for state in ("half", "after"):
+            with self.subTest(state):
+                fake = transition_fake(pull_name(state), state=state)
+                code, out, err = _run(["transition", "CHB-12", "Backlog"], fake)
+
+                self.assertEqual(code, 0, err)
+                self.assertEqual(out.splitlines()[0], "CHB-12 -> Backlog")
+                self.assertEqual(_write_paths(fake), [MOVE_PATH])
+
+    def test_a_trigger_on_another_move_exits_2_and_writes_nothing(self) -> None:
+        for state, current, target in [("after", "Ready", "Backlog"), ("before", "In Progress", "In Review"), ("after", "In Review", "Ready")]:
+            with self.subTest(f"{state}: {current} -> {target}"):
+                fake = transition_fake(current, {"In Progress": ["CHB-1"]}, state=state)
+                code, _, err = _run(["transition", "CHB-12", target, "--trigger", "1. broken"], fake)
+
+                self.assertEqual(code, 2)
+                self.assertIn("--trigger applies only to a move from Backlog", err)
+                self.assertEqual(fake.writes(), [])
+
+    def test_an_empty_trigger_exits_2_before_1password(self) -> None:
+        fake = FakeJira({})
+        code, _, err = _run(["transition", "CHB-12", "Ready", "--trigger", "  "], fake, credentials_reader=_no_credentials)
+
+        self.assertEqual(code, 2)
+        self.assertIn("trigger is empty", err)
+        self.assertEqual(fake.requests, [])
+
+    def test_a_column_name_finds_the_status_of_that_column(self) -> None:
+        """A column renamed on a board whose status keeps its old name: `transition X Ready` still works."""
+        board = board_config(state="half", **BOARD_LIMITS)
+        board["columnConfig"]["columns"][1]["name"] = "Ready"  # the column holds the status "To Do"
+        fake = transition_fake("Backlog", board=board, state="half")
+        fake.routes[("POST", COMMENT_PATH)] = {"id": "5"}
+        code, out, err = _run(["transition", "CHB-12", "ready", "--trigger", "3. unblocks CHB-1"], fake)
+
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.splitlines()[0], "CHB-12 -> To Do")
+        self.assertEqual(fake.writes()[0], ("POST", MOVE_PATH, {"transition": {"id": "12"}}))
+        self.assertEqual(_comments(fake), ["Moved to Ready. Trigger: 3. unblocks CHB-1"])
+
+
+class CreateInBacklogTest(unittest.TestCase):
+    """CHB-153 AC3: `create` lands in Backlog; with --ready --trigger, in the pull list."""
+
+    def test_without_a_backlog_column_the_ticket_stays_in_the_pull_list(self) -> None:
+        fake = backlog_create_fake("before", "To Do")
+        code, out, _ = _create_args(fake)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(out.strip(), "CHB-200")
+        self.assertEqual(_write_paths(fake), [CREATE_PATH])
+
+    def test_lands_in_backlog_and_the_pull_list_is_not_sorted(self) -> None:
+        for state in ("half", "after"):
+            with self.subTest(state):
+                pull = pull_name(state)
+                fake = backlog_create_fake(state, pull, pull=["CHB-1", "CHB-2"], priorities={"CHB-2": "High"})
+                code, out, err = _create_args(fake, priority="High")
+
+                self.assertEqual(code, 0, err)
+                self.assertEqual(out.splitlines(), ["CHB-200", "CHB-200 in Backlog"])
+                self.assertEqual(_write_paths(fake), [CREATE_PATH, NEW_MOVE])
+                self.assertEqual(fake.writes()[1][2], {"transition": {"id": "11"}})
+
+    def test_a_ticket_jira_put_in_backlog_is_not_moved(self) -> None:
+        fake = backlog_create_fake("after", "Backlog")
+        code, out, _ = _create_args(fake)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(out.splitlines(), ["CHB-200", "CHB-200 in Backlog"])
+        self.assertEqual(_write_paths(fake), [CREATE_PATH])
+
+    def test_ready_with_a_trigger_lands_in_the_pull_list_comments_and_sorts(self) -> None:
+        for state, initial in [("before", "To Do"), ("half", "To Do"), ("after", "Ready"), ("after", "Backlog")]:
+            with self.subTest(f"{state}, created in {initial}"):
+                pull = pull_name(state)
+                fake = backlog_create_fake(state, initial, pull=["CHB-1"], priorities={"CHB-1": "Low"})
+                code, out, err = _create_args(fake, "--ready", "--trigger", "2. the owner asked for it", priority="High")
+
+                self.assertEqual(code, 0, err)
+                self.assertEqual(out.splitlines()[0], "CHB-200")
+                self.assertEqual(_comments(fake, NEW_COMMENT), [f"Created in {pull}. Trigger: 2. the owner asked for it"])
+                moves = [body for method, path, body in fake.writes() if path == NEW_MOVE]
+                self.assertEqual(moves, [{"transition": {"id": "12"}}] if initial == "Backlog" else [])
+                self.assertEqual(_apply_ranks(["CHB-1", "CHB-200"], fake), ["CHB-200", "CHB-1"])
+
+    def test_ready_and_trigger_go_together(self) -> None:
+        for extra in (["--ready"], ["--trigger", "1. broken"], ["--ready", "--trigger", " "]):
+            with self.subTest(extra):
+                fake = backlog_create_fake("after", "Ready")
+                code, out, err = _create_args(fake, *extra, credentials_reader=_no_credentials)
+
+                self.assertEqual(code, 2)
+                self.assertEqual(out, "")
+                self.assertIn("trigger is empty" if extra[-1] == " " else "--ready and --trigger go together", err)
+                self.assertEqual(fake.requests, [])
+
+    def test_a_failed_move_after_create_is_a_notice_and_exits_0(self) -> None:
+        fake = backlog_create_fake("after", "Ready")
+        fake.routes[("POST", NEW_MOVE)] = 500
+        code, out, _ = _create_args(fake)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(out.splitlines()[0], "CHB-200")
+        self.assertIn("could not place CHB-200", out)
+        self.assertIn('factory/bin/jira transition CHB-200 "Backlog"', out)
 
 
 if __name__ == "__main__":
