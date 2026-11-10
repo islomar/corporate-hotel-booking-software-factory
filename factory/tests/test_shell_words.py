@@ -1,6 +1,8 @@
 import json
+import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -73,9 +75,9 @@ HOOKS = Path(__file__).resolve().parents[1] / "hooks"
 class IsolatedRunTest(unittest.TestCase):
     """Run each hook as settings.json does, `python3 -I <script>`, so a broken import shows up here."""
 
-    def _run(self, hook: str, event: dict) -> subprocess.CompletedProcess:
+    def _run(self, hook: str, event: dict, env: dict | None = None) -> subprocess.CompletedProcess:
         return subprocess.run(
-            [sys.executable, "-I", str(HOOKS / hook)], input=json.dumps(event), capture_output=True, text=True, timeout=30
+            [sys.executable, "-I", str(HOOKS / hook)], input=json.dumps(event), capture_output=True, text=True, timeout=30, env=env
         )
 
     def test_the_branch_name_hook_allows_and_denies(self) -> None:
@@ -93,6 +95,32 @@ class IsolatedRunTest(unittest.TestCase):
         self.assertEqual((ok.returncode, ok.stderr), (0, ""))
         self.assertEqual(bad.returncode, 2)
         self.assertIn("full suite", bad.stderr)
+
+    def test_the_secrets_hook_allows_and_denies(self) -> None:
+        ok = self._run("deny_secret_reads.py", {"tool_input": {"command": "cat .env.example"}})
+        bad = self._run("deny_secret_reads.py", {"tool_input": {"command": "cat ~/.ssh/id_ed25519"}})
+        read = self._run("deny_secret_reads.py", {"cwd": "/repo", "tool_input": {"file_path": "/repo/.env"}})
+
+        self.assertEqual((ok.returncode, ok.stderr), (0, ""))
+        self.assertEqual((bad.returncode, read.returncode), (2, 2))
+        self.assertIn("secret", bad.stderr)
+
+    def test_the_harness_edit_hook_allows_and_denies(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, cache = Path(tmp) / "repo", Path(tmp) / "cache"
+            env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+            subprocess.run(["git", "init", "-q", str(repo)], check=True, env=env)
+            subprocess.run(["git", "-C", str(repo), "symbolic-ref", "HEAD", "refs/heads/CHB-20-auth"], check=True, env=env)
+            cache.mkdir(mode=0o700)
+            (cache / "CHB-20-auth.json").write_text(json.dumps({"ticket": "CHB-20", "parent": "CHB-19"}))
+            env["CHB_HARNESS_EPIC_CACHE_DIR"] = str(cache)
+
+            ok = self._run("deny_harness_edits.py", {"cwd": str(repo), "tool_input": {"file_path": "backend/a.py"}}, env)
+            bad = self._run("deny_harness_edits.py", {"cwd": str(repo), "tool_input": {"file_path": "factory/x.py"}}, env)
+
+        self.assertEqual((ok.returncode, ok.stderr), (0, ""))
+        self.assertEqual(bad.returncode, 2)
+        self.assertIn("product epic CHB-19", bad.stderr)
 
     def test_the_loop_detector_runs_and_never_blocks(self) -> None:
         run = self._run("warn_edit_loops.py", {"tool_input": {"file_path": "/x"}})
