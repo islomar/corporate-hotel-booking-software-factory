@@ -92,7 +92,7 @@ ReDoc is off: it has no self-hosted copy.
 
 ## Observability
 
-The backend sends traces, metrics and logs with OpenTelemetry (ADR-c17d).
+The backend sends traces, metrics and logs with OpenTelemetry ([ADR-c17d](docs/decisions/ADR-c17d-observability-with-opentelemetry.md)).
 The code is the same everywhere. Only the destination changes:
 
 ```mermaid

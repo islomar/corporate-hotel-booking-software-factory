@@ -20,18 +20,24 @@ It links to the rules and repeats none of them: when a link and this file disagr
 
 1. Read the disclaimer and the question at the top of [`README.md`](README.md): this repository is a learning experiment run by AI agents.
 2. Install Docker, GNU Make, [uv](https://docs.astral.sh/uv/) and Node 24, then run the commands in [README, Quick start](README.md#quick-start).
-   `make setup` installs the git pre-commit hook. It runs `make check`.
+   `make setup` installs a git pre-commit hook that runs `make check`, so a commit that breaks lint, types or tests never leaves your machine.
 3. Read [`CLAUDE.md`](CLAUDE.md). Agents follow it, and it is the shortest list of the rules every change must respect.
 4. Open the [Jira board `CHB`](https://islomar.atlassian.net/jira/software/projects/CHB/boards/2) (sign-in required) and read [`docs/process/kanban.md`](docs/process/kanban.md).
    All work is a ticket. No ticket, no branch.
 
 How work is picked and tracked:
 
-- New tickets go to Backlog. A ticket moves to Ready only with a named trigger and a Definition of Ready that holds ([kanban.md, Backlog](docs/process/kanban.md#backlog)).
-- Agents start only the top ticket of Ready. Priority sets the order ([`docs/process/priorities.md`](docs/process/priorities.md)).
-- WIP limits on the board refuse a start: exit 5 means a full column (run the wait command it prints in the background), exit 4 any other board rule ([kanban.md, WIP limits](docs/process/kanban.md#wip-limits)).
-- A step only the owner can take (a decision, a payment, a console click) moves the ticket to Needs human, with numbered owner steps in the ticket.
-- Agents make every Jira write through `factory/bin/jira`, never with the owner's login.
+- Agents work only on what is needed now. New tickets go to Backlog.
+  A ticket moves to Ready only with a named trigger and a Definition of Ready that holds ([kanban.md, Backlog](docs/process/kanban.md#backlog)).
+- Work follows the owner's priorities, not an agent's choice: agents start only the top ticket of Ready, and priority sets the order
+  ([`docs/process/priorities.md`](docs/process/priorities.md)).
+- Finishing comes before starting. WIP limits on the board refuse a new start while review or live checks pile up:
+  exit 5 means a full column (run the wait command it prints in the background), exit 4 any other board rule
+  ([kanban.md, WIP limits](docs/process/kanban.md#wip-limits)).
+- The owner finds every blocker in one place. A step only the owner can take (a decision, a payment, a console click) moves the ticket to Needs human,
+  with numbered owner steps in the ticket.
+- Jira history must show who did what, and the board rules must not be bypassed.
+  Agents make every Jira write through `factory/bin/jira`, which acts as the agent's own account and enforces the rules, never with the owner's login.
 
 ## How the pieces fit
 
