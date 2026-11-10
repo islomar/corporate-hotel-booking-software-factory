@@ -12,8 +12,9 @@ import posixpath
 import re
 import shlex
 
-PUNCTUATION = ";&|()\n"
-FALLBACK_SEPARATOR = re.compile(r"[;&|()\n]+")
+PUNCTUATION = ";&|()<>\n"
+SEPARATOR_CHARS = ";|()\n"
+FALLBACK_TOKEN = re.compile(r"[;&|()<>\n]+|[^\s;&|()<>]+")
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 PYTHON = re.compile(r"^python[0-9.]*$")
 
@@ -28,37 +29,49 @@ PYTHON_VALUE_OPTIONS = {"-X", "-W", "-Q"}
 
 
 def tokens(command: str) -> list[str]:
-    """Words and separators of the command; separators are runs of ; & | ( ) and newlines."""
+    """Words and operators of the command; operators are runs of ; & | ( ) < > and newlines."""
     lexer = shlex.shlex(command, posix=True, punctuation_chars=PUNCTUATION)
     lexer.whitespace = " \t\r"
     lexer.whitespace_split = True
     lexer.commenters = ""
     try:
         return list(lexer)
-    except ValueError:  # unbalanced quotes: split on separators and spaces, drop quote marks
-        out: list[str] = []
-        for part in FALLBACK_SEPARATOR.split(command):
-            out.extend(w.strip("'\"") for w in part.split())
-            out.append(";")
-        return out
+    except ValueError:  # unbalanced quotes: split on operators and spaces, drop quote marks
+        return [w.strip("'\"") or w for w in FALLBACK_TOKEN.findall(command)]
 
 
-def _separator(word: str) -> bool:
+def _operator(word: str) -> bool:
     return bool(word) and all(c in PUNCTUATION for c in word)
 
 
 def simple_commands(command: str) -> list[list[str]]:
-    """The command's simple commands, each with launchers stripped, empty ones left out."""
+    """The command's simple commands, with redirections and launchers stripped, empty ones left out.
+
+    A redirection drops its operator, a file descriptor number just before it and the word after
+    it: `2>&1`, `> /tmp/log`, `2>/dev/null` and a heredoc's `<<'EOF'` leave nothing behind.
+    """
     found: list[list[str]] = []
     current: list[str] = []
-    for word in [*tokens(command), ";"]:
-        if _separator(word):
-            words = strip_launchers(current)
-            if words:
-                found.append(words)
-            current = []
-        else:
+    words = [*tokens(command), ";"]
+    i = 0
+    while i < len(words):
+        word = words[i]
+        if not _operator(word):
             current.append(word)
+            i += 1
+            continue
+        redirection = "<" in word or ">" in word
+        if redirection:
+            if current and current[-1].isdigit():
+                current.pop()
+            if i + 1 < len(words) and not _operator(words[i + 1]):
+                i += 1
+        if not redirection or any(c in word for c in SEPARATOR_CHARS) or "&&" in word:
+            stripped = strip_launchers(current)
+            if stripped:
+                found.append(stripped)
+            current = []
+        i += 1
     return found
 
 
@@ -99,18 +112,23 @@ def _skip_options(words: list[str], i: int, value_options: set[str], stop: str =
     return i
 
 
-def positionals(args: list[str], value_options: set[str]) -> list[str]:
-    """Arguments that are not options or option values; everything after `--` counts."""
-    out: list[str] = []
+def positional_indexes(args: list[str], value_options: set[str]) -> list[int]:
+    """Indexes of the arguments that are not options or option values; everything after `--` counts."""
+    out: list[int] = []
     i = 0
     while i < len(args):
         arg = args[i]
         if arg == "--":
-            out.extend(args[i + 1 :])
+            out.extend(range(i + 1, len(args)))
             break
         if arg.startswith("-") and arg != "-":
             i += 2 if arg in value_options else 1
             continue
-        out.append(arg)
+        out.append(i)
         i += 1
     return out
+
+
+def positionals(args: list[str], value_options: set[str]) -> list[str]:
+    """Arguments that are not options or option values; everything after `--` counts."""
+    return [args[i] for i in positional_indexes(args, value_options)]

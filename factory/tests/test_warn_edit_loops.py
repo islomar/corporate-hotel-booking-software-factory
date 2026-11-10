@@ -112,6 +112,36 @@ class LoopDetectorTest(unittest.TestCase):
 
         self.assertEqual(self._main(_event("/repo/src/a.py")), (0, "", ""))
 
+    def test_the_default_folder_is_per_user(self) -> None:
+        with mock.patch.dict(os.environ, {hook.STATE_DIR_ENV: ""}):
+            self.assertTrue(hook.state_dir().endswith(f"chb-edit-loops-{os.getuid()}"))
+
+    def test_a_folder_open_to_other_users_is_refused_without_blocking(self) -> None:
+        os.chmod(self.state.name, 0o777)
+        self.addCleanup(os.chmod, self.state.name, 0o700)
+
+        with self.assertRaises(PermissionError):
+            hook.record_edit(self.state.name, "s-1", "/repo/a.py")
+        self.assertEqual(self._edits(5)[-1], (0, "", ""))
+
+    def test_a_symlinked_folder_is_refused(self) -> None:
+        link = Path(self.state.name) / "link"
+        target = Path(self.state.name) / "real"
+        target.mkdir(mode=0o700)
+        link.symlink_to(target)
+
+        with self.assertRaises(PermissionError):
+            hook.record_edit(str(link), "s-1", "/repo/a.py")
+
+    def test_a_symlinked_state_file_is_not_followed(self) -> None:
+        victim = Path(self.state.name) / "victim.txt"
+        victim.write_text("keep")
+        (Path(self.state.name) / "s-1.json").symlink_to(victim)
+
+        with self.assertRaises(OSError):
+            hook.record_edit(self.state.name, "s-1", "/repo/a.py")
+        self.assertEqual(victim.read_text(), "keep")
+
     def test_an_error_never_blocks(self) -> None:
         with mock.patch.object(hook, "record_edit", side_effect=OSError("disk full")):
             self.assertEqual(self._main(_event("/repo/src/a.py")), (0, "", ""))

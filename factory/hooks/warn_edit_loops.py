@@ -7,8 +7,9 @@ the session. On the 5th and 8th edit it adds context for the agent:
 "5th edit of <file> this session: step back, re-read the failing test and the plan before editing again."
 
 The file is named relative to the session's `cwd` when it lies under it. The counts live in
-`<temp dir>/chb-edit-loops/<session id>.json` (the env var CHB_EDIT_LOOP_STATE_DIR overrides the
-folder). An unreadable state file starts the count again.
+`<temp dir>/chb-edit-loops-<uid>/<session id>.json` (the env var CHB_EDIT_LOOP_STATE_DIR overrides the
+folder). An unreadable state file starts the count again. A folder that is a symlink, belongs to
+another user or is open to others is refused; the state file opens with O_NOFOLLOW.
 
 Contract (https://code.claude.com/docs/en/hooks): the event arrives as JSON on stdin. The hook
 prints `{"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": ...}}` and
@@ -23,6 +24,7 @@ import json
 import os
 import posixpath
 import re
+import stat
 import sys
 import tempfile
 
@@ -32,14 +34,25 @@ MESSAGE = "{nth} edit of {file} this session: step back, re-read the failing tes
 
 
 def state_dir() -> str:
-    return os.environ.get(STATE_DIR_ENV) or posixpath.join(tempfile.gettempdir(), "chb-edit-loops")
+    return os.environ.get(STATE_DIR_ENV) or posixpath.join(tempfile.gettempdir(), f"chb-edit-loops-{os.getuid()}")
+
+
+def _private_folder(folder: str) -> None:
+    """Create the folder; refuse one that is a symlink, belongs to another user or others can open."""
+    os.makedirs(folder, mode=0o700, exist_ok=True)
+    info = os.lstat(folder)
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+        raise PermissionError(f"{folder} is not a private folder")
+    if info.st_mode & 0o077:
+        raise PermissionError(f"{folder} is open to other users")
 
 
 def record_edit(folder: str, session_id: str, path: str) -> int:
     """Add one edit of the path to the session's counts and return the new count."""
-    os.makedirs(folder, mode=0o700, exist_ok=True)
+    _private_folder(folder)
     safe = re.sub(r"[^A-Za-z0-9_-]", "_", session_id)
-    with open(posixpath.join(folder, safe + ".json"), "a+", encoding="utf-8") as state:
+    fd = os.open(posixpath.join(folder, safe + ".json"), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "r+", encoding="utf-8") as state:
         fcntl.flock(state, fcntl.LOCK_EX)
         state.seek(0)
         try:

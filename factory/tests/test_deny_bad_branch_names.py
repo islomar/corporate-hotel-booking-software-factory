@@ -48,6 +48,9 @@ DENIED = [
     "git status; git checkout -b bad",
     "git fetch origin\ngit checkout -b bad origin/main",
     "git checkout -b bad && cat <<'EOF' > /tmp/x\ndon't\nEOF",
+    "git push origin bad-name 2>&1",
+    "git push origin bad-name 2>&1 | tail -5",
+    "git checkout -b bad >/dev/null 2>&1",
 ]
 
 ALLOWED = [
@@ -103,6 +106,12 @@ ALLOWED = [
     "factory/bin/jira transition CHB-54 'In Review'",
     "factory/bin/as-agent gh pr create --title 'CHB-54: x' --body-file /tmp/b",
     "gh pr checks 67 --watch",
+    "git push -u origin CHB-54-guardrail-hooks 2>&1",
+    "git push -u origin CHB-54-guardrail-hooks 2>&1 | tail -5",
+    "git push origin CHB-1-x > /tmp/log",
+    "git push origin CHB-1-x 2>/dev/null",
+    "git push origin CHB-1-x &>/tmp/log",
+    "git checkout -b CHB-1-x >/dev/null 2>&1 && git status",
 ]
 
 

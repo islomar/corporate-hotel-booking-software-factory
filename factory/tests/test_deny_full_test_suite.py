@@ -44,6 +44,17 @@ DENIED = [
     "python3 -m unittest",
     "python3 -m unittest -v",
     "git status && uv run pytest",
+    "uv run pytest 2>&1 | tail -20",
+    "pytest > /tmp/out",
+    "pytest -q 2>/dev/null",
+    "npx vitest run > out.txt",
+    "npm test 2>&1",
+    "pytest --timeout 30",
+    "pytest -x --count 3",
+    "pytest -p no:cacheprovider",
+    "vitest run --retry 2",
+    "npm --prefix test test",
+    "python3 -m unittest discover 2>&1 | tail",
 ]
 
 ALLOWED = [
@@ -84,6 +95,11 @@ ALLOWED = [
     "grep -rn pytest backend/pyproject.toml",
     "factory/bin/as-agent git push -u origin CHB-54-guardrail-hooks",
     "gh pr checks 67 --watch",
+    "uv run pytest tests/test_booking.py 2>&1 | tail -20",
+    "pytest test_booking.py",
+    "npx vitest run App",
+    "npm --prefix test test -- src/App.test.tsx",
+    "python3 -I -m unittest discover -s factory/tests 2>&1 | tail -3",
 ]
 
 

@@ -5,11 +5,13 @@ While iterating, the agent runs the tests related to its change. The full suite 
 `make check` before every commit (CLAUDE.md), and `make check` and `make test` stay allowed.
 
 Denied, when nothing narrows the run:
-- `pytest`, `py.test`, `python -m pytest`, `uv run pytest`: narrowed by a path, a node id, `-k` or `--lf`;
+- `pytest`, `py.test`, `python -m pytest`, `uv run pytest`: narrowed by a path (a word with `/` or `::`,
+  or ending in `.py`), `-k` or `--lf`; a marker (`-m`) does not narrow;
 - `vitest`, `npx vitest run`, `npm test`, `npm run test`: narrowed by a file filter, `-t` or `--changed`;
 - `python3 -m unittest` and `python3 -m unittest discover`: narrowed by `-s <dir>`, `-p <pattern>`,
   `-k`, a start folder, a module or a file.
-A path of `.` does not narrow. Launchers are stripped first: `rtk`, `uv run`, `npx`, `cd x &&`.
+A path of `.` and a vitest filter that is a number do not narrow. Redirections and launchers
+(`rtk`, `uv run`, `npx`, `cd x &&`) are stripped first.
 
 Contract (https://code.claude.com/docs/en/hooks): the tool call arrives as JSON on stdin.
 Exit 2 with the reason on stderr denies the call. Exit 0 with no output leaves the normal
@@ -21,10 +23,11 @@ from __future__ import annotations
 import json
 import os
 import sys
+from collections.abc import Callable
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from shell_words import name, positionals, simple_commands  # noqa: E402
+from shell_words import name, positional_indexes, positionals, simple_commands  # noqa: E402
 
 WHOLE = {".", "./"}
 
@@ -71,8 +74,22 @@ def _has(args: list[str], options: tuple[str, ...]) -> bool:
     return False
 
 
-def _narrowed(args: list[str], value_options: set[str], filters: tuple[str, ...]) -> bool:
-    return _has(args, filters) or any(p not in WHOLE for p in positionals(args, value_options))
+def _narrowed(args: list[str], value_options: set[str], filters: tuple[str, ...], narrows: Callable[[str], bool]) -> bool:
+    return _has(args, filters) or any(narrows(p) for p in positionals(args, value_options))
+
+
+def _pytest_path(word: str) -> bool:
+    """A path or node id: `tests/`, `test_x.py`, `x.py::t`. A bare word may be the value of an unknown option."""
+    return word not in WHOLE and ("/" in word or "::" in word or word.endswith(".py"))
+
+
+def _vitest_filter(word: str) -> bool:
+    """A file name filter. A number is more likely the value of an unknown option such as `--retry 2`."""
+    return word not in WHOLE and not word.isdigit()
+
+
+def _any_target(word: str) -> bool:
+    return word not in WHOLE
 
 
 def full_suite(words: list[str]) -> bool:
@@ -81,32 +98,31 @@ def full_suite(words: list[str]) -> bool:
         return False
     prog, args = name(words[0]), words[1:]
     if prog in {"pytest", "py.test"}:
-        return not _narrowed(args, PYTEST_VALUE_OPTIONS, PYTEST_FILTERS)
+        return not _narrowed(args, PYTEST_VALUE_OPTIONS, PYTEST_FILTERS, _pytest_path)
     if prog == "vitest":
         if args[:1] and args[0] in VITEST_COMMANDS:
             args = args[1:]
-        return not _narrowed(args, VITEST_VALUE_OPTIONS, VITEST_FILTERS)
+        return not _narrowed(args, VITEST_VALUE_OPTIONS, VITEST_FILTERS, _vitest_filter)
     if prog == "npm":
         script_args = _npm_test_args(args)
-        return script_args is not None and not _narrowed(script_args, VITEST_VALUE_OPTIONS, VITEST_FILTERS)
+        return script_args is not None and not _narrowed(script_args, VITEST_VALUE_OPTIONS, VITEST_FILTERS, _vitest_filter)
     if prog == "unittest":
         if args[:1] == ["discover"]:
             args = args[1:]
         start = _option_value(args, {"-s", "--start-directory"})
-        return start in (None, *WHOLE) and not _narrowed(args, UNITTEST_VALUE_OPTIONS, UNITTEST_FILTERS)
+        return start in (None, *WHOLE) and not _narrowed(args, UNITTEST_VALUE_OPTIONS, UNITTEST_FILTERS, _any_target)
     return False
 
 
 def _npm_test_args(args: list[str]) -> list[str] | None:
     """The arguments passed to the `test` script (after `--`), or None when npm runs something else."""
-    rest = positionals(args, NPM_VALUE_OPTIONS)
-    if not rest:
+    at = positional_indexes(args, NPM_VALUE_OPTIONS)
+    if not at:
         return None
-    verb_at = args.index(rest[0])
-    if rest[0] in NPM_TEST:
-        script_args = args[verb_at + 1 :]
-    elif rest[0] in NPM_RUN and len(rest) > 1 and rest[1] in NPM_TEST:
-        script_args = args[args.index(rest[1], verb_at + 1) + 1 :]
+    if args[at[0]] in NPM_TEST:
+        script_args = args[at[0] + 1 :]
+    elif args[at[0]] in NPM_RUN and len(at) > 1 and args[at[1]] in NPM_TEST:
+        script_args = args[at[1] + 1 :]
     else:
         return None
     return [a for a in script_args if a != "--"]

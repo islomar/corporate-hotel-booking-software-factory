@@ -268,13 +268,14 @@ The hook denies a plain `git push origin <tag>`. Push the tag as `refs/tags/<tag
 `.claude/settings.json` runs `factory/hooks/deny_full_test_suite.py` before every Bash command (CHB-54).
 It denies a bare full-suite run and names the related-test form:
 
-- `pytest`, `python -m pytest` or `uv run pytest` without a path, a node id, `-k` or `--lf`;
+- `pytest`, `python -m pytest` or `uv run pytest` without a path (a word with `/` or `::`, or ending in `.py`), `-k` or `--lf`. A marker (`-m slow`) does not narrow the run;
 - `vitest`, `npx vitest run`, `npm test` or `npm run test` without a file filter, `-t` or `--changed`;
 - `python3 -m unittest` or `python3 -m unittest discover` without `-s <folder>`, `-p <pattern>`, `-k`, a module or a file.
 
-A path of `.` counts as no filter. `make check` and `make test` run the full suite and stay allowed: CLAUDE.md requires `make check` before every commit.
+A path of `.` counts as no filter. A number does not count as a vitest filter: it is likely the value of an option such as `--retry 2`.
+`make check` and `make test` run the full suite and stay allowed: CLAUDE.md requires `make check` before every commit.
 
-The two Bash hooks strip `rtk`, `rtk proxy`, `factory/bin/as-agent`, `env`, `uv run`, `npx` and `python -m` before they read a command.
+The two Bash hooks drop redirections (`2>&1`, `> file`, `2>/dev/null`) and strip `rtk`, `rtk proxy`, `factory/bin/as-agent`, `env`, `uv run`, `npx` and `python -m` before they read a command.
 Like the Jira hook, they read the command text only, deny on unreadable input or an internal error, and let the command run if `python3` cannot start.
 They split a command with unbalanced quotes, such as a heredoc with an apostrophe, on spaces and separators instead.
 
@@ -284,7 +285,8 @@ They split a command with unbalanced quotes, such as a heredoc with an apostroph
 It counts the edits of each file per session. On the 5th and 8th edit it adds context for the agent:
 "5th edit of <file> this session: step back, re-read the failing test and the plan before editing again."
 
-The counts live in `<temp dir>/chb-edit-loops/<session id>.json`. The env var `CHB_EDIT_LOOP_STATE_DIR` overrides the folder.
+The counts live in `<temp dir>/chb-edit-loops-<uid>/<session id>.json`. The env var `CHB_EDIT_LOOP_STATE_DIR` overrides the folder.
+The hook refuses a folder that is a symlink, belongs to another user or is open to others, and opens the state file without following symlinks.
 The hook never blocks. Bad input, an unreadable state file or an internal error gives no warning and exit 0.
 
 ## Automated PR review (shadow mode)
