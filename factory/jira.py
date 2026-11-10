@@ -284,7 +284,9 @@ def scope_jql(jql: str) -> str:
     """The JQL limited to the CHB project: project = CHB AND (<jql>) [ORDER BY ...].
 
     Refuses (UsageError, exit 2) JQL that could leave the parentheses: a ")" without its "(",
-    a "(" never closed, or an unterminated quote. A trailing ORDER BY stays outside them.
+    a "(" never closed, an unterminated quote, or a backslash outside quotes (Jira may read it
+    as an escape the scanner does not). A trailing ORDER BY stays outside them. The check of
+    the answer's issue keys in Jira.search is the final guard.
     """
     masked = []  # the JQL with the text inside quotes blanked, so only the syntax is left
     quote = ""
@@ -304,6 +306,8 @@ def scope_jql(jql: str) -> str:
             continue
         if char in "\"'":
             quote = char
+        elif char == "\\":
+            raise UsageError("search JQL has a backslash outside quotes")
         elif char == "(":
             depth += 1
         elif char == ")":
@@ -319,6 +323,18 @@ def scope_jql(jql: str) -> str:
     where, order_by = (jql[: order.start()], " " + jql[order.start() :].strip()) if order else (jql, "")
     where = where.strip()
     return f"project = {PROJECT}{f' AND ({where})' if where else ''}{order_by}"
+
+
+def check_summary(summary: str) -> str:
+    if not summary.strip():
+        raise UsageError("summary is empty")
+    return summary.strip()
+
+
+def check_comment_body(body: str) -> str:
+    if not body.strip():
+        raise UsageError("comment body is empty")
+    return body
 
 
 def check_comment_id(comment_id: str) -> str:
@@ -543,8 +559,7 @@ class Jira:
 
     def create(self, parent: str, summary: str, description: str, priority: str) -> str:
         check_priority(priority)
-        if not summary.strip():
-            raise UsageError("summary is empty")
+        summary = check_summary(summary)
         epic = self.request("GET", f"/rest/api/3/issue/{check_key(parent)}?fields=issuetype")
         if epic["fields"]["issuetype"]["name"] != "Epic":
             raise JiraError(f"parent {parent} is a {epic['fields']['issuetype']['name']}, not an Epic")
@@ -556,7 +571,7 @@ class Jira:
                     "project": {"key": PROJECT},
                     "issuetype": {"name": "Task"},
                     "parent": {"key": parent},
-                    "summary": summary.strip(),
+                    "summary": summary,
                     "description": text_to_adf(description),
                     "priority": {"name": priority},
                 }
@@ -599,8 +614,7 @@ class Jira:
         return [str(issue["key"]) for issue in self.search(jql, limit=100)]
 
     def comment(self, key: str, body: str) -> str:
-        if not body.strip():
-            raise UsageError("comment body is empty")
+        check_comment_body(body)
         created = self.request("POST", f"/rest/api/3/issue/{check_key(key)}/comment", {"body": text_to_adf(body)})
         return str(created["id"])
 
@@ -638,8 +652,7 @@ class Jira:
         The account is a project Administrator, so Jira would let it edit anyone's comment.
         The wrapper refuses a comment by another author (exit 1) before any write.
         """
-        if not body.strip():
-            raise UsageError("comment body is empty")
+        check_comment_body(body)
         path = f"/rest/api/3/issue/{check_key(key)}/comment/{check_comment_id(comment_id)}"
         author = self.request("GET", path).get("author", {}).get("accountId")
         if author != self.myself()["accountId"]:
@@ -894,6 +907,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def run(args: argparse.Namespace, jira: Jira) -> None:
+    """Run the command. main() reads the input files into args first (body, description, text)."""
     if args.command == "view":
         issue = jira.view(args.key)
         if args.json:
@@ -957,13 +971,10 @@ def main(
         if args.command == "search":
             scope_jql(args.jql)
         if args.command == "create":
-            if not args.summary.strip():
-                raise UsageError("summary is empty")
+            check_summary(args.summary)
             args.description = _read_text(args.description_file)
         if args.command == "comment":
-            args.body = _read_text(args.body_file)
-            if not args.body.strip():
-                raise UsageError("comment body is empty")
+            args.body = check_comment_body(_read_text(args.body_file))
         if args.command == "section":
             args.body = _read_text(args.body_file)
             check_section_input(args.heading, args.body)

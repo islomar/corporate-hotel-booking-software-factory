@@ -623,7 +623,8 @@ class SearchScopeTest(unittest.TestCase):
             self.assertEqual((code, searches), (0, [sent]), jql)
 
     def test_jql_that_escapes_the_parentheses_is_a_usage_error(self) -> None:
-        for jql in ("x) OR (project = OTHER", "x)", "(x", 'summary ~ "open', "a ORDER BY key ) OR (project = OTHER"):
+        cases = ("x) OR (project = OTHER", "x)", "(x", 'summary ~ "open', "a ORDER BY key ) OR (project = OTHER", 'a \\"b) OR (c"')
+        for jql in cases:
             code, searches, err = self._search(jql)
             self.assertEqual(code, 2, jql)
             self.assertEqual(searches, [], jql)
