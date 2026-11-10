@@ -211,6 +211,19 @@ def searches_before_the_move(fake: FakeJira) -> list[str]:
     return jql
 
 
+def _search_changes_at_the_move(
+    fake: FakeJira, before: dict[str, list[str]], after: dict[str, list[str]], descriptions: dict[str, Any]
+) -> Any:
+    """Answer searches from `before` until the transition POST, then from `after`."""
+    old, new = keys_answer(before, descriptions), keys_answer(after, descriptions)
+
+    def answer(body: dict[str, Any]) -> dict[str, Any]:
+        moved = any((method, path) == ("POST", "/rest/api/3/issue/CHB-12/transitions") for method, path, _, _ in fake.requests)
+        return new(body) if moved else old(body)
+
+    return answer
+
+
 def _no_credentials() -> tuple[str, str]:
     raise AssertionError("1Password must not be read")
 
@@ -668,6 +681,68 @@ class FreeSlotTest(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertEqual(out.splitlines(), ["CHB-12 -> In Progress", "In Progress 2/3: 1 slot free; next: CHB-123"])
+
+    def test_a_ticket_that_depends_on_the_moved_ticket_is_not_next(self) -> None:
+        """CHB-143: the moved ticket is still open, so its dependents cannot start, whatever the search still shows."""
+        depends_on_12 = doc("Depends on: CHB-12 (the moved ticket).\n\n## Acceptance criteria\n\n- A test.")
+        queue = ["CHB-114", "CHB-7"]
+        cases = {
+            "into Validating, search shows the old status": ("In Review", "Validating", {"In Review": ["CHB-12"]}),
+            "into Validating, search shows the new status": ("In Review", "Validating", {"Validating": ["CHB-12"]}),
+            "into Validating, search misses it": ("In Review", "Validating", {}),
+            "start from To Do, search shows the old status": ("To Do", "In Progress", {"To Do": ["CHB-12"]}),
+            "start from To Do, search shows the new status": ("To Do", "In Progress", {"In Progress": ["CHB-12"]}),
+        }
+        for name, (current, target, after) in cases.items():
+            with self.subTest(name):
+                fake = transition_fake(
+                    current,
+                    {"In Progress": ["CHB-1"], "To Do": queue},
+                    description=description_with("Acceptance criteria", *SECTIONS.values()),
+                    descriptions={"CHB-114": depends_on_12},
+                )
+                before = {"In Progress": ["CHB-1"], "To Do": [*(["CHB-12"] if current == "To Do" else []), *queue]}
+                if current != "To Do":
+                    before[current] = ["CHB-12"]
+                placed = {"In Progress": ["CHB-1"], "To Do": queue}
+                for status, keys in after.items():
+                    placed[status] = [*keys, *placed.get(status, [])] if status == "To Do" else [*placed.get(status, []), *keys]
+                fake.routes[("POST", SEARCH)] = _search_changes_at_the_move(fake, before, placed, {"CHB-114": depends_on_12})
+                code, out, _ = _run(["transition", "CHB-12", target], fake)
+
+                self.assertEqual(code, 0)
+                expected = "In Progress 2/3: 1 slot free" if target == "In Progress" else "In Progress 1/3: 2 slots free"
+                self.assertEqual(out.splitlines()[-1], f"{expected}; next: CHB-7")
+
+    def test_a_ticket_that_depends_on_a_ticket_moved_to_done_or_discarded_is_next(self) -> None:
+        """CHB-143: a move into Done or Discarded closes the ticket, even while the search still shows it open."""
+        board = board_config(**BOARD_LIMITS)
+        board["columnConfig"]["columns"].append({"name": "Discarded", "statuses": [{"id": "10008", "self": "x"}]})
+        transitions = {"transitions": [*TRANSITIONS["transitions"], {"id": "99", "to": {"name": "Discarded", "id": "10008"}}]}
+        for target in ["Done", "Discarded"]:
+            with self.subTest(target):
+                fake = transition_fake(
+                    "Validating",
+                    {"Validating": ["CHB-12"], "In Progress": ["CHB-1"], "To Do": ["CHB-88", "CHB-7"]},
+                    board=board,
+                    descriptions={"CHB-88": doc("Depends on: CHB-12.\n\n## Acceptance criteria\n\n- A test.")},
+                )
+                fake.routes[("GET", "/rest/api/3/issue/CHB-12/transitions")] = transitions
+                code, out, _ = _run(["transition", "CHB-12", target], fake)
+
+                self.assertEqual(code, 0)
+                self.assertEqual(out.splitlines()[-1], "In Progress 1/3: 2 slots free; next: CHB-88, CHB-7")
+
+    def test_the_notice_and_the_start_check_share_one_top_queue(self) -> None:
+        """CHB-143 AC2: both get the top tickets from top_queue, with the whole open search, so they cannot disagree."""
+        fake = transition_fake("To Do", {"In Progress": ["CHB-1"], "To Do": ["CHB-12", "CHB-114", "CHB-7"]})
+        with mock.patch.object(jira, "top_queue", wraps=jira.top_queue) as top_queue:
+            code, _, _ = _run(["transition", "CHB-12", "In Progress"], fake)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(top_queue.call_count, 2)
+        searched = [[issue["key"] for issue in call.args[0]] for call in top_queue.call_args_list]
+        self.assertEqual(searched, [["CHB-1", "CHB-12", "CHB-114", "CHB-7"]] * 2)
 
     def test_nothing_when_in_progress_is_at_its_max(self) -> None:
         fake = transition_fake("To Do", {"In Progress": ["CHB-1", "CHB-2"], "To Do": ["CHB-12", "CHB-123"]})

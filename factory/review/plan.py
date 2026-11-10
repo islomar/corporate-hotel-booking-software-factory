@@ -24,10 +24,11 @@ import subprocess
 import sys
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from docs_list import docs_only, is_doc, is_governance  # noqa: E402  (the allowlist, shared with ci.yml)
 from gate import CARRIED, CHECK_NAME, REVIEWED, SKIPPED, _plain, parse_name_list, risk_class  # noqa: E402
 
 REVIEWER_APP_SLUG = "chb-factory-reviewer"
@@ -36,72 +37,6 @@ OPUS = "claude-opus-5-5"
 # Added plus deleted lines from `git diff --numstat`. A binary file outside docs/ counts as large.
 LARGE_DIFF_LINES = 400
 SHA = re.compile(r"[0-9a-f]{40}")
-
-# Never docs, at any stage: these paths steer the agents, the factory or the supply chain.
-GOVERNANCE_PREFIXES = (
-    ".github/",
-    ".claude/",
-    "factory/",
-    "infra/",
-    "scripts/",
-    "docs/decisions/",
-    "docs/process/",
-    "docs/knowledge/",
-)
-GOVERNANCE_NAMES = {"CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", "Makefile"}
-MANIFEST_NAMES = {
-    "package.json",
-    "package-lock.json",
-    "npm-shrinkwrap.json",
-    "pnpm-lock.yaml",
-    "yarn.lock",
-    "pyproject.toml",
-    "uv.lock",
-    "poetry.lock",
-    "Pipfile",
-    "Pipfile.lock",
-    "go.mod",
-    "go.sum",
-    "Cargo.toml",
-    "Cargo.lock",
-    "Gemfile",
-    "Gemfile.lock",
-    ".npmrc",
-    ".nvmrc",
-    ".python-version",
-    "Dockerfile",
-    "compose.yaml",
-}
-MANIFEST_PATTERN = re.compile(r"(^requirements.*\.txt$|\.lock$|\.lockb$|-lock\.(json|yaml)$)")
-DOC_EXTENSIONS = {".md"}
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
-
-
-def is_governance(path: str) -> bool:
-    name = PurePosixPath(path).name
-    return (
-        path.startswith(GOVERNANCE_PREFIXES)
-        or name in GOVERNANCE_NAMES
-        or name in MANIFEST_NAMES
-        or MANIFEST_PATTERN.search(name) is not None
-    )
-
-
-def is_doc(path: str) -> bool:
-    """Allowlist: Markdown and images under docs/, and README.md files. Governance never counts."""
-    pure = PurePosixPath(path)
-    if not path or path.startswith("/") or is_governance(path):
-        return False
-    if any(part.startswith(".") or part == "" for part in path.split("/")):
-        return False
-    suffix = pure.suffix.lower()
-    if path.startswith("docs/"):
-        return suffix in DOC_EXTENSIONS | IMAGE_EXTENSIONS
-    return pure.name == "README.md"
-
-
-def docs_only(paths: Sequence[str]) -> bool:
-    return bool(paths) and all(is_doc(p) for p in paths)
 
 
 def changed_lines(numstat: str) -> int | None:
