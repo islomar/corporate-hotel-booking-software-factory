@@ -46,3 +46,25 @@ run "codeql_default_setup_off_fails_the_plan" {
 
   expect_failures = [terraform_data.guards]
 }
+
+run "private_vulnerability_reporting_off_fails_the_plan" {
+  command = plan
+
+  override_data {
+    target = data.github_rest_api.private_vulnerability_reporting
+    values = { body = "{\"enabled\":false}" }
+  }
+
+  expect_failures = [terraform_data.guards]
+}
+
+run "repository_secret_fails_the_plan" {
+  command = plan
+
+  override_data {
+    target = data.github_actions_secrets.repository
+    values = { secrets = [{ name = "LEAKED", created_at = "", updated_at = "" }] }
+  }
+
+  expect_failures = [terraform_data.guards]
+}
