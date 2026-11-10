@@ -334,6 +334,10 @@ The hook reads the column minimums from the board and the open tickets as the ag
 - In Progress is below its minimum and Ready has a ticket that can start. The reason names the top ticket and the `transition` command.
   It stays quiet while In Progress, In Review or Validating is at its max.
 - Ready is below its minimum (CHB-164). No reply text passes this; the reason lists the refill candidates, as `transition` does.
+- A Validating ticket has a due item and the agent account has no comment on it from the current day (CHB-163). "Due" is as `validating_sweep.py` defines it
+  (CHB-140): the earliest absolute date of a "When:" line has passed. The day is the Europe/Madrid day. The reason names each ticket and each due item.
+  Items not yet due, "When:" lines without a date and tickets without the section never block. Comments are read only for tickets with a due item, through the same Jira client.
+  A failed comment read prints one line and skips this check; the WIP checks still run. To pass: check the item in the live system and comment the evidence with `factory/bin/jira comment`.
 
 It fails open with one line on stderr when Jira or 1Password cannot be reached. It refuses once per session for the same findings: the second stop with the same findings passes
 (state in `<temp dir>/chb-wip-minimums-<uid>/`, folder override `CHB_WIP_MINIMUMS_STATE_DIR`). Like the other hooks it is a guardrail: it reads the board, not the reply text (CHB-164).
