@@ -36,10 +36,20 @@ It fails when any file in this folder, this README included, holds one of these:
 
 - an email address
 - a home path (`/home/<name>` or `/Users/<name>`) or a path under `/mnt`
+- a dash-encoded home path (`-home-<name>-` or `-Users-<name>-`) or a `/tmp/claude-<n>/` path, as in Claude Code scratchpad paths
 - a 1Password reference (`op:` followed by two slashes)
 - a GitHub token, an `sk-` key or a 1Password service account token
 - a hex string of 32 or more characters
 - a base64 string of 40 or more characters that mixes upper case, lower case and digits
+
+It also fails when an export (any Markdown file except this README) lacks the two lint-off comments.
+Exports are verbatim, so the Vale and rumdl hooks would block them.
+Add these two lines after the table of contents:
+
+```markdown
+<!-- vale off -->
+<!-- rumdl-disable -->
+```
 
 It skips folders marked as caches with a `CACHEDIR.TAG` file, such as the Markdown linter cache.
 It prints the file, line and pattern name, never the matched text.
