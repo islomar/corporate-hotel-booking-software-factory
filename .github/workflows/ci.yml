@@ -61,6 +61,10 @@ jobs:
   backend:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
+    # Dependabot alerts read: the release-age check exempts a fresh fix for an open alert (CHB-145).
+    permissions:
+      contents: read
+      vulnerability-alerts: read
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
@@ -73,14 +77,19 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           enable-cache: true
+      # Before uv sync: building an sdist runs untrusted code, which must not run before the step that holds the token (CHB-145).
+      - name: Release age (uv.lock upload times against exclude-newer)
+        env:
+          # Only Dependabot PRs get the token: another branch could change the script to read every alert.
+          GH_TOKEN: ${{ github.event.pull_request.user.login == 'dependabot[bot]' && github.token || '' }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: python3 -I ../scripts/check_release_age.py uv.lock
       - run: uv sync --locked
       - name: Unit tests of the scripts and the factory
         working-directory: .
         run: |
           python3 -I -m unittest discover -s scripts/tests
           python3 -I -m unittest discover -s factory/tests
-      - name: Release age (uv.lock upload times against exclude-newer)
-        run: python3 -I ../scripts/check_release_age.py uv.lock
       - run: uv run --locked ruff format --check .
       - run: uv run --locked ruff check .
       - run: uv run --locked pyright

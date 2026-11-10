@@ -17,6 +17,9 @@ Found on 2026-11-06 while setting up the dependency cooldown (ADR-ebe6).
 - `uv.lock` stores a relative `exclude-newer` as `exclude-newer-span = "P7D"`.
   `uv lock --check` passed again after the cutoff moved.
   Checked over seconds, not days: the cutoff only moves forward and the locked uploads stay behind it.
+- `uv lock --upgrade-package boto3==1.43.127` with `exclude-newer = "7 days"` failed on 2026-11-10 (uv 0.13.7):
+  `boto3` was filtered by `exclude-newer`, the requested version was one day old.
+  Dependabot locks uv with that command, so it cannot open a uv security PR for a fix younger than the window (CHB-145).
 
 Rule: CI checks every lockfile change with `scripts/check_release_age.py`.
 The install commands do not.

@@ -214,7 +214,7 @@ class LoadFixesTest(unittest.TestCase):
         self.assertIn("::warning", out)
 
     def test_reads_the_alerts_for_this_folder(self):
-        fixes, _ = self._load(DEPENDABOT_ENV, lambda repo, token: [alert("vite", "8.3.6")])
+        fixes, _ = self._load(DEPENDABOT_ENV, lambda repo, token, ecosystem: [alert("vite", "8.3.6")])
 
         self.assertEqual(fixes, {"vite": [("8.3.6", 7)]})
 
@@ -235,7 +235,7 @@ class CheckLockfileTest(unittest.TestCase):
     def _check(self, alerts, age=timedelta(days=1), env=DEPENDABOT_ENV):
         calls = []
 
-        def fetch(repo, token):
+        def fetch(repo, token, ecosystem):
             calls.append(repo)
             return alerts
 
@@ -265,6 +265,109 @@ class CheckLockfileTest(unittest.TestCase):
         self.assertEqual(self._check([alert("vite", "8.3.6")], age=timedelta(days=30)), ([], []))
 
 
+
+UV_ALERT_LOCK = """
+version = 1
+
+[options]
+exclude-newer-span = "P7D"
+
+[[package]]
+name = "old-pkg"
+version = "1.0.0"
+sdist = { url = "https://x/old.tar.gz", upload-time = "2026-10-01T00:00:00Z" }
+
+[[package]]
+name = "Fresh_Pkg"
+version = "2.0"
+wheels = [{ url = "https://x/fresh.whl", upload-time = "2026-11-05T00:00:00Z" }]
+"""
+
+
+def pip_alert(name, patched, manifest="backend/uv.lock", number=11):
+    return alert(name, patched, manifest=manifest, ecosystem="pip", number=number)
+
+
+class UvSecurityFixTest(unittest.TestCase):
+    """A fresh uv fix for an open Dependabot alert passes the window, like npm (CHB-145)."""
+
+    def _check(self, alerts, lock=UV_ALERT_LOCK, env=DEPENDABOT_ENV, fetch=None):
+        calls = []
+
+        def default_fetch(repo, token, ecosystem):
+            calls.append((repo, ecosystem))
+            return alerts
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "uv.lock"
+            path.write_text(lock)
+            out = io.StringIO()
+            with (
+                mock.patch.dict("os.environ", env, clear=True),
+                mock.patch("check_release_age.fetch_open_alerts", fetch or default_fetch),
+                mock.patch("check_release_age.repository_folder", return_value="backend"),
+                contextlib.redirect_stdout(out),
+            ):
+                violations = check_lockfile(path, None, NOW)
+        return [(v.name, v.version) for v in violations], calls, out.getvalue()
+
+    def test_a_fresh_fix_for_an_open_alert_passes_with_the_notice(self):
+        violations, calls, out = self._check([pip_alert("fresh-pkg", "2.0")])
+
+        self.assertEqual(violations, [])
+        self.assertEqual(calls, [("o/r", "pip")])
+        self.assertIn("::notice", out)
+        self.assertIn("Fresh_Pkg@2.0 is a security fix: Dependabot alert #11", out)
+
+    def test_an_alert_on_the_pyproject_of_the_same_folder_counts(self):
+        violations, _, _ = self._check([pip_alert("fresh_pkg", "2.0", manifest="backend/pyproject.toml")])
+
+        self.assertEqual(violations, [])
+
+    def test_the_same_entry_fails_without_an_alert(self):
+        violations, _, out = self._check([])
+
+        self.assertEqual(violations, [("Fresh_Pkg", "2.0")])
+        self.assertNotIn("::notice", out)
+
+    def test_an_alert_of_another_ecosystem_or_folder_does_not_count(self):
+        alerts = [
+            alert("fresh-pkg", "2.0", manifest="backend/package-lock.json"),
+            pip_alert("fresh-pkg", "2.0", manifest="tools/uv.lock"),
+        ]
+
+        self.assertEqual(self._check(alerts)[0], [("Fresh_Pkg", "2.0")])
+
+    def test_only_the_first_patched_version_passes(self):
+        for patched in ("1.9", "2.0.1", "2.0.post1", "2.0rc1"):
+            self.assertEqual(self._check([pip_alert("fresh-pkg", patched)])[0], [("Fresh_Pkg", "2.0")], patched)
+
+    def test_trailing_zeros_are_the_same_python_release(self):
+        self.assertEqual(self._check([pip_alert("fresh-pkg", "2.0.0")])[0], [])
+
+    def test_an_alert_lookup_error_fails_closed_with_the_warning(self):
+        def fetch(*_):
+            raise OSError("HTTP 403")
+
+        violations, _, out = self._check([], fetch=fetch)
+
+        self.assertEqual(violations, [("Fresh_Pkg", "2.0")])
+        self.assertIn("::warning", out)
+        self.assertIn("cannot read Dependabot alerts", out)
+
+    def test_a_pull_request_by_anyone_else_gets_no_exemption_and_no_call(self):
+        env = {**DEPENDABOT_ENV, "PR_AUTHOR": "chb-factory-agent[bot]"}
+
+        violations, calls, _ = self._check([pip_alert("fresh-pkg", "2.0")], env=env)
+
+        self.assertEqual((violations, calls), ([("Fresh_Pkg", "2.0")], []))
+
+    def test_a_lock_without_young_entries_never_calls_the_api(self):
+        lock = UV_ALERT_LOCK.replace("2026-11-05", "2026-10-05")
+
+        self.assertEqual(self._check([pip_alert("fresh-pkg", "2.0")], lock=lock)[:2], ([], []))
+
+
 class FakeResponse(io.BytesIO):
     def __init__(self, body, link=""):
         super().__init__(json.dumps(body).encode())
@@ -282,7 +385,7 @@ def next_link(page):
 
 
 class FetchOpenAlertsTest(unittest.TestCase):
-    def _fetch(self, responses):
+    def _fetch(self, responses, ecosystem="npm"):
         urls = []
 
         def urlopen(request, timeout):
@@ -290,7 +393,7 @@ class FetchOpenAlertsTest(unittest.TestCase):
             return responses.pop(0)
 
         with mock.patch("urllib.request.urlopen", urlopen):
-            return fetch_open_alerts("o/r", "t"), urls
+            return fetch_open_alerts("o/r", "t", ecosystem), urls
 
     def test_follows_the_link_header_to_the_last_page(self):
         alerts, urls = self._fetch([FakeResponse([{"number": 1}], next_link(2)), FakeResponse([{"number": 2}])])
@@ -311,6 +414,11 @@ class FetchOpenAlertsTest(unittest.TestCase):
         evil = '<https://example.com/steal>; rel="next"'
         with self.assertRaises(ValueError):
             self._fetch([FakeResponse([], evil)])
+
+    def test_asks_for_the_requested_ecosystem_only(self):
+        _, urls = self._fetch([FakeResponse([])], ecosystem="pip")
+
+        self.assertIn("ecosystem=pip&", urls[0])
 
     def test_refuses_an_answer_that_is_not_a_list(self):
         with self.assertRaises(ValueError):
