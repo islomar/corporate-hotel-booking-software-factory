@@ -32,7 +32,8 @@ All work is tracked in Jira space `CHB` (see `TODO.md`). Move tickets only as `d
   Never write to Jira with `acli`: its login is the owner's. Read with `factory/bin/jira view` and `factory/bin/jira search`.
   A PreToolUse hook (`.claude/settings.json`, `factory/hooks/deny_raw_jira_writes.py`) blocks `acli jira` writes and `curl`, `wget` or Python writes to the Jira REST API.
   It matches the whole command text: put a commit message or PR body that quotes such a command in a file.
-  If `factory/bin/jira transition` exits 4, a board rule blocks the move: a WIP limit blocks starting work (or entering a full Needs human), or a required section is missing.
+  If `factory/bin/jira transition` exits 5, a WIP limit blocks the move: run the wait command it names in the background.
+  If it exits 4, another board rule blocks it: a start out of order, a blocked ticket, or a missing required section.
   Start only the top ticket of Ready; to start another, with the owner's go, raise its priority or rank it first within its priority.
   If it lacks acceptance criteria, write them (`docs/process/kanban.md`, Ready).
   Every ticket opens with a non-empty "Why it matters" section: the pain, who feels it, the value of solving it, in plain words. `create` and a start refuse a ticket without it.
