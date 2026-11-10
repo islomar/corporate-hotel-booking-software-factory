@@ -15,8 +15,16 @@ then runs the command with:
 
 The token never reaches stdout. Only the command's own output does.
 
+Auto-merge (CHB-120): after `gh pr create` (or `gh pr new`) opens a PR, the script runs
+`gh pr merge --auto --squash <PR URL>` with the same token. It skips that step for a draft,
+for a base branch other than main (a stacked PR), and when AGENT_NO_AUTO_MERGE=1. For
+`gh pr create` stdout is captured to read the PR URL and printed again, so `gh` does not
+prompt: pass --title and --body (or --fill). If the PR opens but auto-merge fails, the
+script exits 5 (EXIT_NO_AUTO_MERGE) and prints the command to retry. Do not open the PR again.
+
 Environment overrides:
 - AGENT_APP_CLIENT_ID: the App's client ID (public).
+- AGENT_NO_AUTO_MERGE=1: open a PR without auto-merge.
 - AGENT_APP_KEY_COMMAND: command that prints the private key, instead of the default
   `op` call. It runs without the service account token: an explicit opt-in to another
   key source, for example the owner's desktop 1Password (with its pop-up).
@@ -27,6 +35,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -47,6 +56,9 @@ REPOSITORY = "islomar/corporate-hotel-booking-software-factory"
 KEY_COMMAND = f"op document get chb-factory-agent.2026-11-06.private-key --vault {op_service_account.VAULT}"
 KEY_TIMEOUT_SECONDS = 60
 EXIT_NO_KEY = 3
+EXIT_NO_AUTO_MERGE = 5
+OPT_OUT_VARIABLE = "AGENT_NO_AUTO_MERGE"
+PR_URL = re.compile(r"https://github\.com/[^/\s]+/[^/\s]+/pull/\d+")
 API = "https://api.github.com"
 
 
@@ -167,6 +179,75 @@ def installation_token(client_id: str, private_key: bytes) -> str:
     return str(token["token"])
 
 
+def _is_pr_create(argv: list[str]) -> bool:
+    return len(argv) >= 3 and os.path.basename(argv[0]) == "gh" and argv[1] == "pr" and argv[2] in ("create", "new")
+
+
+def _option(args: list[str], *names: str) -> str | None:
+    """The value of the last `--name value`, `--name=value` or `-n value` in args."""
+    value = None
+    for i, arg in enumerate(args):
+        for name in names:
+            if arg == name and i + 1 < len(args):
+                value = args[i + 1]
+            elif name.startswith("--") and arg.startswith(name + "="):
+                value = arg[len(name) + 1 :]
+    return value
+
+
+def auto_merge_skip_reason(argv: list[str], env: Mapping[str, str]) -> str | None:
+    """Why this `gh pr create` gets no auto-merge, or None when it gets it."""
+    if env.get(OPT_OUT_VARIABLE) == "1":
+        return f"{OPT_OUT_VARIABLE}=1"
+    args = argv[3:]
+    if "--draft" in args or "-d" in args:
+        return "draft PR"
+    base = _option(args, "--base", "-B")
+    if base not in (None, "main"):
+        return f"base {base} is not main: only main has the review ruleset"
+    if "--web" in args or "-w" in args or "--dry-run" in args:
+        return "no PR opened from the command line"
+    return None
+
+
+def run(
+    argv: list[str],
+    env: Mapping[str, str],
+    runner: Callable[..., Any] = subprocess.run,
+    out: Any = None,
+    err: Any = None,
+) -> int:
+    """Run argv with env. After `gh pr create`, enable auto-merge (squash) on the new PR."""
+    out = out or sys.stdout
+    err = err or sys.stderr
+    if not _is_pr_create(argv):
+        return runner(argv, env=env, check=False).returncode
+    skip = auto_merge_skip_reason(argv, env)
+    if skip:
+        print(f"as-agent: auto-merge not enabled: {skip}.", file=err)
+        return runner(argv, env=env, check=False).returncode
+    created = runner(argv, env=env, check=False, stdout=subprocess.PIPE, text=True)
+    output = created.stdout or ""
+    out.write(output)
+    out.flush()
+    if created.returncode != 0:
+        return created.returncode
+    urls = PR_URL.findall(output)
+    if not urls:
+        print("as-agent: no PR URL in the output of gh pr create. Auto-merge not enabled.", file=err)
+        return EXIT_NO_AUTO_MERGE
+    merge = ["gh", "pr", "merge", "--auto", "--squash", urls[-1]]
+    if runner(merge, env=env, check=False).returncode != 0:
+        print(
+            f"as-agent: PR {urls[-1]} is open, but auto-merge failed. Do not open it again. "
+            f"Retry: factory/bin/as-agent {shlex.join(merge)}",
+            file=err,
+        )
+        return EXIT_NO_AUTO_MERGE
+    print(f"as-agent: auto-merge (squash) enabled on {urls[-1]}.", file=err)
+    return 0
+
+
 def main(argv: list[str]) -> int:
     if not argv:
         print(__doc__, file=sys.stderr)
@@ -184,7 +265,7 @@ def main(argv: list[str]) -> int:
     bot_login = f"{APP_SLUG}[bot]"
     bot = _api("GET", f"/users/{urllib.request.quote(bot_login)}", f"token {token}")
     env = agent_env(os.environ, token, bot_login, int(str(bot["id"])))
-    return subprocess.run(argv, env=env, check=False).returncode
+    return run(argv, env)
 
 
 if __name__ == "__main__":

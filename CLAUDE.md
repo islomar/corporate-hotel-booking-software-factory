@@ -22,6 +22,7 @@ All work is tracked in Jira space `CHB` (see `TODO.md`). Move tickets only as `d
 - Branch from `main`. Start dependent work after the parent PR merges.
   A PR that must build on an open PR uses `--base <parent-branch>`, never `--base main`. GitHub retargets it to `main` when the parent merges.
 - Push branches and open PRs through `factory/bin/as-agent` (for example `factory/bin/as-agent gh pr create`), never with the owner's login. See ADR-d7b7.
+  `as-agent gh pr create` also enables auto-merge (squash) on the new PR. Opt out for one PR with `AGENT_NO_AUTO_MERGE=1`. See `factory/README.md`.
 - Commit only through `factory/bin/as-agent` too. If it fails (for example no 1Password service account token in the keyring, exit code 3), stop and report.
   Never commit with another git identity, not even locally.
 - Do every Jira write (create, transition, comment, edit-comment, assign, rank, section, description, priority) through `factory/bin/jira`. It acts as the Atlassian account "Claude (CHB agent)".
