@@ -41,11 +41,13 @@ Exit codes:
      UTF-8, a duplicate rank key, JQL whose parentheses or quotes do not balance)
   3  no credential: no service account token in the keyring (keyring locked, item absent)
      or `op` failed. The agent stops and reports.
-  4  a board rule blocks the transition: the target column is at its WIP limit, or the
-     description lacks the section the target status requires (docs/process/kanban.md).
+  4  a board rule blocks the transition: the target column is at its WIP limit, the
+     description lacks the section the target status requires, or a start from To Do is not
+     the top ticket of To Do or has no acceptance criteria (docs/process/kanban.md).
      The ticket stays where it is.
 
 `transition` reads the column limits from the board configuration (board 2) on every call.
+After a move it prints the free In Progress slots and the next tickets of To Do (CHB-125).
 """
 
 from __future__ import annotations
@@ -60,7 +62,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -94,6 +96,7 @@ REFERENCE_PATTERN = re.compile(
 INLINE_PATTERN = re.compile(r"`(?P<code>[^`]+)`|\*\*(?P<bold>[^*]+)\*\*")
 RANK_LIMIT = 50  # issues per rank request, the Jira Software limit
 BOARD_ID = 2  # the CHB board; its column configuration holds the WIP limits
+TO_DO = "To Do"
 IN_PROGRESS = "In Progress"
 NEEDS_HUMAN = "Needs human"
 # Columns of started work. Starting a ticket (a move into In Progress from a column that is not
@@ -105,6 +108,23 @@ REQUIRED_SECTIONS = {
     "validating": "Acceptance criteria (Validating)",
     "needs human": "Needs human: owner steps",
 }
+# The top ticket of To Do (CHB-125, docs/process/kanban.md, To Do) is the highest-ranked non-epic
+# ticket with no open ticket on a "Depends on" line. It starts once it has acceptance criteria: a
+# heading that starts with "Acceptance criteria" (not "Acceptance criteria (Validating)"), or a line
+# that is only that label, with text under it.
+# A heading that starts with the label (not the Validating section), or a line that is only the label.
+ACCEPTANCE_PATTERN = re.compile(
+    r"^#{1,6} +(?:\*\*)?acceptance criteria\b(?!\s*\(validating\))|^\s*(?:\*\*)?acceptance criteria\s*:?\s*(?:\*\*)?\s*:?\s*$",
+    re.IGNORECASE,
+)
+DEPENDS_PATTERN = re.compile(r"^\s*(?:[-*]|\d+\.)?\s*(?:\*\*)?depends on\b", re.IGNORECASE)
+SENTENCE_END = re.compile(r"\.(?:\s|$)")
+KEY_IN_TEXT = re.compile(rf"(?<![\w-]){PROJECT}-[1-9][0-9]*(?![\w-])")
+# Open tickets in rank order, for the top of To Do and for the dependencies. Discarded is in the
+# Done status category, so it is not open.
+OPEN_JQL = "statusCategory != Done ORDER BY Rank ASC"
+OPEN_FIELDS = ("status", "issuetype", "description")
+OPEN_LIMIT = 1000  # a search answer this long may be cut off; the rank and dependency checks refuse it
 
 EXIT_JIRA = 1
 EXIT_USAGE = 2
@@ -144,6 +164,7 @@ class Move:
 
     source: Column | None
     target: Column | None
+    columns: tuple[Column, ...] = ()
 
 
 def read_secret(
@@ -568,13 +589,14 @@ class Jira:
         fields = "summary,status,priority,assignee,issuetype,parent,description,comment"
         return self.request("GET", f"/rest/api/3/issue/{check_key(key)}?fields={fields}")
 
-    def search(self, jql: str, limit: int = 500) -> list[dict[str, Any]]:
+    def search(self, jql: str, limit: int = 500, fields: Sequence[str] | None = None) -> list[dict[str, Any]]:
         """Issues of the CHB project that match the JQL (scope_jql). An issue outside CHB raises JiraError."""
         jql = scope_jql(jql)
+        names = list(SEARCH_FIELDS if fields is None else fields)
         issues: list[dict[str, Any]] = []
         page_token = None
         while len(issues) < limit:
-            body: dict[str, Any] = {"jql": jql, "fields": SEARCH_FIELDS, "maxResults": min(100, limit - len(issues))}
+            body: dict[str, Any] = {"jql": jql, "fields": names, "maxResults": min(100, limit - len(issues))}
             if page_token:
                 body["nextPageToken"] = page_token
             page = self.request("POST", "/rest/api/3/search/jql", body)
@@ -610,7 +632,7 @@ class Jira:
         return str(created["key"])
 
     def transition(self, key: str, status: str) -> tuple[str, list[str]]:
-        """Move the issue. Return the status name and notices to print (a column below its minimum)."""
+        """Move the issue. Return the status name and notices to print (a minimum, the free slots)."""
         check_key(key)
         transitions = self.request("GET", f"/rest/api/3/issue/{key}/transitions")["transitions"]
         matches = [t for t in transitions if t["to"]["name"].casefold() == status.casefold()]
@@ -634,6 +656,16 @@ class Jira:
             )
             for column in config["columnConfig"]["columns"]
         ]
+
+    def open_issues(self) -> list[dict[str, Any]]:
+        """The CHB issues not in a Done-category status, in rank order, with status, type and description.
+
+        A cut-off answer would hide open dependencies and ranks, so it raises JiraError instead.
+        """
+        issues = self.search(OPEN_JQL, limit=OPEN_LIMIT, fields=OPEN_FIELDS)
+        if len(issues) >= OPEN_LIMIT:
+            raise JiraError(f"{OPEN_LIMIT} or more open tickets: the search may be cut off, so ranks and dependencies are unknown")
+        return issues
 
     def keys_in(self, column: Column, *, excluding: str) -> list[str]:
         """Keys of the CHB issues in the column's statuses, without `excluding`."""
@@ -742,7 +774,8 @@ def before_transition(jira: Jira, key: str, status: str, *, status_id: str) -> M
       while In Progress, In Review or Validating holds at least its board maximum of other tickets;
     - a move into Needs human is blocked while Needs human is full.
     No other move is blocked by a limit: a column can go over its max.
-    A failed read of the board raises JiraError and blocks too.
+    A start from To Do must also be the top ticket of To Do, with acceptance criteria (CHB-125, check_top_of_to_do).
+    A failed read of the board or of the open tickets raises JiraError and blocks too.
     """
     issue = jira.request("GET", f"/rest/api/3/issue/{key}?fields=status,description")["fields"]
     current_id = str(issue["status"]["id"])
@@ -758,14 +791,15 @@ def before_transition(jira: Jira, key: str, status: str, *, status_id: str) -> M
     columns = jira.board_columns()
     source = _column_of(columns, current_id)
     target = _column_of(columns, status_id)
+    move = Move(source, target, tuple(columns))
     if target is None or target == source:
-        return Move(source, target)
+        return move
     if target.name == IN_PROGRESS and (source is None or source.name not in (*STARTED_WORK, NEEDS_HUMAN)):
         limited = [column for column in columns if column.name in STARTED_WORK]
     elif target.name == NEEDS_HUMAN:
         limited = [target]
     else:
-        return Move(source, target)
+        return move
     full = []
     for column in limited:
         if column.max is None:
@@ -780,10 +814,128 @@ def before_transition(jira: Jira, key: str, status: str, *, status_id: str) -> M
             f"Leave {key} in {where}, comment on it, tell the owner and start nothing else. "
             "Only the owner overrides a limit, in the Jira UI, with a comment on the ticket (docs/process/kanban.md)."
         )
-    return Move(source, target)
+    if target.name == IN_PROGRESS and source is not None and source.name == TO_DO:
+        check_top_of_to_do(jira, key, issue.get("description"), columns)
+    return move
+
+
+def check_top_of_to_do(jira: Jira, key: str, description: Any, columns: list[Column]) -> None:
+    """Refuse (BlockedError) a start from To Do of a ticket that is not the top ticket of To Do,
+    or of the top ticket while it has no acceptance criteria (docs/process/kanban.md, To Do).
+
+    The ticket's own description comes from the read just made, so a stale search answer cannot
+    change its dependencies or criteria. Its rank comes from the search.
+    """
+    issues = jira.open_issues()
+    blocking = open_dependencies(description, {str(issue["key"]) for issue in issues})
+    mine = next((issue for issue in issues if issue["key"] == key), None)
+    reason = f"it depends on open tickets: {', '.join(blocking)}" if blocking else None
+    if reason is None and mine is not None and mine["fields"]["issuetype"]["name"] == "Epic":
+        reason = "it is an epic; start one of its tickets instead"
+    if reason:
+        raise BlockedError(
+            f"{key} cannot start: {reason}. Ranking it does not help; pull the top ticket of To Do (docs/process/kanban.md, To Do)."
+        )
+    if mine is None:
+        raise BlockedError(f"{key} is missing from the search of open tickets, so its rank is unknown. Try again in a minute.")
+    queue = top_queue(issues, columns, descriptions={key: description})
+    if key not in queue:  # the search still shows it outside To Do
+        raise BlockedError(f"{key} is not in To Do in the search of open tickets yet, so its rank is unknown. Try again in a minute.")
+    if queue[0] != key:
+        raise BlockedError(
+            f"{key} is not the top ticket of To Do: {queue[0]} is. Pull {queue[0]}, or, with the owner's go, "
+            f"rank {key} first (factory/bin/jira rank {key} --before {queue[0]}) and try again "
+            "(docs/process/kanban.md, To Do)."
+        )
+    if not has_acceptance_criteria(description):
+        raise BlockedError(
+            f"{key} has no acceptance criteria. Write them first: "
+            f'factory/bin/jira section {key} --heading "Acceptance criteria" --body-file FILE '
+            "(derive them from the ticket, its epic and the ADRs; ask the owner only for decisions that are the owner's)."
+        )
+
+
+def top_queue(issues: list[dict[str, Any]], columns: Sequence[Column], descriptions: dict[str, Any] | None = None) -> list[str]:
+    """Keys of the To Do tickets that can be pulled, in rank order. `issues` is open_issues().
+
+    A ticket is left out when it is an epic or a ticket on its "Depends on" line is open.
+    Missing acceptance criteria do not leave it out: the agent writes them (CHB-125).
+    `descriptions` maps keys to descriptions from a read newer than the search; those win.
+    """
+    to_do = next((column for column in columns if column.name == TO_DO), None)
+    if to_do is None:
+        return []
+    open_keys = {str(issue["key"]) for issue in issues}
+    queue = []
+    for issue in issues:
+        fields = issue["fields"]
+        if str(fields["status"]["id"]) not in to_do.status_ids or fields["issuetype"]["name"] == "Epic":
+            continue
+        description = (descriptions or {}).get(issue["key"], fields.get("description"))
+        if not open_dependencies(description, open_keys):
+            queue.append(str(issue["key"]))
+    return queue
+
+
+def open_dependencies(description: Any, open_keys: set[str]) -> list[str]:
+    """The keys on the description's "Depends on" lines that are still open."""
+    return [key for key in dependencies(description) if key in open_keys]
+
+
+def has_acceptance_criteria(description: Any) -> bool:
+    """True when an "Acceptance criteria" heading or label line has a non-blank line under it.
+
+    ACCEPTANCE_PATTERN defines the heading and the label line, in any case. Its section ends at the next
+    heading (of the same or a higher level, when the line is a heading itself).
+    """
+    lines = adf_to_text(description).splitlines()
+    for start, line in enumerate(lines):
+        if not ACCEPTANCE_PATTERN.match(line):
+            continue
+        heading = HEADING_PATTERN.fullmatch(line)
+        level = len(heading.group(1)) if heading else 6
+        for following in lines[start + 1 :]:
+            other = HEADING_PATTERN.fullmatch(following)
+            if other and len(other.group(1)) <= level:
+                break
+            if following.strip() and not other:
+                return True
+    return False
+
+
+def dependencies(description: Any) -> list[str]:
+    """CHB keys in the first sentence of a line that starts with "Depends on", and, when that line
+    ends with ":", in the list under it: the indented lines that follow it in the same list item,
+    or the list right after its paragraph. Other mentions of tickets are not dependencies."""
+    content = description.get("content", []) if isinstance(description, dict) else []
+    keys: list[str] = []
+    for index, node in enumerate(content):
+        lines = adf_to_text(node).strip("\n").splitlines()
+        for number, line in enumerate(lines):
+            if not DEPENDS_PATTERN.match(line):
+                continue
+            keys.extend(KEY_IN_TEXT.findall(SENTENCE_END.split(line, maxsplit=1)[0]))  # first sentence only
+            if not line.rstrip().rstrip("*").endswith(":"):
+                continue
+            nested = []
+            for other in lines[number + 1 :]:
+                if not other[:1].isspace():
+                    break
+                nested.append(other)
+            keys.extend(KEY_IN_TEXT.findall("\n".join(nested)))
+            following = content[index + 1] if index + 1 < len(content) else None
+            last = number == len(lines) - 1
+            if last and isinstance(following, dict) and following.get("type") in ("bulletList", "orderedList"):
+                keys.extend(KEY_IN_TEXT.findall(adf_to_text(following)))
+    return list(dict.fromkeys(keys))
 
 
 def after_transition(jira: Jira, key: str, move: Move) -> list[str]:
+    """Notices after a move: a column left below its minimum, then the free In Progress slots."""
+    return _minimum_notice(jira, key, move) + _free_slot_notice(jira, key, move)
+
+
+def _minimum_notice(jira: Jira, key: str, move: Move) -> list[str]:
     """After a move out of a column with a board minimum, say when that column is below it.
 
     The minimum is a signal, never a block: a failed count becomes a notice, not an error.
@@ -799,10 +951,45 @@ def after_transition(jira: Jira, key: str, move: Move) -> list[str]:
         return [f"could not check the {source.name} minimum: {error}"]
     if count >= source.min:
         return []
-    notice = f"{source.name} is below its minimum ({count}/{source.min})"
-    if source.name == IN_PROGRESS:
-        notice += ": idle, pull the top ticket of To Do"
-    return [notice]
+    return [f"{source.name} is below its minimum ({count}/{source.min})"]
+
+
+def _free_slot_notice(jira: Jira, key: str, move: Move) -> list[str]:
+    """`In Progress 2/3: 1 slot free; next: CHB-123` after a move between columns (CHB-125).
+
+    Nothing after a move within one column or to a status on no column, when In Progress has no
+    max, or when In Progress, In Review or Validating is at its max (starting is blocked then).
+    Search can still list the moved key in its old status, so it is left out of the search answer
+    and counted in its new column by hand; it is never "next".
+    A failed search becomes a notice: the move is done.
+    """
+    if move.target is None or move.target == move.source:
+        return []
+    columns = {column.name: column for column in move.columns}
+    in_progress = columns.get(IN_PROGRESS)
+    if in_progress is None or in_progress.max is None:
+        return []
+    try:
+        issues = [issue for issue in jira.open_issues() if issue["key"] != key]
+    except JiraError as error:  # the move is done: report, do not fail it
+        return [f"could not check free {IN_PROGRESS} slots: {error}"]
+    counts: dict[str, int] = {}
+    for name in STARTED_WORK:
+        column = columns.get(name)
+        if column is None:
+            continue
+        here = sum(1 for issue in issues if str(issue["fields"]["status"]["id"]) in column.status_ids)
+        counts[name] = here + (1 if move.target == column else 0)
+        if column.max is not None and counts[name] >= column.max:
+            return []
+    free = in_progress.max - counts[IN_PROGRESS]
+    descriptions = {issue["key"]: issue["fields"].get("description") for issue in issues}
+    queue = [
+        top if has_acceptance_criteria(descriptions[top]) else f"{top} (needs acceptance criteria)"
+        for top in top_queue(issues, move.columns)[:free]
+    ]
+    following = ", ".join(queue) or f"nothing to start in {TO_DO}"
+    return [f"{IN_PROGRESS} {counts[IN_PROGRESS]}/{in_progress.max}: {free} slot{'s' if free > 1 else ''} free; next: {following}"]
 
 
 def has_section(description: Any, heading: str) -> bool:
