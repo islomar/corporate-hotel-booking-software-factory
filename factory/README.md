@@ -410,7 +410,7 @@ Like the other Bash hooks, it reads the command text only, denies on unreadable 
 
 ## Hook: what to finish first, at session start
 
-`.claude/settings.json` runs `factory/hooks/validating_sweep.py` when a session starts, resumes, clears or compacts (SessionStart hook, CHB-140).
+`.claude/settings.json` runs `factory/hooks/validating_sweep.py` on every SessionStart event: start, resume, `/clear`, compaction and fork (CHB-140).
 On 2026-11-10 a 05:15 UTC Dependabot run unblocked two Validating tickets. The next session did not look at them until the owner asked.
 
 The hook adds this to the agent's context before the first prompt:

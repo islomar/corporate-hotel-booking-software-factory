@@ -3,9 +3,9 @@
 import contextlib
 import io
 import json
-import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -313,16 +313,17 @@ class IsolatedRunTest(unittest.TestCase):
     """Run the hook as settings.json does. Without gh and secret-tool on PATH both parts fail open."""
 
     def test_python3_isolated_fails_open_without_tools(self) -> None:
-        env = {"PATH": str(Path(sys.executable).parent), "HOME": os.environ.get("HOME", "/tmp")}
-        result = subprocess.run(
-            [sys.executable, "-I", str(HOOK)],
-            input=json.dumps({"hook_event_name": "SessionStart", "source": "startup"}),
-            capture_output=True,
-            text=True,
-            timeout=30,
-            env=env,
-            cwd=ROOT,
-        )
+        # An empty PATH and HOME: no gh, secret-tool or op, and no gh login. sys.executable is absolute.
+        with tempfile.TemporaryDirectory() as empty:
+            result = subprocess.run(
+                [sys.executable, "-I", str(HOOK)],
+                input=json.dumps({"hook_event_name": "SessionStart", "source": "startup"}),
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env={"PATH": empty, "HOME": empty},
+                cwd=ROOT,
+            )
 
         self.assertEqual(result.returncode, 0, result.stderr)
         context = _context(json.loads(result.stdout))
