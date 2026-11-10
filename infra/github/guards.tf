@@ -30,7 +30,7 @@ resource "terraform_data" "guards" {
     }
     precondition {
       condition     = try(jsondecode(data.github_rest_api.codeql_default_setup.body).state, "") == "configured"
-      error_message = "CodeQL default setup is off. Turn it on: GitHub > Settings > Advanced Security > Code scanning > CodeQL analysis > Set up > Default > Enable CodeQL (CHB-134)."
+      error_message = "CodeQL default setup is off (state: ${try(jsondecode(data.github_rest_api.codeql_default_setup.body).state, "unreadable response")}). Turn it on: GitHub > Settings > Advanced Security > Code scanning > CodeQL analysis > Set up > Default > Enable CodeQL (CHB-134)."
     }
     precondition {
       condition     = length(data.github_actions_secrets.repository.secrets) == 0
