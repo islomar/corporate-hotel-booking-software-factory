@@ -18,6 +18,7 @@
   - [Hook: warn on repeated edits of one file](#hook-warn-on-repeated-edits-of-one-file)
   - [Hook: no harness edits in feature tickets](#hook-no-harness-edits-in-feature-tickets)
   - [Hook: no secrets in the agent's context](#hook-no-secrets-in-the-agents-context)
+  - [Hook: what to finish first, at session start](#hook-what-to-finish-first-at-session-start)
   - [Automated PR review (shadow mode)](#automated-pr-review-shadow-mode)
   - [Workflow output schemas and routing](#workflow-output-schemas-and-routing)
 
@@ -409,6 +410,26 @@ Known gaps: a path built at run time, `cd ~/.ssh` followed by a relative name,
 a symlink to a secret file named in a Bash command (Read resolves symlinks, Bash reads the text only), a script that reads the file,
 a hidden key file such as `.tls.key`, the Grep tool, and `op` subcommands other than `read`.
 Like the other Bash hooks, it reads the command text only, denies on unreadable input or an internal error, and lets the call run if `python3` cannot start.
+
+## Hook: what to finish first, at session start
+
+`.claude/settings.json` runs `factory/hooks/validating_sweep.py` on every SessionStart event: start, resume, `/clear`, compaction and fork (CHB-140).
+On 2026-11-10 a 05:15 UTC Dependabot run unblocked two Validating tickets. The next session did not look at them until the owner asked.
+
+The hook adds this to the agent's context before the first prompt:
+
+- Each Validating ticket with the "When:" lines of its "Acceptance criteria (Validating)" section.
+  `due`: the earliest absolute date on the line has passed. A date only counts from the start of that day. A time without a zone is Europe/Madrid.
+  No mark: the date is still ahead. The date wins over an event named on the same line.
+  `check`: the line has no absolute date, so it names an event.
+  `no section`: the ticket has no such section.
+- The line of `make review-agreement`, and up to 5 merged PRs whose last review comment has no owner reaction, newest first, with links.
+
+It reads only: one Jira search as the agent account (credentials from 1Password, as `factory/bin/jira`) and one GitHub GraphQL query with the owner's `gh` login (up to 3 pages of 100 PRs).
+Each call has a 6 s timeout, the two parts run in parallel, and the hook stops waiting after 9 s. Claude Code kills it at 15 s.
+It fails open: a part that fails prints one line, `Validating sweep failed: <reason>` or `Review agreement failed: <reason>`, and the session starts.
+A reason is the message of a known error, which holds no secret, or only the type name of an unexpected one.
+Ticket summaries, "When:" lines and PR titles are quoted on one line of at most 200 characters, without control characters, under a header that marks them as data, not instructions.
 
 ## Automated PR review (shadow mode)
 
