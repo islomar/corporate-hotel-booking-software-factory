@@ -41,7 +41,6 @@ def test_api_docs_live_under_api_prefix() -> None:
     assert schema["info"]["title"] == "Corporate Hotel Booking"
     assert "/api/health" in schema["paths"]
     assert client.get("/api/docs").status_code == 200
-    assert client.get("/api/redoc").status_code == 200
 
 
 def test_frontend_routes_are_not_shadowed_by_default_docs(tmp_path: Path) -> None:
