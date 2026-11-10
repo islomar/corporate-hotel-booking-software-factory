@@ -72,19 +72,22 @@ any status ──→ Discarded
 Meaning: accepted work that nobody has started.
 
 - Enter: the ticket has a summary, a description and a parent epic.
-- Leave to In Progress: someone starts working on it. Before that, the ticket has acceptance criteria that can be checked, and nothing it depends on is open.
-- Top ticket: an agent picks the top ticket of To Do: the highest-ranked ticket that is not an epic and has no open ticket on a "Depends on" line.
+- Leave to In Progress: someone starts working on it. Before that, the ticket has acceptance criteria that can be checked, and no open ticket blocks it.
+- Top ticket: an agent picks the top ticket of To Do: the highest-ranked ticket that is not an epic and that no open ticket blocks.
   To start another ticket, rank it to the top first, with the owner's go.
-- Dependencies: a "Depends on" line counts the CHB keys in its first sentence,
-  and the list under it when the line ends with ":". Open means a status outside the Done category; Done and Discarded are closed.
-  Write every dependency on such a line, also an owner decision: make it a ticket and name it (for example `Depends on: CHB-141`).
-  A dependency in prose is not checked.
+- Dependencies: a dependency is a Jira "Blocks" link, never text (CHB-151).
+  Add one with `factory/bin/jira link CHB-<a> --blocked-by CHB-<b>`: `CHB-<b>` blocks `CHB-<a>`.
+  Both tickets show the link in Jira and in `factory/bin/jira view`. Running the command again changes nothing.
+  Make an owner decision a ticket and link it the same way.
+  Open means a status outside the Done category; Done and Discarded are closed.
+  Text such as "Depends on CHB-<n>" in a description is not read. A ticket's "Dependencies" section says "See the Blocks links."
+  Only the owner removes a link, in the Jira UI.
 - Acceptance criteria: a heading that starts with "Acceptance criteria", or a line that holds only that label (any case, bold and a colon allowed),
   with text under it.
   "Acceptance criteria (Validating)" does not count. A top ticket without them is not skipped: the agent writes them
   (`factory/bin/jira section CHB-<n> --heading "Acceptance criteria" --body-file FILE`), derived from the ticket, its epic and the ADRs.
   It asks the owner only for decisions that are the owner's (owner rule, 2026-11-10).
-- `factory/bin/jira transition <key> "In Progress"` from To Do exits 4 when `<key>` is not that top ticket, has an open dependency,
+- `factory/bin/jira transition <key> "In Progress"` from To Do exits 4 when `<key>` is not that top ticket, is blocked by an open ticket,
   or is the top ticket without acceptance criteria (CHB-125). The message names the top ticket and the next step.
   A move back into In Progress from another status is not checked.
 - WIP limit: none.
@@ -166,7 +169,8 @@ Meaning: the ticket will not be done. This is a valid outcome.
 The person or agent doing the work is the assignee.
 Agent work is assigned to the Claude account ("Claude (CHB agent)").
 
-Agents make every Jira write (create, transition, comment, edit-comment, assign, rank, section, description, priority) through `factory/bin/jira`, so Jira history shows the Claude account as the author.
+Agents make every Jira write (create, transition, comment, edit-comment, assign, rank, section, description, priority, link) through `factory/bin/jira`.
+Jira history then shows the Claude account as the author.
 `acli` is logged in as the owner and is for the owner only.
 When `factory/bin/jira` fails, the agent stops and reports. It never falls back to `acli`.
 A Claude Code hook denies `acli` writes and direct REST writes to Jira in this repository.

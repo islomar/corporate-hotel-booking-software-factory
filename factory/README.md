@@ -144,6 +144,7 @@ factory/bin/jira section CHB-12 --heading "Acceptance criteria (Validating)" --b
 factory/bin/jira priority CHB-12 High   # High, Medium or Low (docs/process/priorities.md)
 factory/bin/jira description CHB-12 --file description.md   # replaces the whole description
 factory/bin/jira edit-comment CHB-12 10071 --body-file comment.md   # the agent's own comments only
+factory/bin/jira link CHB-88 --blocked-by CHB-146   # a "Blocks" link: CHB-146 blocks CHB-88
 ```
 
 Text files are plain text. Blank lines separate paragraphs and URLs become links.
@@ -163,7 +164,15 @@ It reads, then writes: it overwrites an edit that someone else makes between the
 In a section headed "Acceptance criteria (Validating)", each "When:" line needs a "Speed up:" line before the next "When:" line (CHB-133).
 A bad heading, an empty body, a "When:" line without "Speed up:", a duplicate key or more than 50 issues exit 2 before the wrapper reads 1Password.
 
-`view` shows a bullet list as lines that start with a dash.
+`view` shows a bullet list as lines that start with a dash, and each issue link as a line such as `Is blocked by: CHB-146 (To Do)` or `Blocks: CHB-88 (To Do)`.
+
+`link CHB-<a> --blocked-by CHB-<b>` creates a Jira "Blocks" link with `POST /rest/api/3/issueLink`.
+The POST body names the sides the other way round from a read: the blocker `CHB-<b>` is `inwardIssue` and `CHB-<a>` is `outwardIssue`.
+A read of `CHB-<a>` then lists `CHB-<b>` as `inwardIssue` ("is blocked by"). A live check on 2026-11-10 showed it.
+It reads the links of `CHB-<a>` first and changes nothing when the link exists.
+It reads them again after the POST and exits 1 when `CHB-<b>` does not show as a blocker.
+A key outside CHB or a ticket linked to itself exits 2 before the wrapper reads 1Password.
+It never removes a link: the owner does that in the Jira UI.
 
 Exit codes: 0 done, 1 Jira refused or failed, 2 usage error, 3 no credential (no service account token in the keyring, or `op` failed), 4 a board rule blocks the transition.
 On 3 the agent stops and reports. On 4 the ticket does not move: the agent comments on it and reports.
@@ -173,7 +182,7 @@ It can delete issues and change project and board settings through the REST API.
 The wrapper is the guardrail:
 
 - it accepts only `CHB-<n>` keys and creates only Tasks under a CHB Epic;
-- `rank` changes only the rank of issues, and `section` writes only the description field;
+- `rank` changes only the rank of issues, `section` writes only the description field, and `link` only adds "Blocks" links between two CHB issues;
 - it has no delete, no project, board, workflow or permission write, and no raw request command;
 - it refuses HTTP redirects, so the token is never sent to another host.
 
@@ -194,9 +203,11 @@ The 1Password service account narrows who can read it to processes that can read
 - the move starts work from To Do, passes the limits, and the ticket is not the top ticket of To Do, or is the top ticket without acceptance criteria (CHB-125).
   The top ticket and acceptance criteria are defined in `docs/process/kanban.md`, To Do.
   One search, `statusCategory != Done ORDER BY Rank ASC`, gives the rank order and the open tickets.
-  The top ticket is the first non-epic ticket in To Do with no open ticket on a "Depends on" line. Missing acceptance criteria do not skip it.
-  The ticket's own dependencies and criteria come from its description as just read.
-  The message names the open dependencies (or says the ticket is an epic), names the top ticket and the `rank` command that puts the ticket first,
+  The search also returns each ticket's `issuelinks`. A ticket is blocked by every ticket on an "is blocked by" link of type "Blocks" that is still open (`open_blockers`, CHB-151).
+  "Depends on" text is not read.
+  The top ticket is the first non-epic ticket in To Do that no open ticket blocks. Missing acceptance criteria do not skip it.
+  The ticket's own links and criteria come from the read just made.
+  The message names the open blockers (or says the ticket is an epic), names the top ticket and the `rank` command that puts the ticket first,
   or gives the `section` command that writes the missing "Acceptance criteria".
   A ticket missing from that search has no known rank and is refused too: try again in a minute.
 
@@ -210,7 +221,7 @@ After every move between columns it prints the free In Progress slots and the ne
 `In Progress 2/3: 1 slot free; next: CHB-123`, `next: CHB-122 (needs acceptance criteria)`, or `next: nothing to start in To Do`.
 It prints no such line when In Progress has no max, or when In Progress, In Review or Validating is at its max.
 The moved ticket is counted in its new column, never in its old one, and is never "next".
-It blocks the To Do tickets that depend on it unless it moved to Done or Discarded, whatever the search still shows (CHB-143).
+It blocks the To Do tickets it has "Blocks" links to unless it moved to Done or Discarded, whatever the search still shows (CHB-143).
 The start check and this line take the top tickets from one function, `top_queue`.
 If a count fails, `transition` prints a notice instead and still exits 0: the ticket has moved.
 Two agents that move tickets at the same moment can both pass the check. The owner overrides a limit in the Jira UI, with a comment.

@@ -128,8 +128,25 @@ def description_with(*headings: str, body: str = "Some text.") -> dict[str, Any]
     return {"type": "doc", "version": 1, "content": content}
 
 
-def issue_in(status: str, description: Any = None) -> dict[str, Any]:
-    return {"fields": {"status": {"name": status, "id": STATUS_IDS[status]}, "description": description}}
+def issue_in(status: str, description: Any = None, links: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    fields = {"status": {"name": status, "id": STATUS_IDS[status]}, "description": description, "issuelinks": links or []}
+    return {"fields": fields}
+
+
+def blocked_by(*keys: str, category: str = "indeterminate") -> list[dict[str, Any]]:
+    """Issue links as Jira lists them on the blocked ticket: "is blocked by" each key (CHB-151)."""
+    linked = {"fields": {"status": {"name": "x", "statusCategory": {"key": category}}}}
+    return [{"id": str(n), "type": BLOCKS_TYPE, "inwardIssue": {"key": key, **linked}} for n, key in enumerate(keys, 100)]
+
+
+def blocks(*keys: str) -> list[dict[str, Any]]:
+    """Issue links as Jira lists them on the blocking ticket: "blocks" each key."""
+    return [{"id": str(n), "type": BLOCKS_TYPE, "outwardIssue": {"key": key}} for n, key in enumerate(keys, 200)]
+
+
+BLOCKS_TYPE = {"id": "10000", "name": "Blocks", "inward": "is blocked by", "outward": "blocks"}
+RELATES_TYPE = {"id": "10003", "name": "Relates", "inward": "relates to", "outward": "relates to"}
+ISSUE_FIELDS = "status,description,issuelinks"
 
 
 def doc(markdown: str) -> dict[str, Any]:
@@ -142,19 +159,24 @@ OPEN_JQL = "project = CHB AND (statusCategory != Done) ORDER BY Rank ASC"
 
 
 def keys_answer(
-    by_status: dict[str, list[str]], descriptions: dict[str, Any] | None = None, epics: tuple[str, ...] = ()
+    by_status: dict[str, list[str]],
+    descriptions: dict[str, Any] | None = None,
+    epics: tuple[str, ...] = (),
+    links: dict[str, list[dict[str, Any]]] | None = None,
 ) -> Any:
     """Answer a JQL search like Jira would.
 
     The open-tickets search (statusCategory != Done, in rank order) gets every key listed for a
-    status that is not Done, with its status, type and description (READY unless given).
+    status that is not Done, with its status, type, description (READY unless given) and issue links.
     A column count (status in (...) AND key != X) gets the keys of the statuses it names, minus X.
     """
     descriptions = descriptions or {}
+    links = links or {}
 
     def answer(body: dict[str, Any]) -> dict[str, Any]:
         jql = body["jql"]
         if "statusCategory != Done" in jql:
+            assert "issuelinks" in body["fields"], "the open search must ask for the issue links"
             issues = [
                 {
                     "key": k,
@@ -162,6 +184,7 @@ def keys_answer(
                         "status": {"name": name, "id": STATUS_IDS[name]},
                         "issuetype": {"name": "Epic" if k in epics else "Task"},
                         "description": descriptions.get(k, READY),
+                        "issuelinks": links.get(k, []),
                     },
                 }
                 for name, ks in by_status.items()
@@ -183,18 +206,20 @@ def transition_fake(
     board: Any = None,
     descriptions: dict[str, Any] | None = None,
     epics: tuple[str, ...] = (),
+    links: dict[str, list[dict[str, Any]]] | None = None,
 ) -> FakeJira:
     """CHB-12 sits in `current`. A ticket in To Do is listed in To Do unless the test places it."""
     by_status = dict(by_status or {})
     if current == "To Do" and "CHB-12" not in by_status.get("To Do", []):
         by_status["To Do"] = ["CHB-12", *by_status.get("To Do", [])]
     descriptions = {"CHB-12": description, **(descriptions or {})}
+    links = links or {}
     return FakeJira(
         {
             ("GET", "/rest/api/3/issue/CHB-12/transitions"): TRANSITIONS,
-            ("GET", "/rest/api/3/issue/CHB-12?fields=status,description"): issue_in(current, description),
+            ("GET", f"/rest/api/3/issue/CHB-12?fields={ISSUE_FIELDS}"): issue_in(current, description, links.get("CHB-12")),
             ("GET", BOARD): board_config(**BOARD_LIMITS) if board is None else board,
-            ("POST", SEARCH): keys_answer(by_status, descriptions, epics),
+            ("POST", SEARCH): keys_answer(by_status, descriptions, epics, links),
             ("POST", "/rest/api/3/issue/CHB-12/transitions"): None,
         }
     )
@@ -212,10 +237,14 @@ def searches_before_the_move(fake: FakeJira) -> list[str]:
 
 
 def _search_changes_at_the_move(
-    fake: FakeJira, before: dict[str, list[str]], after: dict[str, list[str]], descriptions: dict[str, Any]
+    fake: FakeJira,
+    before: dict[str, list[str]],
+    after: dict[str, list[str]],
+    descriptions: dict[str, Any],
+    links: dict[str, list[dict[str, Any]]] | None = None,
 ) -> Any:
     """Answer searches from `before` until the transition POST, then from `after`."""
-    old, new = keys_answer(before, descriptions), keys_answer(after, descriptions)
+    old, new = keys_answer(before, descriptions, links=links), keys_answer(after, descriptions, links=links)
 
     def answer(body: dict[str, Any]) -> dict[str, Any]:
         moved = any((method, path) == ("POST", "/rest/api/3/issue/CHB-12/transitions") for method, path, _, _ in fake.requests)
@@ -462,30 +491,28 @@ class ReadinessTest(unittest.TestCase):
             with self.subTest(name):
                 self.assertFalse(jira.has_acceptance_criteria(None if markdown is None else doc(markdown)))
 
-    def test_dependencies_on_the_depends_on_line_and_in_the_list_after_its_colon(self) -> None:
-        cases = {
-            "inline": ("Depends on CHB-17 (uptime check). Not CHB-3.", ["CHB-17"]),
-            "list after a colon": (
-                "Depends on (open, so this ticket cannot start yet):\n\n- CHB-91: the check.\n- CHB-88: a test.\n\n- AC1. CHB-5 stays.",
-                ["CHB-91", "CHB-88"],
-            ),
-            "list after a line without a colon": ("Depends on CHB-1.\n\n- CHB-2 is unrelated.", ["CHB-1"]),
-            "bullet": ("- Depends on CHB-4.\n- Mentions CHB-6.", ["CHB-4"]),
-            "nested list under a bullet": (
-                "- Depends on:\n  - CHB-4: a check.\n  - CHB-5: a test.\n- Mentions CHB-6.",
-                ["CHB-4", "CHB-5"],
-            ),
-            "colon form": ("Depends on: CHB-141 (agreement tally).", ["CHB-141"]),
-            "mentions only": ("See CHB-3 and CHB-4.", []),
-        }
-        for name, (markdown, keys) in cases.items():
-            with self.subTest(name):
-                self.assertEqual(jira.dependencies(doc(markdown)), keys)
+    def test_depends_on_text_is_not_read(self) -> None:
+        """CHB-151: dependencies are links only; a "Depends on" line in the description blocks nothing."""
+        fields = {"description": doc("Depends on: CHB-91.\n\n- Depends on CHB-88."), "issuelinks": []}
+        self.assertEqual(jira.blockers(fields), [])
 
-    def test_open_dependencies(self) -> None:
-        dependent = doc("Depends on CHB-91 and CHB-88.")
-        self.assertEqual(jira.open_dependencies(dependent, open_keys={"CHB-91", "CHB-7"}), ["CHB-91"])
-        self.assertEqual(jira.open_dependencies(dependent, open_keys={"CHB-7"}), [])
+    def test_blockers_are_the_is_blocked_by_links(self) -> None:
+        """CHB-151: a "Blocks" link with the other ticket as inwardIssue means this ticket is blocked by it."""
+        fields = {"description": READY, "issuelinks": [*blocked_by("CHB-91", "CHB-88"), *blocks("CHB-5")]}
+        self.assertEqual(jira.blockers(fields), ["CHB-91", "CHB-88"])
+
+    def test_other_link_types_do_not_block(self) -> None:
+        relates = [{"id": "1", "type": RELATES_TYPE, "inwardIssue": {"key": "CHB-91"}}]
+        self.assertEqual(jira.blockers({"description": READY, "issuelinks": relates}), [])
+
+    def test_no_links_field_means_no_blockers(self) -> None:
+        self.assertEqual(jira.blockers({"description": READY}), [])
+        self.assertEqual(jira.blockers({"description": READY, "issuelinks": None}), [])
+
+    def test_open_blockers(self) -> None:
+        fields = {"description": READY, "issuelinks": blocked_by("CHB-91", "CHB-88")}
+        self.assertEqual(jira.open_blockers(fields, open_keys={"CHB-91", "CHB-7"}), ["CHB-91"])
+        self.assertEqual(jira.open_blockers(fields, open_keys={"CHB-7"}), [])
 
 
 class TopTicketTest(unittest.TestCase):
@@ -537,7 +564,7 @@ class TopTicketTest(unittest.TestCase):
         fake = transition_fake(
             "To Do",
             {"To Do": ["CHB-9", "CHB-49", "CHB-12", "CHB-5"], "In Progress": ["CHB-91"]},
-            descriptions={"CHB-49": doc("Depends on CHB-91.\n\n## Acceptance criteria\n\n- A test.")},
+            links={"CHB-49": blocked_by("CHB-91")},
             epics=("CHB-9",),
         )
         code, _, _ = _run(["transition", "CHB-12", "In Progress"], fake)
@@ -546,29 +573,66 @@ class TopTicketTest(unittest.TestCase):
         refused = transition_fake(
             "To Do",
             {"To Do": ["CHB-9", "CHB-49", "CHB-5", "CHB-12"], "In Progress": ["CHB-91"]},
-            descriptions={"CHB-49": doc("Depends on CHB-91.")},
+            links={"CHB-49": blocked_by("CHB-91")},
             epics=("CHB-9",),
         )
         code, _, err = _run(["transition", "CHB-12", "In Progress"], refused)
         self.assertEqual(code, 4)
         self.assertIn("CHB-12 is not the top ticket of To Do: CHB-5 is", err)
 
-    def test_a_ticket_with_an_open_dependency_is_refused_with_the_reason(self) -> None:
+    def test_a_ticket_with_depends_on_text_but_no_link_starts(self) -> None:
+        """CHB-151: the text is not read any more."""
         description = doc("Depends on CHB-91.\n\nAcceptance criteria:\n\n- A test.")
         fake = transition_fake("To Do", {"In Review": ["CHB-91"]}, description=description)
-        code, _, err = _run(["transition", "CHB-12", "In Progress"], fake)
-
-        self.assertEqual(code, 4)
-        self.assertIn("CHB-12 cannot start: it depends on open tickets: CHB-91", err)
-        self.assertEqual(fake.writes(), [])
-
-    def test_a_dependency_missing_from_the_open_search_does_not_count(self) -> None:
-        """Done and Discarded are both in the Done category, so the open search leaves them out."""
-        description = doc("Depends on CHB-91.\n\n## Acceptance criteria\n\n- A test.")
-        fake = transition_fake("To Do", {"Done": ["CHB-91"]}, description=description)
         code, _, _ = _run(["transition", "CHB-12", "In Progress"], fake)
 
         self.assertEqual(code, 0)
+
+    def test_a_ticket_blocked_by_an_open_ticket_cannot_start(self) -> None:
+        """CHB-151 AC1: an "is blocked by" link to an open ticket blocks the start, with the reason."""
+        fake = transition_fake("To Do", {"In Review": ["CHB-91"]}, links={"CHB-12": blocked_by("CHB-91")})
+        code, _, err = _run(["transition", "CHB-12", "In Progress"], fake)
+
+        self.assertEqual(code, 4)
+        self.assertIn("CHB-12 cannot start: it is blocked by open tickets: CHB-91", err)
+        self.assertEqual(fake.writes(), [])
+
+    def test_a_ticket_blocked_by_a_done_ticket_starts(self) -> None:
+        """CHB-151 AC1: Done and Discarded leave the open search, so their links no longer block."""
+        fake = transition_fake("To Do", {"Done": ["CHB-91"]}, links={"CHB-12": blocked_by("CHB-91", category="done")})
+        code, _, _ = _run(["transition", "CHB-12", "In Progress"], fake)
+
+        self.assertEqual(code, 0)
+
+    def test_a_link_in_the_fresh_read_counts_even_when_the_search_misses_it(self) -> None:
+        fake = transition_fake("To Do", {"To Do": ["CHB-12"], "In Review": ["CHB-91"]})
+        fake.routes[("GET", f"/rest/api/3/issue/CHB-12?fields={ISSUE_FIELDS}")] = issue_in("To Do", READY, blocked_by("CHB-91"))
+        code, _, err = _run(["transition", "CHB-12", "In Progress"], fake)
+
+        self.assertEqual(code, 4)
+        self.assertIn("blocked by open tickets: CHB-91", err)
+
+    def test_the_blocking_side_of_a_link_is_not_blocked(self) -> None:
+        fake = transition_fake("To Do", {"To Do": ["CHB-12", "CHB-5"]}, links={"CHB-12": blocks("CHB-5"), "CHB-5": blocked_by("CHB-12")})
+        code, _, _ = _run(["transition", "CHB-12", "In Progress"], fake)
+
+        self.assertEqual(code, 0)
+
+    def test_a_ticket_blocked_by_an_open_ticket_is_skipped_when_finding_the_top(self) -> None:
+        fake = transition_fake(
+            "To Do", {"To Do": ["CHB-49", "CHB-12"], "In Progress": ["CHB-91"]}, links={"CHB-49": blocked_by("CHB-91")}
+        )
+        code, _, _ = _run(["transition", "CHB-12", "In Progress"], fake)
+
+        self.assertEqual(code, 0)
+
+    def test_a_relates_link_does_not_skip_a_ticket(self) -> None:
+        relates = [{"id": "1", "type": RELATES_TYPE, "inwardIssue": {"key": "CHB-91"}}]
+        fake = transition_fake("To Do", {"To Do": ["CHB-49", "CHB-12"], "In Progress": ["CHB-91"]}, links={"CHB-49": relates})
+        code, _, err = _run(["transition", "CHB-12", "In Progress"], fake)
+
+        self.assertEqual(code, 4)
+        self.assertIn("CHB-12 is not the top ticket of To Do: CHB-49 is", err)
 
     def test_moving_back_into_in_progress_is_not_checked(self) -> None:
         for current in ["In Review", "Validating", "Needs human"]:
@@ -588,11 +652,9 @@ class TopTicketTest(unittest.TestCase):
         self.assertEqual(fake.writes(), [])
 
     def test_the_fresh_read_wins_over_a_stale_search_answer(self) -> None:
-        """The search still holds an old description with an open dependency; the fresh read has none."""
-        fake = transition_fake(
-            "To Do", {"To Do": ["CHB-12", "CHB-5"], "In Review": ["CHB-91"]}, descriptions={"CHB-12": doc("Depends on CHB-91.")}
-        )
-        fake.routes[("GET", "/rest/api/3/issue/CHB-12?fields=status,description")] = issue_in("To Do", READY)
+        """The search still holds an old link to an open ticket; the fresh read has none."""
+        fake = transition_fake("To Do", {"To Do": ["CHB-12", "CHB-5"], "In Review": ["CHB-91"]}, links={"CHB-12": blocked_by("CHB-91")})
+        fake.routes[("GET", f"/rest/api/3/issue/CHB-12?fields={ISSUE_FIELDS}")] = issue_in("To Do", READY)
         code, _, _ = _run(["transition", "CHB-12", "In Progress"], fake)
 
         self.assertEqual(code, 0)
@@ -643,7 +705,7 @@ class FreeSlotTest(unittest.TestCase):
         fake = transition_fake(
             "In Progress",
             {"In Progress": ["CHB-1", "CHB-2", "CHB-91"], "To Do": ["CHB-9", "CHB-50", "CHB-123", "CHB-7"]},
-            descriptions={"CHB-50": doc("Depends on CHB-91.")},
+            links={"CHB-50": blocked_by("CHB-91")},
             epics=("CHB-9",),
             board=board_config(**{**BOARD_LIMITS, "In Progress": {"min": 1, "max": 4}}),
         )
@@ -668,7 +730,7 @@ class FreeSlotTest(unittest.TestCase):
 
     def test_no_startable_ticket_says_so(self) -> None:
         fake = transition_fake(
-            "In Progress", {"In Progress": ["CHB-1"], "In Review": ["CHB-91"], "To Do": ["CHB-50"]}, descriptions={"CHB-50": doc("Depends on CHB-91.")}
+            "In Progress", {"In Progress": ["CHB-1"], "In Review": ["CHB-91"], "To Do": ["CHB-50"]}, links={"CHB-50": blocked_by("CHB-91")}
         )
         code, out, _ = _run(["transition", "CHB-12", "In Review"], fake)
 
@@ -684,7 +746,7 @@ class FreeSlotTest(unittest.TestCase):
 
     def test_a_ticket_that_depends_on_the_moved_ticket_is_not_next(self) -> None:
         """CHB-143: the moved ticket is still open, so its dependents cannot start, whatever the search still shows."""
-        depends_on_12 = doc("Depends on: CHB-12 (the moved ticket).\n\n## Acceptance criteria\n\n- A test.")
+        depends_on_12 = {"CHB-114": blocked_by("CHB-12")}
         queue = ["CHB-114", "CHB-7"]
         cases = {
             "into Validating, search shows the old status": ("In Review", "Validating", {"In Review": ["CHB-12"]}),
@@ -699,7 +761,7 @@ class FreeSlotTest(unittest.TestCase):
                     current,
                     {"In Progress": ["CHB-1"], "To Do": queue},
                     description=description_with("Acceptance criteria", *SECTIONS.values()),
-                    descriptions={"CHB-114": depends_on_12},
+                    links=depends_on_12,
                 )
                 before = {"In Progress": ["CHB-1"], "To Do": [*(["CHB-12"] if current == "To Do" else []), *queue]}
                 if current != "To Do":
@@ -707,7 +769,7 @@ class FreeSlotTest(unittest.TestCase):
                 placed = {"In Progress": ["CHB-1"], "To Do": queue}
                 for status, keys in after.items():
                     placed[status] = [*keys, *placed.get(status, [])] if status == "To Do" else [*placed.get(status, []), *keys]
-                fake.routes[("POST", SEARCH)] = _search_changes_at_the_move(fake, before, placed, {"CHB-114": depends_on_12})
+                fake.routes[("POST", SEARCH)] = _search_changes_at_the_move(fake, before, placed, {}, depends_on_12)
                 code, out, _ = _run(["transition", "CHB-12", target], fake)
 
                 self.assertEqual(code, 0)
@@ -725,13 +787,48 @@ class FreeSlotTest(unittest.TestCase):
                     "Validating",
                     {"Validating": ["CHB-12"], "In Progress": ["CHB-1"], "To Do": ["CHB-88", "CHB-7"]},
                     board=board,
-                    descriptions={"CHB-88": doc("Depends on: CHB-12.\n\n## Acceptance criteria\n\n- A test.")},
+                    links={"CHB-88": blocked_by("CHB-12")},
                 )
                 fake.routes[("GET", "/rest/api/3/issue/CHB-12/transitions")] = transitions
                 code, out, _ = _run(["transition", "CHB-12", target], fake)
 
                 self.assertEqual(code, 0)
                 self.assertEqual(out.splitlines()[-1], "In Progress 1/3: 2 slots free; next: CHB-88, CHB-7")
+
+    def test_a_ticket_blocked_by_an_open_ticket_is_not_next_and_by_a_done_one_is(self) -> None:
+        """CHB-151 AC1 for the free-slot line."""
+        fake = transition_fake(
+            "In Progress",
+            {"In Progress": ["CHB-1"], "In Review": ["CHB-91"], "To Do": ["CHB-50", "CHB-60", "CHB-7"]},
+            links={"CHB-50": blocked_by("CHB-91"), "CHB-60": blocked_by("CHB-17", category="done")},
+        )
+        code, out, _ = _run(["transition", "CHB-12", "In Review"], fake)
+
+        self.assertEqual(code, 0)
+        self.assertIn("In Progress 1/3: 2 slots free; next: CHB-60, CHB-7", out.splitlines())
+
+    def test_a_ticket_blocked_by_the_moved_ticket_is_not_next_until_it_closes(self) -> None:
+        """CHB-143 with links: the moved ticket's own status decides, whatever the search or the link still shows."""
+        board = board_config(**BOARD_LIMITS)
+        board["columnConfig"]["columns"].append({"name": "Discarded", "statuses": [{"id": "10008", "self": "x"}]})
+        transitions = {"transitions": [*TRANSITIONS["transitions"], {"id": "99", "to": {"name": "Discarded", "id": "10008"}}]}
+        links = {"CHB-88": blocked_by("CHB-12")}
+        cases = {"Validating": "CHB-7", "Done": "CHB-88, CHB-7", "Discarded": "CHB-88, CHB-7"}
+        for target, following in cases.items():
+            with self.subTest(target):
+                current = "In Review" if target == "Validating" else "Validating"
+                fake = transition_fake(
+                    current,
+                    {current: ["CHB-12"], "In Progress": ["CHB-1"], "To Do": ["CHB-88", "CHB-7"]},
+                    board=board,
+                    description=description_with("Acceptance criteria", *SECTIONS.values()),
+                    links=links,
+                )
+                fake.routes[("GET", "/rest/api/3/issue/CHB-12/transitions")] = transitions
+                code, out, _ = _run(["transition", "CHB-12", target], fake)
+
+                self.assertEqual(code, 0)
+                self.assertTrue(out.splitlines()[-1].endswith(f"next: {following}"), out)
 
     def test_the_notice_and_the_start_check_share_one_top_queue(self) -> None:
         """CHB-143 AC2: both get the top tickets from top_queue, with the whole open search, so they cannot disagree."""
@@ -1206,7 +1303,7 @@ class ViewTest(unittest.TestCase):
                 "comment": {"comments": [{"author": {"displayName": "Owner"}, "created": "t", "body": doc}]},
             },
         }
-        path = "/rest/api/3/issue/CHB-12?fields=summary,status,priority,assignee,issuetype,parent,description,comment"
+        path = "/rest/api/3/issue/CHB-12?fields=summary,status,priority,assignee,issuetype,parent,description,comment,issuelinks"
         code, out, _ = _run(["view", "CHB-12"], FakeJira({("GET", path): issue}))
 
         self.assertEqual(code, 0)
@@ -1810,6 +1907,107 @@ class EditCommentTest(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("comment body is empty", err)
         self.assertEqual(fake.requests, [])
+
+
+LINKS_OF_88 = "/rest/api/3/issue/CHB-88?fields=issuelinks"
+ISSUE_LINK = "/rest/api/3/issueLink"
+
+
+def link_fake(before: list[dict[str, Any]], after: list[dict[str, Any]] | None = None) -> FakeJira:
+    """CHB-88 has the links `before` until the link POST, then `after` (before plus the new link by default)."""
+    after = [*before, *blocked_by("CHB-146")] if after is None else after
+    fake = FakeJira({("POST", ISSUE_LINK): FakeResponse(b"", status=201)})
+    fake.routes[("GET", LINKS_OF_88)] = lambda _: {"fields": {"issuelinks": after if fake.writes() else before}}
+    return fake
+
+
+class LinkTest(unittest.TestCase):
+    """CHB-151: `link CHB-<a> --blocked-by CHB-<b>` creates a "Blocks" link: CHB-<b> blocks CHB-<a>."""
+
+    def test_creates_a_blocks_link_with_the_blocker_as_the_inward_issue_of_the_post(self) -> None:
+        """Checked live (CHB-151): a POST with inwardIssue=CHB-114, outwardIssue=CHB-17 made CHB-114 block CHB-17."""
+        fake = link_fake([])
+        code, out, _ = _run(["link", "CHB-88", "--blocked-by", "CHB-146"], fake)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(out.strip(), "CHB-88 is blocked by CHB-146: link created")
+        body = {"type": {"name": "Blocks"}, "inwardIssue": {"key": "CHB-146"}, "outwardIssue": {"key": "CHB-88"}}
+        self.assertEqual(fake.writes(), [("POST", ISSUE_LINK, body)])
+
+    def test_an_existing_link_is_not_duplicated(self) -> None:
+        fake = link_fake(blocked_by("CHB-146"))
+        code, out, _ = _run(["link", "CHB-88", "--blocked-by", "CHB-146"], fake)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(out.strip(), "CHB-88 is blocked by CHB-146: link unchanged")
+        self.assertEqual(fake.writes(), [])
+
+    def test_the_reverse_link_or_another_type_does_not_count_as_existing(self) -> None:
+        relates = [{"id": "1", "type": RELATES_TYPE, "inwardIssue": {"key": "CHB-146"}}]
+        for name, before in {"reverse": blocks("CHB-146"), "relates": relates}.items():
+            with self.subTest(name):
+                fake = link_fake(before)
+                code, _, _ = _run(["link", "CHB-88", "--blocked-by", "CHB-146"], fake)
+
+                self.assertEqual(code, 0)
+                self.assertEqual(len(fake.writes()), 1)
+
+    def test_a_link_that_does_not_show_after_the_post_exits_1(self) -> None:
+        """A link Jira stored the other way round would block the wrong ticket: say so instead of reporting success."""
+        fake = link_fake([], after=blocks("CHB-146"))
+        code, _, err = _run(["link", "CHB-88", "--blocked-by", "CHB-146"], fake)
+
+        self.assertEqual(code, 1)
+        self.assertIn("CHB-88 does not show CHB-146 as a blocker after the link", err)
+
+    def test_refuses_non_chb_keys_and_self_links_before_any_request(self) -> None:
+        """CHB-151 AC2: exit 2, no 1Password read, no request."""
+        cases = {
+            "other project, blocked": ["link", "OPS-1", "--blocked-by", "CHB-146"],
+            "other project, blocker": ["link", "CHB-88", "--blocked-by", "OPS-1"],
+            "lower case": ["link", "CHB-88", "--blocked-by", "chb-146"],
+            "self": ["link", "CHB-88", "--blocked-by", "CHB-88"],
+            "missing blocker": ["link", "CHB-88"],
+        }
+        for name, argv in cases.items():
+            with self.subTest(name):
+                fake = FakeJira({})
+                code, _, err = _run(argv, fake, credentials_reader=_no_credentials)
+
+                self.assertEqual(code, 2)
+                self.assertEqual(fake.requests, [])
+                if name == "self":
+                    self.assertIn("CHB-88 cannot be blocked by itself", err)
+
+    def test_a_refused_post_exits_1(self) -> None:
+        fake = link_fake([])
+        fake.routes[("POST", ISSUE_LINK)] = 404
+        code, _, err = _run(["link", "CHB-88", "--blocked-by", "CHB-146"], fake)
+
+        self.assertEqual(code, 1)
+        self.assertIn("HTTP 404", err)
+
+
+class ViewLinksTest(unittest.TestCase):
+    def test_view_lists_blocked_by_and_blocks(self) -> None:
+        """CHB-151 AC3: both tickets of a link show it in `view`."""
+        status = {"fields": {"status": {"name": "To Do"}}}
+        links = [
+            {"id": "1", "type": BLOCKS_TYPE, "inwardIssue": {"key": "CHB-146", **status}},
+            {"id": "2", "type": BLOCKS_TYPE, "outwardIssue": {"key": "CHB-49", **status}},
+            {"id": "3", "type": RELATES_TYPE, "outwardIssue": {"key": "CHB-5", **status}},
+        ]
+        issue = {
+            "key": "CHB-88",
+            "fields": {"summary": "T", "issuetype": {"name": "Task"}, "status": {"name": "To Do"}, "issuelinks": links},
+        }
+        path = "/rest/api/3/issue/CHB-88?fields=summary,status,priority,assignee,issuetype,parent,description,comment,issuelinks"
+        code, out, _ = _run(["view", "CHB-88"], FakeJira({("GET", path): issue}))
+
+        self.assertEqual(code, 0)
+        self.assertIn("Is blocked by: CHB-146 (To Do)", out.splitlines())
+        self.assertIn("Blocks: CHB-49 (To Do)", out.splitlines())
+        self.assertIn("Relates to: CHB-5 (To Do)", out.splitlines())
 
 
 if __name__ == "__main__":
