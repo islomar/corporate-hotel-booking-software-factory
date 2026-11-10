@@ -47,6 +47,7 @@ A WIP limit stops pulling new work. It never stops the board from recording what
   for example `In Progress 2/3: 1 slot free; next: CHB-123` (CHB-125).
   A ticket without acceptance criteria is marked: `next: CHB-122 (needs acceptance criteria)`.
   It prints no such line while In Progress, In Review or Validating is at its max: starting is blocked then.
+  The moved ticket is never next, and it blocks its dependents unless it moved to Done or Discarded (CHB-143).
 - Pulling work: the agent fills In Progress up to its max, one agent per ticket, in parallel where it can (owner rule, 2026-11-10).
   It pulls the top tickets of To Do in rank order and needs no go per ticket. The owner can say stop at any time.
   Finishing comes first: before it pulls a ticket, the agent drives what it can in Validating, In Review and In Progress (live checks, review fixes, owner steps).

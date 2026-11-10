@@ -204,6 +204,8 @@ After every move between columns it prints the free In Progress slots and the ne
 `In Progress 2/3: 1 slot free; next: CHB-123`, `next: CHB-122 (needs acceptance criteria)`, or `next: nothing to start in To Do`.
 It prints no such line when In Progress has no max, or when In Progress, In Review or Validating is at its max.
 The moved ticket is counted in its new column, never in its old one, and is never "next".
+It blocks the To Do tickets that depend on it unless it moved to Done or Discarded, whatever the search still shows (CHB-143).
+The start check and this line take the top tickets from one function, `top_queue`.
 If a count fails, `transition` prints a notice instead and still exits 0: the ticket has moved.
 Two agents that move tickets at the same moment can both pass the check. The owner overrides a limit in the Jira UI, with a comment.
 
