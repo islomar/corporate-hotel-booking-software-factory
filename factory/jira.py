@@ -6,6 +6,8 @@ Usage:
   factory/bin/jira search 'status = "In Review"' [--json]   (sent as project = CHB AND (<jql>))
   factory/bin/jira create --parent CHB-27 --summary TEXT --description-file FILE --priority High|Medium|Low
                                                           (in Backlog, with the Definition of Ready)
+  factory/bin/jira create --parent CHB-27 --summary TEXT --description-file FILE --expedite "production bug: <evidence>"
+                                                          (priority Highest, straight in In Progress; CHB-157)
   factory/bin/jira transition CHB-12 "In Review"
   factory/bin/jira tick CHB-12 why|trigger|decision|small   (ticks one box of the Definition of Ready)
   factory/bin/jira ready CHB-12 --trigger TEXT            (Backlog to Ready: checks the Definition of Ready)
@@ -33,6 +35,9 @@ writes, and no raw request command. Do not add one. `rank` changes only the rank
 issues. `section` writes only the description field, and changes only one section of it.
 In "Acceptance criteria (Validating)", `section` refuses a "When:" line without a "Speed up:" line.
 `priority` writes only the priority field, and only High, Medium or Low (docs/process/priorities.md).
+Highest marks an expedite ticket: only `create --expedite` sets it, one open at a time, for a production bug,
+a broken pipeline or a leaking secret. It skips Backlog, Ready and every column limit (CHB-157).
+A move into the pull list is refused while it holds its board max; epics count toward no column limit.
 The pull list is the board column "Ready", or "To Do" on a board without it (pull_list, CHB-153).
 "Backlog" holds work not needed yet: it is never sorted, never next and never started.
 `sort-todo` changes only the rank of pull-list issues. `create` runs it after creating a ticket in the
@@ -60,7 +65,8 @@ Exit codes:
      UTF-8, a duplicate rank key, JQL whose parentheses or quotes do not balance, a ticket
      linked to itself, a move from Backlog to Ready with `transition`, --trigger on `transition`,
      --ready or --trigger on `create`, `ready` without --trigger or on a ticket outside Backlog,
-     `tick` of a box that `ready` verifies)
+     `tick` of a box that `ready` verifies, priority Highest outside `create --expedite`, an expedite
+     reason that does not start with one of the three cases)
   3  no credential: no service account token in the keyring (keyring locked, item absent)
      or `op` failed. The agent stops and reports.
   4  a board rule blocks the transition: the target column is at its WIP limit, the
@@ -68,7 +74,8 @@ Exit codes:
      from the pull list that is not its top ticket, or has no "Why it matters" first section or
      no acceptance criteria (docs/process/kanban.md); `ready` on a ticket whose Definition of Ready
      has a box unticked or a check that fails (no "Why it matters", no acceptance criteria, an open
-     blocker). The message names each open box. The ticket stays where it is.
+     blocker). The message names each open box. The ticket stays where it is. Also a move into the
+     pull list while it holds its max (CHB-157), and `create --expedite` while an expedite ticket is open.
 
 `transition` reads the column limits from the board configuration (board 2) on every call.
 After a move it prints the free In Progress slots and the next tickets of the pull list (CHB-125).
@@ -108,7 +115,12 @@ CREDENTIALS_COMMAND = [
 KEY_PATTERN = re.compile(rf"^{PROJECT}-[1-9][0-9]*$")
 URL_PATTERN = re.compile(r"https?://[^\s<>()]*[^\s<>().,;:!?'\"]")
 SEARCH_FIELDS = ["summary", "status", "assignee", "issuetype", "parent", "priority"]
-PRIORITIES = ("High", "Medium", "Low")  # Highest and Lowest exist in Jira but CHB does not use them
+PRIORITIES = ("High", "Medium", "Low")  # Lowest exists in Jira but CHB does not use it
+# Highest marks an expedite ticket and nothing else (CHB-157): only `create --expedite` sets it.
+EXPEDITE_PRIORITY = "Highest"
+# The three cases that justify Expedite (CHB-157, docs/process/kanban.md, Expedite). The reason starts with one.
+EXPEDITE_CASES = ("production bug", "pipeline broken", "secret leak")
+EXPEDITE_PATTERN = re.compile(rf"^\s*(?:{'|'.join(EXPEDITE_CASES)})\s*:\s*\S", re.IGNORECASE)
 HEADING_PATTERN = re.compile(r"^(#{1,6}) +(\S.*?)\s*$")
 BULLET_PATTERN = re.compile(r"^- (?P<text>.*)$")
 ORDERED_PATTERN = re.compile(r"^([1-9][0-9]*)\. (?P<text>.*)$")
@@ -154,6 +166,8 @@ ACCEPTANCE_PATTERN = re.compile(
 # Done status category, so it is not open.
 OPEN_JQL = "statusCategory != Done ORDER BY Rank ASC"
 OPEN_FIELDS = ("status", "issuetype", "description", "issuelinks", "priority")
+# The fields before_transition and ready read of the moving ticket.
+ISSUE_FIELDS = "status,description,issuelinks,issuetype"
 # Dependencies are Jira "Blocks" links (CHB-151): inward "is blocked by", outward "blocks". In an issue's
 # issuelinks, an entry of this type with an inwardIssue means "this issue is blocked by inwardIssue".
 BLOCKS = "Blocks"
@@ -205,6 +219,7 @@ class Move:
     target: Column | None
     columns: tuple[Column, ...] = ()
     comment: str | None = None  # the trigger comment to post after the move (check_trigger, CHB-153)
+    epic: bool = False  # an epic counts toward no column limit (CHB-157)
 
 
 @dataclass(frozen=True)
@@ -456,9 +471,25 @@ def check_comment_id(comment_id: str) -> str:
 
 
 def check_priority(priority: str) -> str:
+    if priority == EXPEDITE_PRIORITY:
+        raise UsageError(
+            f"priority {EXPEDITE_PRIORITY} is only for an expedite ticket: factory/bin/jira create --expedite "
+            f'"<case>: <evidence>" (cases: {", ".join(EXPEDITE_CASES)}; docs/process/kanban.md, Expedite)'
+        )
     if priority not in PRIORITIES:
         raise UsageError(f"priority must be one of {', '.join(PRIORITIES)}, got {priority!r}")
     return priority
+
+
+def check_expedite(reason: str) -> str:
+    """Refuse (UsageError, exit 2) an expedite reason that does not start with one of the three cases (CHB-157)."""
+    if not EXPEDITE_PATTERN.match(reason):
+        cases = ", ".join(f'"{case}: <evidence>"' for case in EXPEDITE_CASES)
+        raise UsageError(
+            f"--expedite needs a reason that starts with one of the three cases and its evidence: {cases}. "
+            "Any other work goes to Backlog with create --priority (docs/process/kanban.md, Expedite)"
+        )
+    return reason.strip()
 
 
 def _paragraph(lines: list[str]) -> dict[str, Any]:
@@ -871,6 +902,70 @@ class Jira:
 
     def create(self, parent: str, summary: str, description: str, priority: str) -> str:
         check_priority(priority)
+        return self._create(parent, summary, description, priority)
+
+    def create_expedite(self, parent: str, summary: str, description: str, reason: str) -> str:
+        """Create an expedite ticket, priority Highest (CHB-157). Refuses (BlockedError) while one is open.
+
+        start_expedite moves it to In Progress. Nothing else sets Highest, so an open Highest ticket is an open expedite ticket.
+        """
+        check_expedite(reason)  # the guard that makes Highest legitimate; _create checks the summary and description
+        open_ones = self.open_expedite()
+        if open_ones:
+            raise BlockedError(
+                f"{', '.join(open_ones)} is an open expedite ticket; only one may be open at a time. "
+                f"Finish it first, or tell the owner (docs/process/kanban.md, Expedite)."
+            )
+        return self._create(parent, summary, description, EXPEDITE_PRIORITY)
+
+    def open_expedite(self) -> list[str]:
+        """Keys of the open tickets with priority Highest: the open expedite tickets (CHB-157)."""
+        return [str(issue["key"]) for issue in self.open_issues() if _priority_name(issue) == EXPEDITE_PRIORITY]
+
+    def move_expedite(self, key: str) -> None:
+        """Move a new expedite ticket straight to In Progress, past Backlog, Ready and every column limit (CHB-157).
+
+        The move skips before_transition: it refuses a start from Backlog, and a full column. One open
+        expedite ticket at a time keeps the excess at one.
+        """
+        in_progress = next((column for column in self.board_columns() if column.name == IN_PROGRESS), None)
+        if in_progress is None:
+            raise JiraError(f"the board has no column {IN_PROGRESS!r}")
+        transitions = self.request("GET", f"/rest/api/3/issue/{check_key(key)}/transitions")["transitions"]
+        match = next((t for t in transitions if str(t["to"]["id"]) in in_progress.status_ids), None)
+        if match is None:
+            raise JiraError(f"{key} has no transition into {IN_PROGRESS}")
+        self.request("POST", f"/rest/api/3/issue/{key}/transitions", {"transition": {"id": match["id"]}}, empty_ok=True)
+
+    def finish_expedite(self, key: str, reason: str) -> list[str]:
+        """After the move: comment the reason, assign the agent, and check that no other expedite ticket
+        opened meanwhile (two agents can both pass the one-at-a-time check). Return a notice for each
+        step that failed or found a problem; the ticket is in In Progress whatever happens here.
+        """
+        notices = []
+        body = (
+            f"Expedite: {reason.strip()}\n\nCreated straight in {IN_PROGRESS}, past {BACKLOG}, {READY} and the column limits "
+            "(docs/process/kanban.md, Expedite)."
+        )
+        steps: list[tuple[Callable[[], object], str]] = [
+            (lambda: self.comment(key, body), f"post it: factory/bin/jira comment {key} --body-file FILE with 'Expedite: <reason>'"),
+            (lambda: self.assign(key, self.myself()["accountId"]), f"run factory/bin/jira assign {key} --me"),
+        ]
+        for step, fix in steps:
+            try:
+                step()
+            except JiraError as error:
+                notices.append(f"{key} is in {IN_PROGRESS}, but a step failed: {error}; {fix}")
+        try:
+            open_ones = self.open_expedite()
+        except JiraError as error:
+            notices.append(f"could not check for other open expedite tickets: {error}")
+        else:
+            if len(open_ones) > 1:
+                notices.append(f"more than one open expedite ticket: {', '.join(open_ones)}. Tell the owner")
+        return notices
+
+    def _create(self, parent: str, summary: str, description: str, priority: str) -> str:
         check_summary(summary)
         check_why_text(description)
         epic = self.request("GET", f"/rest/api/3/issue/{check_key(parent)}?fields=issuetype")
@@ -957,7 +1052,7 @@ class Jira:
         "Moved to Ready. Trigger: <text>". A move that a check refuses writes nothing. A move request that
         fails after the tick leaves the verified boxes ticked in Backlog: harmless, `ready` checks them again.
         """
-        fields = self.request("GET", f"/rest/api/3/issue/{check_key(key)}?fields=status,description,issuelinks")["fields"]
+        fields = self.request("GET", f"/rest/api/3/issue/{check_key(key)}?fields={ISSUE_FIELDS}")["fields"]
         columns = self.board_columns()
         backlog, pull = backlog_column(columns), pull_list(columns)
         if backlog is None or pull is None or str(fields["status"]["id"]) not in backlog.status_ids:
@@ -1062,11 +1157,11 @@ class Jira:
         return apply_todo_order(self, issues, columns)
 
     def keys_in(self, column: Column, *, excluding: str) -> list[str]:
-        """Keys of the CHB issues in the column's statuses, without `excluding`."""
+        """Keys of the CHB issues in the column's statuses, without `excluding` and without epics (CHB-157)."""
         if not column.status_ids:
             return []
         ids = ", ".join(sorted(column.status_ids))
-        jql = f"status in ({ids}) AND key != {check_key(excluding)} ORDER BY key ASC"
+        jql = f"status in ({ids}) AND key != {check_key(excluding)} AND issuetype != Epic ORDER BY key ASC"
         return [str(issue["key"]) for issue in self.search(jql, limit=100)]
 
     def comment(self, key: str, body: str) -> str:
@@ -1236,7 +1331,8 @@ def before_transition(jira: Jira, key: str, status: str, *, status_id: str, trig
     is checked (check_trigger, UsageError) before any check that writes, such as the sort of a start.
     A failed read of the board or of the open tickets raises JiraError and blocks too.
     """
-    issue = jira.request("GET", f"/rest/api/3/issue/{key}?fields=status,description,issuelinks")["fields"]
+    issue = jira.request("GET", f"/rest/api/3/issue/{key}?fields={ISSUE_FIELDS}")["fields"]
+    epic = (issue.get("issuetype") or {}).get("name") == "Epic"
     current_id = str(issue["status"]["id"])
     if current_id == status_id:
         check_trigger(key, Move(None, None), trigger)  # `ready` on a ticket that moved meanwhile
@@ -1251,8 +1347,8 @@ def before_transition(jira: Jira, key: str, status: str, *, status_id: str, trig
     columns = jira.board_columns()
     source = _column_of(columns, current_id)
     target = _column_of(columns, status_id)
-    move = Move(source, target, tuple(columns))
-    move = Move(source, target, tuple(columns), check_trigger(key, move, trigger))
+    move = Move(source, target, tuple(columns), epic=epic)
+    move = Move(source, target, tuple(columns), check_trigger(key, move, trigger), epic=epic)
     if target is None or target == source:
         return move
     pull = pull_list(columns)
@@ -1263,6 +1359,8 @@ def before_transition(jira: Jira, key: str, status: str, *, status_id: str, trig
             f'factory/bin/jira ready {key} --trigger "<which trigger and its evidence>". '
             f"From {BACKLOG} a ticket goes only to {name}, Done or Discarded (docs/process/kanban.md, Backlog)."
         )
+    if target == pull and not epic:
+        check_ready_maximum(jira, key, target)
     if target.name == IN_PROGRESS and (source is None or source.name not in (*STARTED_WORK, NEEDS_HUMAN)):
         limited = [column for column in columns if column.name in STARTED_WORK]
     elif target.name == NEEDS_HUMAN:
@@ -1286,6 +1384,22 @@ def before_transition(jira: Jira, key: str, status: str, *, status_id: str, trig
     if target.name == IN_PROGRESS and source is not None and source == pull:
         check_top_of_to_do(jira, key, issue, columns)
     return move
+
+
+def check_ready_maximum(jira: Jira, key: str, pull: Column) -> None:
+    """Refuse (BlockedError) a move into the pull list while it holds its board max of other tickets (CHB-157).
+
+    Epics are not counted (keys_in). Every way into the pull list passes here: `ready`, and a move back.
+    """
+    if pull.max is None:
+        return
+    others = jira.keys_in(pull, excluding=key)
+    if len(others) >= pull.max:
+        raise BlockedError(
+            f"{key} cannot move to {pull.name}: column {pull.name!r} is at its maximum ({len(others)}/{pull.max}): {', '.join(others)}. "
+            f"To make room, move the least needed of them back: factory/bin/jira transition CHB-<n> {BACKLOG}, "
+            f"then try again (docs/process/kanban.md, Ready)."
+        )
 
 
 def check_top_of_to_do(jira: Jira, key: str, fields: dict[str, Any], columns: list[Column]) -> None:
@@ -1461,10 +1575,14 @@ def todo_order(
     return TodoOrder(current, ready + blocked + epics, ready, to_do.name)
 
 
-def _priority_order(issue: dict[str, Any]) -> int:
+def _priority_name(issue: dict[str, Any]) -> str | None:
     priority = issue["fields"].get("priority")
     name = priority.get("name") if isinstance(priority, dict) else None
-    return PRIORITY_ORDER.get(str(name), PRIORITY_ORDER["Medium"])
+    return None if name is None else str(name)
+
+
+def _priority_order(issue: dict[str, Any]) -> int:
+    return PRIORITY_ORDER.get(str(_priority_name(issue)), PRIORITY_ORDER["Medium"])
 
 
 def apply_todo_order(
@@ -1509,22 +1627,34 @@ def after_transition(jira: Jira, key: str, move: Move) -> list[str]:
 
 
 def _minimum_notice(jira: Jira, key: str, move: Move) -> list[str]:
-    """After a move out of a column with a board minimum, say when that column is below it.
+    """After a move between columns, say when the column it left, or the pull list it entered, is below its board minimum.
 
-    The minimum is a signal, never a block: a failed count becomes a notice, not an error.
-    The moved key is left out of the count because Jira search can still list it in its old
-    status for a moment.
+    The minimum is a signal, never a block: a failed count becomes a notice, not an error, and nothing is
+    promoted to reach it. Epics are not counted (keys_in). The moved key is left out of the count because
+    Jira search can still list it in its old status for a moment; in the pull list it entered it is counted
+    by hand. For the pull list the line says what to do (CHB-157).
     """
-    source = move.source
-    if source is None or source == move.target or source.min is None:
+    source, target = move.source, move.target
+    if source == target:
         return []
-    try:
-        count = len(jira.keys_in(source, excluding=key))
-    except JiraError as error:  # the move is done: report, do not fail it
-        return [f"could not check the {source.name} minimum: {error}"]
-    if count >= source.min:
-        return []
-    return [f"{source.name} is below its minimum ({count}/{source.min})"]
+    pull = pull_list(move.columns)
+    checks = [(source, source.min, 0)] if source is not None and source.min is not None else []
+    if target is not None and target.min is not None and target == pull:
+        checks.append((target, target.min, 0 if move.epic else 1))
+    notices = []
+    for column, minimum, added in checks:
+        try:
+            count = len(jira.keys_in(column, excluding=key)) + added
+        except JiraError as error:  # the move is done: report, do not fail it
+            notices.append(f"could not check the {column.name} minimum: {error}")
+            continue
+        if count >= minimum:
+            continue
+        line = f"{column.name} is below its minimum ({count}/{minimum})"
+        if column == pull:
+            line += ": look for Backlog tickets with a trigger; none qualify means tell the owner"
+        notices.append(line)
+    return notices
 
 
 def _free_slot_notice(jira: Jira, key: str, move: Move) -> list[str]:
@@ -1547,14 +1677,14 @@ def _free_slot_notice(jira: Jira, key: str, move: Move) -> list[str]:
         issues = jira.open_issues()
     except JiraError as error:  # the move is done: report, do not fail it
         return [f"could not check free {IN_PROGRESS} slots: {error}"]
-    others = [issue for issue in issues if issue["key"] != key]
+    others = [issue for issue in issues if issue["key"] != key and issue["fields"]["issuetype"]["name"] != "Epic"]
     counts: dict[str, int] = {}
     for name in STARTED_WORK:
         column = columns.get(name)
         if column is None:
             continue
         here = sum(1 for issue in others if str(issue["fields"]["status"]["id"]) in column.status_ids)
-        counts[name] = here + (1 if move.target == column else 0)
+        counts[name] = here + (1 if move.target == column and not move.epic else 0)
         if column.max is not None and counts[name] >= column.max:
             return []
     free = in_progress.max - counts[IN_PROGRESS]
@@ -1706,7 +1836,8 @@ def _parser() -> argparse.ArgumentParser:
     create.add_argument("--parent", required=True)
     create.add_argument("--summary", required=True)
     create.add_argument("--description-file", required=True)
-    create.add_argument("--priority", required=True, choices=PRIORITIES)
+    create.add_argument("--priority", help="High, Medium or Low; required unless --expedite")
+    create.add_argument("--expedite", metavar="REASON", help=f"a production incident: '<case>: <evidence>', case one of: {', '.join(EXPEDITE_CASES)}")
     # Refused (CHB-154): kept so the message names the ready command instead of argparse's.
     create.add_argument("--ready", action="store_true", help=argparse.SUPPRESS)
     create.add_argument("--trigger", help=argparse.SUPPRESS)
@@ -1767,7 +1898,7 @@ def _parser() -> argparse.ArgumentParser:
 
     priority = commands.add_parser("priority", help="set the priority: High, Medium or Low")
     priority.add_argument("key")
-    priority.add_argument("priority", choices=PRIORITIES)
+    priority.add_argument("priority", help="High, Medium or Low")
     return parser
 
 
@@ -1787,6 +1918,22 @@ def run(args: argparse.Namespace, jira: Jira) -> None:
         for issue in issues:
             fields = issue["fields"]
             print(f"{issue['key']}\t{fields['status']['name']}\t{_name(fields.get('assignee'))}\t{fields['summary']}")
+    elif args.command == "create" and args.expedite is not None:
+        key = jira.create_expedite(args.parent, args.summary, args.description, args.expedite)
+        print(key)
+        # The ticket exists: from here on a failure is a notice, never an exit code that invites a second create.
+        # KeyError, TypeError and AttributeError mean an answer of unexpected shape, as in main(): still exit 0.
+        try:
+            jira.move_expedite(key)
+        except (JiraError, KeyError, TypeError, AttributeError) as error:
+            print(
+                f"could not start {key} as expedite: {error}. Tell the owner now; the owner moves it to {IN_PROGRESS} "
+                f"in the Jira UI, because transition refuses a start from {BACKLOG}"
+            )
+            return
+        print(f"{key} -> {IN_PROGRESS} (expedite). Tell the owner now: {args.expedite.strip()}")
+        for notice in jira.finish_expedite(key, args.expedite):
+            print(notice)
     elif args.command == "create":
         key = jira.create(args.parent, args.summary, args.description, args.priority)
         print(key)
@@ -1883,6 +2030,16 @@ def main(
             check_box(args.box)
         if args.command == "checklist" and bool(args.keys) == args.open:
             raise UsageError("checklist takes issue keys or --open, not both")
+        if args.command == "create" and args.expedite is not None:
+            if args.priority is not None:
+                raise UsageError(f"--expedite sets the priority {EXPEDITE_PRIORITY}; leave out --priority")
+            check_expedite(args.expedite)
+        elif args.command == "create":
+            if args.priority is None:
+                raise UsageError("create needs --priority High|Medium|Low, or --expedite for a production incident")
+            check_priority(args.priority)
+        if args.command == "priority":
+            check_priority(args.priority)
         if args.command == "create":
             check_summary(args.summary)
             args.description = _read_text(args.description_file)

@@ -13,15 +13,19 @@
 # Ticket priorities
 
 Every CHB ticket has one of three priorities: High, Medium or Low.
-Jira also offers Highest and Lowest. CHB does not use them, and `factory/bin/jira` refuses them.
+Jira also offers Highest and Lowest. CHB does not use Lowest.
+Highest marks an expedite ticket and nothing else (CHB-157): only `factory/bin/jira create --expedite` sets it, and the wrapper refuses it everywhere else.
+See `kanban.md`, Expedite.
 The Jira Free plan has no priority schemes, so the global list stays and this rule limits it (CHB-128).
 
 ## High
 
 Leaving the ticket open risks harm now.
 
-- A bug that affects users in production. It goes to Ready (trigger 1, something is broken) at the top, above every other ticket, and the agent tells the owner at once.
+- A bug that affects users in production. It is an expedite ticket (Highest, straight to In Progress, `kanban.md`, Expedite) and the agent tells the owner at once.
+  When another expedite ticket is open, it is High and goes to Ready (trigger 1, something is broken) at the top.
 - The delivery pipeline is broken: CI on `main`, the deploy, a required check, or anything that stops a change from reaching production.
+  CI on `main` or the deploy broken is an expedite ticket too. A leaking secret also is.
 - The agent cannot work: `factory/bin/as-agent`, `factory/bin/jira`, a hook or a credential fails, and no agent can commit, push or update Jira.
 - Something else is broken: a feature, check, link or command does not do what it says, or a document states something false.
 - Security: a secret, token or private data can leak; private content can reach a public repository; an authentication or permission bypass; a supply-chain path that merges unreviewed code.
