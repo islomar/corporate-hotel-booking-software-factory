@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Routing for the ticket-to-PR workflow (CHB-62). Standard library only.
 
 next_step(stage, output) validates a stage's typed output against schemas/<stage>.json
@@ -16,6 +15,7 @@ An unknown stage, invalid output or unreadable schema -> STOP. next_step never r
 from __future__ import annotations
 
 import json
+import math
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -55,13 +55,23 @@ def next_step(stage: str, output: object) -> Route:
     if stage not in STAGES:
         return Route(STOP, (f"unknown stage {stage!r}",))
     try:
-        errors = validate(output, load_schema(stage))
-        if errors:
-            return Route(STOP, tuple(errors))
-        assert isinstance(output, Mapping)
+        errors = _non_finite(output, "$") + validate(output, load_schema(stage))
+        if errors or not isinstance(output, Mapping):
+            return Route(STOP, tuple(errors) or ("output is not an object",))
         return _route(stage, output)
     except Exception as error:  # noqa: BLE001  (fail closed on anything unexpected)
         return Route(STOP, (f"{stage}: {type(error).__name__}: {error}",))
+
+
+def _non_finite(value: object, path: str) -> list[str]:
+    """NaN and infinity pass `minimum` and `maximum` and compare False: reject them (json.loads accepts both)."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return [f"{path}: {value} is not a finite number"]
+    if isinstance(value, Mapping):
+        return [e for k, v in value.items() for e in _non_finite(v, f"{path}.{k}")]
+    if isinstance(value, list):
+        return [e for i, v in enumerate(value) for e in _non_finite(v, f"{path}[{i}]")]
+    return []
 
 
 def _route(stage: str, output: Mapping[str, object]) -> Route:
