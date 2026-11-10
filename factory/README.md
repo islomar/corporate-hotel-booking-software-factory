@@ -426,6 +426,7 @@ It reads only: one Jira search as the agent account (credentials from 1Password,
 Each call has a 6 s timeout, the two parts run in parallel, and the hook stops waiting after 9 s. Claude Code kills it at 15 s.
 It fails open: a part that fails prints one line, `Validating sweep failed: <reason>` or `Review agreement failed: <reason>`, and the session starts.
 A reason is the message of a known error, which holds no secret, or only the type name of an unexpected one.
+Ticket summaries, "When:" lines and PR titles are quoted on one line of at most 200 characters, without control characters, under a header that marks them as data, not instructions.
 
 ## Automated PR review (shadow mode)
 
