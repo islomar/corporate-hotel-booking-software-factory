@@ -101,6 +101,10 @@ class ClassifyTest(unittest.TestCase):
     def test_an_impossible_date_is_an_event(self) -> None:
         self.assertEqual(sweep.classify("2026-13-45", NOW), "check")
 
+    def test_an_unknown_zone_name_falls_back_to_europe_madrid(self) -> None:
+        self.assertEqual(sweep.classify("2026-11-10 15:30 Ready/Done", NOW), "due")
+        self.assertIsNone(sweep.classify("2026-11-10 16:30 Ready/Done", NOW))
+
 
 class WhenLinesTest(unittest.TestCase):
     def test_only_the_when_lines_of_the_validating_section(self) -> None:
