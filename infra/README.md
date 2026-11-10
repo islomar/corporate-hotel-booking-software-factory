@@ -5,6 +5,7 @@
 - [Infrastructure](#infrastructure)
   - [Use](#use)
     - [Destroy and replace](#destroy-and-replace)
+    - [Guard tests](#guard-tests)
   - [Rules](#rules)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -69,6 +70,16 @@ make infra-apply ALLOW_DESTROY='github_repository_environment.env["staging"],goo
 ```
 
 The list must match exactly. A missing or an extra address fails.
+
+### Guard tests
+
+`github/guards.tf` fails the plan when a setting Terraform cannot manage is off, for example CodeQL default setup.
+`github/tests/guards.tftest.hcl` checks each guard against stubbed GitHub responses. It needs no credentials.
+`make check` and CI do not run it yet. Run it after a change to `guards.tf`:
+
+```sh
+cd ~/workspace/corporate-hotel-booking-software-factory/infra/github && terraform init -backend=false && terraform test
+```
 
 ## Rules
 
