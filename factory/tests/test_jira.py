@@ -491,31 +491,10 @@ class ReadinessTest(unittest.TestCase):
             with self.subTest(name):
                 self.assertFalse(jira.has_acceptance_criteria(None if markdown is None else doc(markdown)))
 
-    def test_dependencies_on_the_depends_on_line_and_in_the_list_after_its_colon(self) -> None:
-        cases = {
-            "inline": ("Depends on CHB-17 (uptime check). Not CHB-3.", ["CHB-17"]),
-            "list after a colon": (
-                "Depends on (open, so this ticket cannot start yet):\n\n- CHB-91: the check.\n- CHB-88: a test.\n\n- AC1. CHB-5 stays.",
-                ["CHB-91", "CHB-88"],
-            ),
-            "list after a line without a colon": ("Depends on CHB-1.\n\n- CHB-2 is unrelated.", ["CHB-1"]),
-            "bullet": ("- Depends on CHB-4.\n- Mentions CHB-6.", ["CHB-4"]),
-            "nested list under a bullet": (
-                "- Depends on:\n  - CHB-4: a check.\n  - CHB-5: a test.\n- Mentions CHB-6.",
-                ["CHB-4", "CHB-5"],
-            ),
-            "colon form": ("Depends on: CHB-141 (agreement tally).", ["CHB-141"]),
-            "mentions only": ("See CHB-3 and CHB-4.", []),
-        }
-        for name, (markdown, keys) in cases.items():
-            with self.subTest(name):
-                self.assertEqual(jira.dependencies(doc(markdown)), keys)
-
-    def test_open_dependencies(self) -> None:
-        dependent = {"description": doc("Depends on CHB-91 and CHB-88."), "issuelinks": []}
-        self.assertEqual(jira.open_blockers(dependent, open_keys={"CHB-91", "CHB-7"}), ["CHB-91"])
-        self.assertEqual(jira.open_blockers(dependent, open_keys={"CHB-7"}), [])
-
+    def test_depends_on_text_is_not_read(self) -> None:
+        """CHB-151: dependencies are links only; a "Depends on" line in the description blocks nothing."""
+        fields = {"description": doc("Depends on: CHB-91.\n\n- Depends on CHB-88."), "issuelinks": []}
+        self.assertEqual(jira.blockers(fields), [])
 
     def test_blockers_are_the_is_blocked_by_links(self) -> None:
         """CHB-151: a "Blocks" link with the other ticket as inwardIssue means this ticket is blocked by it."""
@@ -585,7 +564,7 @@ class TopTicketTest(unittest.TestCase):
         fake = transition_fake(
             "To Do",
             {"To Do": ["CHB-9", "CHB-49", "CHB-12", "CHB-5"], "In Progress": ["CHB-91"]},
-            descriptions={"CHB-49": doc("Depends on CHB-91.\n\n## Acceptance criteria\n\n- A test.")},
+            links={"CHB-49": blocked_by("CHB-91")},
             epics=("CHB-9",),
         )
         code, _, _ = _run(["transition", "CHB-12", "In Progress"], fake)
@@ -594,26 +573,17 @@ class TopTicketTest(unittest.TestCase):
         refused = transition_fake(
             "To Do",
             {"To Do": ["CHB-9", "CHB-49", "CHB-5", "CHB-12"], "In Progress": ["CHB-91"]},
-            descriptions={"CHB-49": doc("Depends on CHB-91.")},
+            links={"CHB-49": blocked_by("CHB-91")},
             epics=("CHB-9",),
         )
         code, _, err = _run(["transition", "CHB-12", "In Progress"], refused)
         self.assertEqual(code, 4)
         self.assertIn("CHB-12 is not the top ticket of To Do: CHB-5 is", err)
 
-    def test_a_ticket_with_an_open_dependency_is_refused_with_the_reason(self) -> None:
+    def test_a_ticket_with_depends_on_text_but_no_link_starts(self) -> None:
+        """CHB-151: the text is not read any more."""
         description = doc("Depends on CHB-91.\n\nAcceptance criteria:\n\n- A test.")
         fake = transition_fake("To Do", {"In Review": ["CHB-91"]}, description=description)
-        code, _, err = _run(["transition", "CHB-12", "In Progress"], fake)
-
-        self.assertEqual(code, 4)
-        self.assertIn("CHB-12 cannot start: it is blocked by open tickets: CHB-91", err)
-        self.assertEqual(fake.writes(), [])
-
-    def test_a_dependency_missing_from_the_open_search_does_not_count(self) -> None:
-        """Done and Discarded are both in the Done category, so the open search leaves them out."""
-        description = doc("Depends on CHB-91.\n\n## Acceptance criteria\n\n- A test.")
-        fake = transition_fake("To Do", {"Done": ["CHB-91"]}, description=description)
         code, _, _ = _run(["transition", "CHB-12", "In Progress"], fake)
 
         self.assertEqual(code, 0)
@@ -682,10 +652,8 @@ class TopTicketTest(unittest.TestCase):
         self.assertEqual(fake.writes(), [])
 
     def test_the_fresh_read_wins_over_a_stale_search_answer(self) -> None:
-        """The search still holds an old description with an open dependency; the fresh read has none."""
-        fake = transition_fake(
-            "To Do", {"To Do": ["CHB-12", "CHB-5"], "In Review": ["CHB-91"]}, descriptions={"CHB-12": doc("Depends on CHB-91.")}
-        )
+        """The search still holds an old link to an open ticket; the fresh read has none."""
+        fake = transition_fake("To Do", {"To Do": ["CHB-12", "CHB-5"], "In Review": ["CHB-91"]}, links={"CHB-12": blocked_by("CHB-91")})
         fake.routes[("GET", f"/rest/api/3/issue/CHB-12?fields={ISSUE_FIELDS}")] = issue_in("To Do", READY)
         code, _, _ = _run(["transition", "CHB-12", "In Progress"], fake)
 
@@ -737,7 +705,7 @@ class FreeSlotTest(unittest.TestCase):
         fake = transition_fake(
             "In Progress",
             {"In Progress": ["CHB-1", "CHB-2", "CHB-91"], "To Do": ["CHB-9", "CHB-50", "CHB-123", "CHB-7"]},
-            descriptions={"CHB-50": doc("Depends on CHB-91.")},
+            links={"CHB-50": blocked_by("CHB-91")},
             epics=("CHB-9",),
             board=board_config(**{**BOARD_LIMITS, "In Progress": {"min": 1, "max": 4}}),
         )
@@ -762,7 +730,7 @@ class FreeSlotTest(unittest.TestCase):
 
     def test_no_startable_ticket_says_so(self) -> None:
         fake = transition_fake(
-            "In Progress", {"In Progress": ["CHB-1"], "In Review": ["CHB-91"], "To Do": ["CHB-50"]}, descriptions={"CHB-50": doc("Depends on CHB-91.")}
+            "In Progress", {"In Progress": ["CHB-1"], "In Review": ["CHB-91"], "To Do": ["CHB-50"]}, links={"CHB-50": blocked_by("CHB-91")}
         )
         code, out, _ = _run(["transition", "CHB-12", "In Review"], fake)
 
@@ -778,7 +746,7 @@ class FreeSlotTest(unittest.TestCase):
 
     def test_a_ticket_that_depends_on_the_moved_ticket_is_not_next(self) -> None:
         """CHB-143: the moved ticket is still open, so its dependents cannot start, whatever the search still shows."""
-        depends_on_12 = doc("Depends on: CHB-12 (the moved ticket).\n\n## Acceptance criteria\n\n- A test.")
+        depends_on_12 = {"CHB-114": blocked_by("CHB-12")}
         queue = ["CHB-114", "CHB-7"]
         cases = {
             "into Validating, search shows the old status": ("In Review", "Validating", {"In Review": ["CHB-12"]}),
@@ -793,7 +761,7 @@ class FreeSlotTest(unittest.TestCase):
                     current,
                     {"In Progress": ["CHB-1"], "To Do": queue},
                     description=description_with("Acceptance criteria", *SECTIONS.values()),
-                    descriptions={"CHB-114": depends_on_12},
+                    links=depends_on_12,
                 )
                 before = {"In Progress": ["CHB-1"], "To Do": [*(["CHB-12"] if current == "To Do" else []), *queue]}
                 if current != "To Do":
@@ -801,7 +769,7 @@ class FreeSlotTest(unittest.TestCase):
                 placed = {"In Progress": ["CHB-1"], "To Do": queue}
                 for status, keys in after.items():
                     placed[status] = [*keys, *placed.get(status, [])] if status == "To Do" else [*placed.get(status, []), *keys]
-                fake.routes[("POST", SEARCH)] = _search_changes_at_the_move(fake, before, placed, {"CHB-114": depends_on_12})
+                fake.routes[("POST", SEARCH)] = _search_changes_at_the_move(fake, before, placed, {}, depends_on_12)
                 code, out, _ = _run(["transition", "CHB-12", target], fake)
 
                 self.assertEqual(code, 0)
@@ -819,7 +787,7 @@ class FreeSlotTest(unittest.TestCase):
                     "Validating",
                     {"Validating": ["CHB-12"], "In Progress": ["CHB-1"], "To Do": ["CHB-88", "CHB-7"]},
                     board=board,
-                    descriptions={"CHB-88": doc("Depends on: CHB-12.\n\n## Acceptance criteria\n\n- A test.")},
+                    links={"CHB-88": blocked_by("CHB-12")},
                 )
                 fake.routes[("GET", "/rest/api/3/issue/CHB-12/transitions")] = transitions
                 code, out, _ = _run(["transition", "CHB-12", target], fake)
@@ -1956,13 +1924,14 @@ def link_fake(before: list[dict[str, Any]], after: list[dict[str, Any]] | None =
 class LinkTest(unittest.TestCase):
     """CHB-151: `link CHB-<a> --blocked-by CHB-<b>` creates a "Blocks" link: CHB-<b> blocks CHB-<a>."""
 
-    def test_creates_a_blocks_link_with_the_blocker_as_the_outward_issue(self) -> None:
+    def test_creates_a_blocks_link_with_the_blocker_as_the_inward_issue_of_the_post(self) -> None:
+        """Checked live (CHB-151): a POST with inwardIssue=CHB-114, outwardIssue=CHB-17 made CHB-114 block CHB-17."""
         fake = link_fake([])
         code, out, _ = _run(["link", "CHB-88", "--blocked-by", "CHB-146"], fake)
 
         self.assertEqual(code, 0)
         self.assertEqual(out.strip(), "CHB-88 is blocked by CHB-146: link created")
-        body = {"type": {"name": "Blocks"}, "inwardIssue": {"key": "CHB-88"}, "outwardIssue": {"key": "CHB-146"}}
+        body = {"type": {"name": "Blocks"}, "inwardIssue": {"key": "CHB-146"}, "outwardIssue": {"key": "CHB-88"}}
         self.assertEqual(fake.writes(), [("POST", ISSUE_LINK, body)])
 
     def test_an_existing_link_is_not_duplicated(self) -> None:

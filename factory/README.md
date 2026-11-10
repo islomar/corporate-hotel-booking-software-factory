@@ -166,7 +166,9 @@ A bad heading, an empty body, a "When:" line without "Speed up:", a duplicate ke
 
 `view` shows a bullet list as lines that start with a dash, and each issue link as a line such as `Is blocked by: CHB-146 (To Do)` or `Blocks: CHB-88 (To Do)`.
 
-`link CHB-<a> --blocked-by CHB-<b>` creates a Jira "Blocks" link with `POST /rest/api/3/issueLink`: `CHB-<b>` is the outward issue ("blocks"), `CHB-<a>` the inward issue ("is blocked by").
+`link CHB-<a> --blocked-by CHB-<b>` creates a Jira "Blocks" link with `POST /rest/api/3/issueLink`.
+The POST body names the sides the other way round from a read: the blocker `CHB-<b>` is `inwardIssue` and `CHB-<a>` is `outwardIssue`.
+A read of `CHB-<a>` then lists `CHB-<b>` as `inwardIssue` ("is blocked by"). A live check on 2026-11-10 showed it.
 It reads the links of `CHB-<a>` first and changes nothing when the link exists.
 It reads them again after the POST and exits 1 when `CHB-<b>` does not show as a blocker.
 A key outside CHB or a ticket linked to itself exits 2 before the wrapper reads 1Password.

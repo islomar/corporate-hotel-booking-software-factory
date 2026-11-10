@@ -122,9 +122,6 @@ ACCEPTANCE_PATTERN = re.compile(
     r"^#{1,6} +(?:\*\*)?acceptance criteria\b(?!\s*\(validating\))|^\s*(?:\*\*)?acceptance criteria\s*:?\s*(?:\*\*)?\s*:?\s*$",
     re.IGNORECASE,
 )
-DEPENDS_PATTERN = re.compile(r"^\s*(?:[-*]|\d+\.)?\s*(?:\*\*)?depends on\b", re.IGNORECASE)
-SENTENCE_END = re.compile(r"\.(?:\s|$)")
-KEY_IN_TEXT = re.compile(rf"(?<![\w-]){PROJECT}-[1-9][0-9]*(?![\w-])")
 # Open tickets in rank order, for the top of To Do and for the dependencies. Discarded is in the
 # Done status category, so it is not open.
 OPEN_JQL = "statusCategory != Done ORDER BY Rank ASC"
@@ -761,14 +758,16 @@ class Jira:
     def link(self, blocked: str, blocker: str) -> bool:
         """Make `blocker` block `blocked` with a "Blocks" link. Return False when that link exists already.
 
-        Jira stores the blocking issue as outwardIssue ("blocks") and the blocked one as inwardIssue
-        ("is blocked by"). The links are read again after the POST: a link stored the other way round
+        The POST names the sides the other way round from a read: in the POST body the blocker is
+        inwardIssue and the blocked issue outwardIssue; a read of the blocked issue then lists the blocker
+        as inwardIssue ("is blocked by"). Checked live on 2026-11-10 (CHB-151): the opposite body made
+        CHB-114 block CHB-17. The links are read again after the POST: a link stored the other way round
         would block the wrong ticket, so it raises JiraError.
         """
         check_link_input(blocked, blocker)
         if blocker in self.blocked_by(blocked):
             return False
-        body = {"type": {"name": BLOCKS}, "inwardIssue": {"key": blocked}, "outwardIssue": {"key": blocker}}
+        body = {"type": {"name": BLOCKS}, "inwardIssue": {"key": blocker}, "outwardIssue": {"key": blocked}}
         self.request("POST", "/rest/api/3/issueLink", body, empty_ok=True)
         if blocker not in self.blocked_by(blocked):
             raise JiraError(
@@ -948,14 +947,14 @@ def open_blockers(fields: dict[str, Any], open_keys: set[str]) -> list[str]:
 def blockers(fields: dict[str, Any]) -> list[str]:
     """Keys of the issues this one "is blocked by": its "Blocks" links with the other issue as inwardIssue.
 
-    Until the text dependencies are migrated (CHB-151), the keys on its "Depends on" lines count too.
+    Text in the description, such as "Depends on CHB-<n>", is not read (CHB-151).
     """
     keys = [
         str(link["inwardIssue"].get("key"))
         for link in fields.get("issuelinks") or []
         if isinstance(link, dict) and (link.get("type") or {}).get("name") == BLOCKS and isinstance(link.get("inwardIssue"), dict)
     ]
-    return list(dict.fromkeys([*keys, *dependencies(fields.get("description"))]))
+    return list(dict.fromkeys(keys))
 
 
 def has_acceptance_criteria(description: Any) -> bool:
@@ -977,33 +976,6 @@ def has_acceptance_criteria(description: Any) -> bool:
             if following.strip() and not other:
                 return True
     return False
-
-
-def dependencies(description: Any) -> list[str]:
-    """CHB keys in the first sentence of a line that starts with "Depends on", and, when that line
-    ends with ":", in the list under it: the indented lines that follow it in the same list item,
-    or the list right after its paragraph. Other mentions of tickets are not dependencies."""
-    content = description.get("content", []) if isinstance(description, dict) else []
-    keys: list[str] = []
-    for index, node in enumerate(content):
-        lines = adf_to_text(node).strip("\n").splitlines()
-        for number, line in enumerate(lines):
-            if not DEPENDS_PATTERN.match(line):
-                continue
-            keys.extend(KEY_IN_TEXT.findall(SENTENCE_END.split(line, maxsplit=1)[0]))  # first sentence only
-            if not line.rstrip().rstrip("*").endswith(":"):
-                continue
-            nested = []
-            for other in lines[number + 1 :]:
-                if not other[:1].isspace():
-                    break
-                nested.append(other)
-            keys.extend(KEY_IN_TEXT.findall("\n".join(nested)))
-            following = content[index + 1] if index + 1 < len(content) else None
-            last = number == len(lines) - 1
-            if last and isinstance(following, dict) and following.get("type") in ("bulletList", "orderedList"):
-                keys.extend(KEY_IN_TEXT.findall(adf_to_text(following)))
-    return list(dict.fromkeys(keys))
 
 
 def after_transition(jira: Jira, key: str, move: Move) -> list[str]:
