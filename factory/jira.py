@@ -909,10 +909,8 @@ class Jira:
 
         start_expedite moves it to In Progress. Nothing else sets Highest, so an open Highest ticket is an open expedite ticket.
         """
-        check_expedite(reason)
-        check_summary(summary)
-        check_why_text(description)
-        open_ones = [str(issue["key"]) for issue in self.open_issues() if _priority_name(issue) == EXPEDITE_PRIORITY]
+        check_expedite(reason)  # the guard that makes Highest legitimate; _create checks the summary and description
+        open_ones = self.open_expedite()
         if open_ones:
             raise BlockedError(
                 f"{', '.join(open_ones)} is an open expedite ticket; only one may be open at a time. "
@@ -920,9 +918,12 @@ class Jira:
             )
         return self._create(parent, summary, description, EXPEDITE_PRIORITY)
 
-    def start_expedite(self, key: str, reason: str) -> None:
-        """Move a new expedite ticket straight to In Progress, past Backlog, Ready and every column limit,
-        then post the reason as a comment and assign it to the agent (CHB-157).
+    def open_expedite(self) -> list[str]:
+        """Keys of the open tickets with priority Highest: the open expedite tickets (CHB-157)."""
+        return [str(issue["key"]) for issue in self.open_issues() if _priority_name(issue) == EXPEDITE_PRIORITY]
+
+    def move_expedite(self, key: str) -> None:
+        """Move a new expedite ticket straight to In Progress, past Backlog, Ready and every column limit (CHB-157).
 
         The move skips before_transition: it refuses a start from Backlog, and a full column. One open
         expedite ticket at a time keeps the excess at one.
@@ -933,12 +934,34 @@ class Jira:
         if match is None:
             raise JiraError(f"{key} has no transition into {IN_PROGRESS}")
         self.request("POST", f"/rest/api/3/issue/{key}/transitions", {"transition": {"id": match["id"]}}, empty_ok=True)
-        self.comment(
-            key,
+
+    def finish_expedite(self, key: str, reason: str) -> list[str]:
+        """After the move: comment the reason, assign the agent, and check that no other expedite ticket
+        opened meanwhile (two agents can both pass the one-at-a-time check). Return a notice for each
+        step that failed or found a problem; the ticket is in In Progress whatever happens here.
+        """
+        notices = []
+        body = (
             f"Expedite: {reason.strip()}\n\nCreated straight in {IN_PROGRESS}, past {BACKLOG}, {READY} and the column limits "
-            "(docs/process/kanban.md, Expedite).",
+            "(docs/process/kanban.md, Expedite)."
         )
-        self.assign(key, self.myself()["accountId"])
+        steps: list[tuple[Callable[[], object], str]] = [
+            (lambda: self.comment(key, body), f"post it: factory/bin/jira comment {key} --body-file FILE with 'Expedite: <reason>'"),
+            (lambda: self.assign(key, self.myself()["accountId"]), f"run factory/bin/jira assign {key} --me"),
+        ]
+        for step, fix in steps:
+            try:
+                step()
+            except JiraError as error:
+                notices.append(f"{key} is in {IN_PROGRESS}, but a step failed: {error}; {fix}")
+        try:
+            open_ones = self.open_expedite()
+        except JiraError as error:
+            notices.append(f"could not check for other open expedite tickets: {error}")
+        else:
+            if len(open_ones) > 1:
+                notices.append(f"more than one open expedite ticket: {', '.join(open_ones)}. Tell the owner")
+        return notices
 
     def _create(self, parent: str, summary: str, description: str, priority: str) -> str:
         check_summary(summary)
@@ -1613,19 +1636,19 @@ def _minimum_notice(jira: Jira, key: str, move: Move) -> list[str]:
     if source == target:
         return []
     pull = pull_list(move.columns)
-    checks = [(source, 0)] if source is not None and source.min is not None else []
+    checks = [(source, source.min, 0)] if source is not None and source.min is not None else []
     if target is not None and target.min is not None and target == pull:
-        checks.append((target, 0 if move.epic else 1))
+        checks.append((target, target.min, 0 if move.epic else 1))
     notices = []
-    for column, added in checks:
+    for column, minimum, added in checks:
         try:
             count = len(jira.keys_in(column, excluding=key)) + added
         except JiraError as error:  # the move is done: report, do not fail it
             notices.append(f"could not check the {column.name} minimum: {error}")
             continue
-        if column.min is None or count >= column.min:
+        if count >= minimum:
             continue
-        line = f"{column.name} is below its minimum ({count}/{column.min})"
+        line = f"{column.name} is below its minimum ({count}/{minimum})"
         if column == pull:
             line += ": look for Backlog tickets with a trigger; none qualify means tell the owner"
         notices.append(line)
@@ -1897,8 +1920,9 @@ def run(args: argparse.Namespace, jira: Jira) -> None:
         key = jira.create_expedite(args.parent, args.summary, args.description, args.expedite)
         print(key)
         # The ticket exists: from here on a failure is a notice, never an exit code that invites a second create.
+        # KeyError, TypeError and AttributeError mean an answer of unexpected shape, as in main(): still exit 0.
         try:
-            jira.start_expedite(key, args.expedite)
+            jira.move_expedite(key)
         except (JiraError, KeyError, TypeError, AttributeError) as error:
             print(
                 f"could not start {key} as expedite: {error}. Tell the owner now; the owner moves it to {IN_PROGRESS} "
@@ -1906,6 +1930,8 @@ def run(args: argparse.Namespace, jira: Jira) -> None:
             )
             return
         print(f"{key} -> {IN_PROGRESS} (expedite). Tell the owner now: {args.expedite.strip()}")
+        for notice in jira.finish_expedite(key, args.expedite):
+            print(notice)
     elif args.command == "create":
         key = jira.create(args.parent, args.summary, args.description, args.priority)
         print(key)

@@ -3370,6 +3370,33 @@ class ExpediteTest(unittest.TestCase):
         self.assertIn("Jira UI", out)
         self.assertEqual(_write_paths(fake), [CREATE_PATH, NEW_MOVE])
 
+    def test_a_failed_comment_or_assign_after_the_move_says_the_ticket_is_in_progress(self) -> None:
+        for path, command in ((NEW_COMMENT, "factory/bin/jira comment CHB-200"), (NEW_ASSIGNEE, "factory/bin/jira assign CHB-200 --me")):
+            with self.subTest(path):
+                fake = expedite_fake()
+                fake.routes[("POST" if path == NEW_COMMENT else "PUT", path)] = 500
+                code, out, _ = _create_args(fake, *EXPEDITE, priority=None)
+
+                self.assertEqual(code, 0)
+                self.assertIn("CHB-200 -> In Progress (expedite). Tell the owner now:", out)
+                self.assertIn(command, out)
+                self.assertNotIn("Jira UI", out)
+
+    def test_a_second_highest_ticket_created_meanwhile_is_reported(self) -> None:
+        """Two agents can both pass the one-at-a-time check; the search after the move shows it."""
+        fake = expedite_fake()
+        searches = [
+            keys_answer({"In Progress": ["CHB-1"]})({"jql": OPEN_JQL, "fields": ["issuelinks"]}),
+            keys_answer({"In Progress": ["CHB-200", "CHB-201"]}, priorities={"CHB-200": "Highest", "CHB-201": "Highest"})(
+                {"jql": OPEN_JQL, "fields": ["issuelinks"]}
+            ),
+        ]
+        fake.routes[("POST", SEARCH)] = lambda _: searches.pop(0)
+        code, out, _ = _create_args(fake, *EXPEDITE, priority=None)
+
+        self.assertEqual(code, 0)
+        self.assertIn("more than one open expedite ticket: CHB-200, CHB-201", out)
+
 
 if __name__ == "__main__":
     unittest.main()

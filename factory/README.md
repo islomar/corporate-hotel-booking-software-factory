@@ -203,7 +203,9 @@ The case is one of `production bug`, `pipeline broken` or `secret leak`; any oth
 It reads the open tickets first and exits 4, with no write, while another ticket with priority Highest is open.
 The move skips `before_transition`: it passes Backlog and Ready and every column limit, so a full column goes over its max by one.
 Then it comments `Expedite: <reason>`, assigns the ticket to the agent, and prints `CHB-<n> -> In Progress (expedite). Tell the owner now: <reason>`.
-A failure after the create is a notice with exit 0: the owner moves the ticket in the Jira UI.
+A failed move after the create is a notice with exit 0: the owner moves the ticket in the Jira UI.
+A failed comment or assign after the move is a notice that names the command to run; the ticket is in In Progress.
+After the move it reads the open tickets again and prints `more than one open expedite ticket: ...` when two agents created one at the same moment.
 `priority CHB-<n> Highest` and `create --priority Highest` exit 2 and name `create --expedite`.
 
 `sort-todo` ranks the pull list in the order of `docs/process/kanban.md`, Ready (CHB-148): tickets in `top_queue` (they can start) first, High, then Medium, then Low;
