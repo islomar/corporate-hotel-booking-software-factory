@@ -96,9 +96,9 @@ stateDiagram-v2
     InProgress --> NeedsHuman: owner needed
     InReview --> NeedsHuman: owner needed
     Validating --> NeedsHuman: owner needed
-    NeedsHuman --> InProgress: owner answered
-    NeedsHuman --> InReview: owner answered
-    NeedsHuman --> Validating: owner answered
+    NeedsHuman --> InProgress: owner answered, back to In Progress
+    NeedsHuman --> InReview: owner answered, back to In Review
+    NeedsHuman --> Validating: owner answered, back to Validating, then live check and Done
     Done --> [*]
     Discarded --> [*]
 ```
