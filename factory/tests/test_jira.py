@@ -86,6 +86,7 @@ def _run(argv: list[str], fake: FakeJira, credentials_reader: Any = lambda: CRED
 
 
 SEARCH = "/rest/api/3/search/jql"
+RANK_PATH = "/rest/agile/1.0/issue/rank"
 BOARD = "/rest/agile/1.0/board/2/configuration"
 # Status ids as on the real board: To Do 10003, In Progress 3, In Review 10004, Validating 10006,
 # Needs human 10007, Done 10005.
@@ -120,7 +121,7 @@ SECTIONS = {
 
 
 def description_with(*headings: str, body: str = "Some text.") -> dict[str, Any]:
-    content: list[dict[str, Any]] = [{"type": "paragraph", "content": [{"type": "text", "text": "Intro."}]}]
+    content: list[dict[str, Any]] = [*doc(WHY_SECTION)["content"], {"type": "paragraph", "content": [{"type": "text", "text": "Intro."}]}]
     for heading in headings:
         content.append({"type": "heading", "attrs": {"level": 2}, "content": [{"type": "text", "text": heading}]})
         if body:
@@ -153,8 +154,9 @@ def doc(markdown: str) -> dict[str, Any]:
     return text_to_adf(markdown)
 
 
-READY = doc("Do the thing.\n\n## Acceptance criteria\n\n- A test shows the thing.")
-NOT_READY = doc("Do the thing, some day.")
+WHY_SECTION = "## Why it matters\n\nThe owner waits for the thing."
+READY = doc(f"{WHY_SECTION}\n\n## Acceptance criteria\n\n- A test shows the thing.")
+NOT_READY = doc(f"{WHY_SECTION}\n\n## Plan\n\nDo the thing, some day.")
 OPEN_JQL = "project = CHB AND (statusCategory != Done) ORDER BY Rank ASC"
 
 
@@ -163,15 +165,18 @@ def keys_answer(
     descriptions: dict[str, Any] | None = None,
     epics: tuple[str, ...] = (),
     links: dict[str, list[dict[str, Any]]] | None = None,
+    priorities: dict[str, str | None] | None = None,
 ) -> Any:
     """Answer a JQL search like Jira would.
 
     The open-tickets search (statusCategory != Done, in rank order) gets every key listed for a
-    status that is not Done, with its status, type, description (READY unless given) and issue links.
+    status that is not Done, with its status, type, description (READY unless given), issue links and
+    priority (Medium unless given; None leaves the field out).
     A column count (status in (...) AND key != X) gets the keys of the statuses it names, minus X.
     """
     descriptions = descriptions or {}
     links = links or {}
+    priorities = priorities or {}
 
     def answer(body: dict[str, Any]) -> dict[str, Any]:
         jql = body["jql"]
@@ -185,6 +190,7 @@ def keys_answer(
                         "issuetype": {"name": "Epic" if k in epics else "Task"},
                         "description": descriptions.get(k, READY),
                         "issuelinks": links.get(k, []),
+                        "priority": None if priorities.get(k, "Medium") is None else {"name": priorities.get(k, "Medium")},
                     },
                 }
                 for name, ks in by_status.items()
@@ -207,6 +213,7 @@ def transition_fake(
     descriptions: dict[str, Any] | None = None,
     epics: tuple[str, ...] = (),
     links: dict[str, list[dict[str, Any]]] | None = None,
+    priorities: dict[str, str | None] | None = None,
 ) -> FakeJira:
     """CHB-12 sits in `current`. A ticket in To Do is listed in To Do unless the test places it."""
     by_status = dict(by_status or {})
@@ -219,8 +226,9 @@ def transition_fake(
             ("GET", "/rest/api/3/issue/CHB-12/transitions"): TRANSITIONS,
             ("GET", f"/rest/api/3/issue/CHB-12?fields={ISSUE_FIELDS}"): issue_in(current, description, links.get("CHB-12")),
             ("GET", BOARD): board_config(**BOARD_LIMITS) if board is None else board,
-            ("POST", SEARCH): keys_answer(by_status, descriptions, epics, links),
+            ("POST", SEARCH): keys_answer(by_status, descriptions, epics, links, priorities),
             ("POST", "/rest/api/3/issue/CHB-12/transitions"): None,
+            ("PUT", RANK_PATH): None,
         }
     )
 
@@ -548,7 +556,7 @@ class TopTicketTest(unittest.TestCase):
         self.assertEqual(fake.writes(), [])
 
     def test_the_top_ticket_without_acceptance_criteria_waits_for_them(self) -> None:
-        for name, description in {"none": NOT_READY, "only Validating": doc("## Acceptance criteria (Validating)\n\n- Live.")}.items():
+        for name, description in {"none": NOT_READY, "only Validating": doc(f"{WHY_SECTION}\n\n## Acceptance criteria (Validating)\n\n- Live.")}.items():
             with self.subTest(name):
                 fake = transition_fake("To Do", {"To Do": ["CHB-12", "CHB-5"]}, description=description)
                 code, out, err = _run(["transition", "CHB-12", "In Progress"], fake)
@@ -582,7 +590,7 @@ class TopTicketTest(unittest.TestCase):
 
     def test_a_ticket_with_depends_on_text_but_no_link_starts(self) -> None:
         """CHB-151: the text is not read any more."""
-        description = doc("Depends on CHB-91.\n\nAcceptance criteria:\n\n- A test.")
+        description = doc(f"{WHY_SECTION}\n\nDepends on CHB-91.\n\nAcceptance criteria:\n\n- A test.")
         fake = transition_fake("To Do", {"In Review": ["CHB-91"]}, description=description)
         code, _, _ = _run(["transition", "CHB-12", "In Progress"], fake)
 
@@ -720,6 +728,21 @@ class FreeSlotTest(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertIn("In Progress 1/3: 2 slots free; next: CHB-122 (needs acceptance criteria), CHB-7", out.splitlines())
+
+    def test_next_tickets_follow_the_sorted_order_and_name_a_missing_why_section(self) -> None:
+        """CHB-148: the notice and the start check agree, so the notice uses the order sort-todo makes."""
+        fake = transition_fake(
+            "In Progress",
+            {"In Progress": ["CHB-1"], "To Do": ["CHB-7", "CHB-8", "CHB-122"]},
+            descriptions={"CHB-122": doc("Do it.")},
+            priorities={"CHB-7": "Low", "CHB-122": "High"},
+        )
+        code, out, _ = _run(["transition", "CHB-12", "In Review"], fake)
+
+        self.assertEqual(code, 0)
+        self.assertIn(
+            "In Progress 1/3: 2 slots free; next: CHB-122 (needs Why it matters and acceptance criteria), CHB-8", out.splitlines()
+        )
 
     def test_one_next_ticket_per_free_slot(self) -> None:
         fake = transition_fake("In Progress", {"In Progress": ["CHB-1"], "To Do": ["CHB-123", "CHB-7", "CHB-8"]})
@@ -995,18 +1018,26 @@ class AssignTest(unittest.TestCase):
         self.assertEqual(fake.writes()[0][2], {"accountId": "owner-id"})
 
 
+def create_fake(parent_type: str = "Epic") -> FakeJira:
+    """CHB-27 is the parent; the new ticket is CHB-200; To Do is empty, so create's sort ranks nothing."""
+    return FakeJira(
+        {
+            ("GET", "/rest/api/3/issue/CHB-27?fields=issuetype"): {"fields": {"issuetype": {"name": parent_type}}},
+            ("POST", "/rest/api/3/issue"): {"key": "CHB-200"},
+            ("GET", BOARD): board_config(**BOARD_LIMITS),
+            ("POST", SEARCH): keys_answer({"To Do": []}),
+            ("PUT", RANK_PATH): None,
+        }
+    )
+
+
 class CreateTest(unittest.TestCase):
     def _fake(self, parent_type: str) -> FakeJira:
-        return FakeJira(
-            {
-                ("GET", "/rest/api/3/issue/CHB-27?fields=issuetype"): {"fields": {"issuetype": {"name": parent_type}}},
-                ("POST", "/rest/api/3/issue"): {"key": "CHB-200"},
-            }
-        )
+        return create_fake(parent_type)
 
     def _create(self, fake: FakeJira, priority: tuple[str, ...] = ("--priority", "Medium")) -> tuple[int, str, str]:
         with tempfile.NamedTemporaryFile("w") as description:
-            description.write("Line one.\n\nAC1: works.")
+            description.write(f"{WHY_SECTION}\n\nAC1: works.")
             description.flush()
             argv = ["create", "--parent", "CHB-27", "--summary", "Do it", "--description-file", description.name]
             return _run([*argv, *priority], fake)
@@ -1022,7 +1053,7 @@ class CreateTest(unittest.TestCase):
         self.assertEqual(fields["project"], {"key": "CHB"})
         self.assertEqual(fields["issuetype"], {"name": "Task"})
         self.assertEqual(fields["parent"], {"key": "CHB-27"})
-        self.assertEqual(adf_to_text(fields["description"]), "Line one.\n\nAC1: works.")
+        self.assertEqual(adf_to_text(fields["description"]), f"{WHY_SECTION}\n\nAC1: works.")
         self.assertEqual(fields["priority"], {"name": "Medium"})
 
     def test_priority_is_required(self) -> None:
@@ -2008,6 +2039,313 @@ class ViewLinksTest(unittest.TestCase):
         self.assertIn("Is blocked by: CHB-146 (To Do)", out.splitlines())
         self.assertIn("Blocks: CHB-49 (To Do)", out.splitlines())
         self.assertIn("Relates to: CHB-5 (To Do)", out.splitlines())
+WHY = "Why it matters"
+CREATE_PATH = "/rest/api/3/issue"
+MOVE_PATH = "/rest/api/3/issue/CHB-12/transitions"
+
+
+def _create_with(
+    description: str, fake: FakeJira | None = None, credentials_reader: Any = lambda: CREDENTIALS, priority: str = "Medium"
+) -> tuple[int, str, str, FakeJira]:
+    fake = fake or create_fake()
+    with tempfile.NamedTemporaryFile("w") as handle:
+        handle.write(description)
+        handle.flush()
+        argv = ["create", "--parent", "CHB-27", "--summary", "Do it", "--description-file", handle.name, "--priority", priority]
+        code, out, err = _run(argv, fake, credentials_reader=credentials_reader)
+    return code, out, err, fake
+
+
+def _write_paths(fake: FakeJira) -> list[str]:
+    return [path for _, path, _ in fake.writes()]
+
+
+class WhyItMattersTest(unittest.TestCase):
+    """CHB-148: every ticket opens with a non-empty "Why it matters" section."""
+
+    def test_why_problem(self) -> None:
+        cases = {
+            "first, with text": (f"## {WHY}\n\nThe owner waits.\n\n## Plan\n\nDo it.", None),
+            "level 3 heading": (f"### {WHY}\n\nThe owner waits.", None),
+            "a list as its text": (f"## {WHY}\n\n- The owner waits.", None),
+            "no description": ("", "does not start with"),
+            "intro before it": (f"Intro.\n\n## {WHY}\n\nThe owner waits.", "does not start with"),
+            "another heading first": (f"## Plan\n\nDo it.\n\n## {WHY}\n\nThe owner waits.", "does not start with"),
+            "wrong case": ("## Why It Matters\n\nThe owner waits.", "does not start with"),
+            "empty": (f"## {WHY}\n\n## Plan\n\nDo it.", "is empty"),
+            "empty at the end": (f"## {WHY}", "is empty"),
+            "a subheading is not text": (f"## {WHY}\n\n### Detail\n\n## Plan\n\nDo it.", "is empty"),
+        }
+        for name, (markdown, problem) in cases.items():
+            with self.subTest(name):
+                found = jira.why_problem(text_to_adf(markdown) if markdown else None)
+                if problem is None:
+                    self.assertIsNone(found)
+                else:
+                    self.assertIn(problem, found or "")
+
+    def test_create_without_the_section_exits_2_before_any_request(self) -> None:
+        for name, description in {
+            "missing": "Line one.\n\nAC1: works.",
+            "not first": f"Intro.\n\n## {WHY}\n\nThe owner waits.",
+            "empty": f"## {WHY}\n\n## Acceptance criteria\n\n- AC1.",
+        }.items():
+            with self.subTest(name):
+                code, out, err, fake = _create_with(description, credentials_reader=_no_credentials)
+
+                self.assertEqual(code, 2)
+                self.assertEqual(out, "")
+                self.assertIn(WHY, err)
+                self.assertEqual(fake.requests, [])
+
+    def test_create_with_the_section_creates(self) -> None:
+        code, out, _, fake = _create_with(f"## {WHY}\n\nThe owner waits.\n\n## Acceptance criteria\n\n- AC1.")
+
+        self.assertEqual(code, 0)
+        self.assertEqual(out.splitlines()[0], "CHB-200")
+        self.assertIn(CREATE_PATH, _write_paths(fake))
+
+    def test_a_start_without_the_section_exits_4_with_the_command_to_add_it(self) -> None:
+        for name, description in {
+            "missing": doc("Do it.\n\n## Acceptance criteria\n\n- A test."),
+            "empty": doc(f"## {WHY}\n\n## Acceptance criteria\n\n- A test."),
+        }.items():
+            with self.subTest(name):
+                fake = transition_fake("To Do", {"To Do": ["CHB-12", "CHB-5"]}, description=description)
+                code, out, err = _run(["transition", "CHB-12", "In Progress"], fake)
+
+                self.assertEqual(code, 4)
+                self.assertEqual(out, "")
+                self.assertIn(f'factory/bin/jira section CHB-12 --heading "{WHY}" --first --body-file FILE', err)
+                self.assertNotIn(MOVE_PATH, _write_paths(fake))
+
+    def test_the_top_ticket_rule_comes_before_the_why_rule(self) -> None:
+        fake = transition_fake("To Do", {"To Do": ["CHB-5", "CHB-12"]}, description=doc("Do it."))
+        code, _, err = _run(["transition", "CHB-12", "In Progress"], fake)
+
+        self.assertEqual(code, 4)
+        self.assertIn("CHB-12 is not the top ticket of To Do: CHB-5 is", err)
+
+    def test_moving_back_into_in_progress_needs_no_why_section(self) -> None:
+        fake = transition_fake("In Review", {"To Do": ["CHB-5"]}, description=doc("Do it."))
+        code, _, _ = _run(["transition", "CHB-12", "In Progress"], fake)
+
+        self.assertEqual(code, 0)
+
+
+def _apply_ranks(order: list[str], fake: FakeJira) -> list[str]:
+    """The To Do order after the rank requests the fake received, applied like Jira does."""
+    order = list(order)
+    for body in _rank_writes(fake):
+        keys = body["issues"]
+        order = [key for key in order if key not in keys]
+        if "rankBeforeIssue" in body:
+            at = order.index(body["rankBeforeIssue"])
+        else:
+            at = order.index(body["rankAfterIssue"]) + 1
+        order[at:at] = keys
+    return order
+
+
+def _rank_writes(fake: FakeJira) -> list[Any]:
+    return [body for method, path, body in fake.writes() if (method, path) == ("PUT", RANK_PATH)]
+
+
+def sort_fake(to_do: list[str], by_status: dict[str, list[str]] | None = None, **kwargs: Any) -> FakeJira:
+    return FakeJira(
+        {
+            ("GET", BOARD): board_config(**BOARD_LIMITS),
+            ("POST", SEARCH): keys_answer({"To Do": to_do, **(by_status or {})}, **kwargs),
+            ("PUT", RANK_PATH): None,
+        }
+    )
+
+
+class SortTodoTest(unittest.TestCase):
+    """CHB-148: To Do holds ready tickets High, Medium, Low, then blocked tickets, then epics."""
+
+    def test_ready_by_priority_then_blocked_then_epics_keeping_relative_order(self) -> None:
+        to_do = ["CHB-1", "CHB-2", "CHB-3", "CHB-4", "CHB-5", "CHB-6", "CHB-7", "CHB-8", "CHB-9"]
+        fake = sort_fake(
+            to_do,
+            by_status={"In Review": ["CHB-90"]},
+            links={"CHB-1": blocked_by("CHB-90"), "CHB-6": blocked_by("CHB-90")},
+            priorities={"CHB-1": "High", "CHB-2": "Low", "CHB-3": "High", "CHB-4": "High", "CHB-5": "Low", "CHB-8": "High"},
+            epics=("CHB-3",),
+        )
+        code, out, _ = _run(["sort-todo"], fake)
+
+        self.assertEqual(code, 0)
+        expected = ["CHB-4", "CHB-8", "CHB-7", "CHB-9", "CHB-2", "CHB-5", "CHB-1", "CHB-6", "CHB-3"]
+        self.assertEqual(_apply_ranks(to_do, fake), expected)
+        self.assertIn(", ".join(expected), out)
+
+    def test_a_missing_priority_sorts_as_medium(self) -> None:
+        to_do = ["CHB-1", "CHB-2", "CHB-3"]
+        fake = sort_fake(to_do, priorities={"CHB-1": "Low", "CHB-2": None, "CHB-3": "High"})
+        self.assertEqual(_run(["sort-todo"], fake)[0], 0)
+
+        self.assertEqual(_apply_ranks(to_do, fake), ["CHB-3", "CHB-2", "CHB-1"])
+
+    def test_already_sorted_is_a_no_op(self) -> None:
+        fake = sort_fake(["CHB-1", "CHB-2", "CHB-3"], priorities={"CHB-1": "High", "CHB-3": "Low"})
+        code, out, _ = _run(["sort-todo"], fake)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(fake.writes(), [])
+        self.assertIn("already sorted", out)
+
+    def test_only_tickets_from_the_first_misplaced_one_are_ranked(self) -> None:
+        to_do = ["CHB-1", "CHB-2", "CHB-3", "CHB-4"]
+        fake = sort_fake(to_do, priorities={"CHB-1": "High", "CHB-4": "High"})
+        _run(["sort-todo"], fake)
+
+        self.assertEqual(_rank_writes(fake), [{"issues": ["CHB-4", "CHB-2", "CHB-3"], "rankAfterIssue": "CHB-1"}])
+        self.assertEqual(_apply_ranks(to_do, fake), ["CHB-1", "CHB-4", "CHB-2", "CHB-3"])
+
+    def test_a_new_top_ticket_goes_before_the_old_one(self) -> None:
+        to_do = ["CHB-1", "CHB-2", "CHB-3"]
+        fake = sort_fake(to_do, priorities={"CHB-3": "High"})
+        _run(["sort-todo"], fake)
+
+        self.assertEqual(_rank_writes(fake), [{"issues": ["CHB-3"], "rankBeforeIssue": "CHB-1"}])
+        self.assertEqual(_apply_ranks(to_do, fake), ["CHB-3", "CHB-1", "CHB-2"])
+
+    def test_more_than_50_tickets_are_ranked_in_chunks_of_50(self) -> None:
+        low, medium = [f"CHB-{n}" for n in range(1, 61)], [f"CHB-{n}" for n in range(61, 122)]
+        fake = sort_fake([*low, *medium], priorities=dict.fromkeys(low, "Low"))
+        _run(["sort-todo"], fake)
+
+        sizes = [len(body["issues"]) for body in _rank_writes(fake)]
+        self.assertEqual(sizes, [1, 50, 50, 20])
+        self.assertEqual(_apply_ranks([*low, *medium], fake), [*medium, *low])
+
+    def test_tickets_outside_to_do_are_not_ranked(self) -> None:
+        fake = sort_fake(["CHB-1", "CHB-2"], by_status={"In Progress": ["CHB-7"]}, priorities={"CHB-2": "High", "CHB-7": "High"})
+        _run(["sort-todo"], fake)
+
+        touched = {key for body in _rank_writes(fake) for key in [*body["issues"], body.get("rankBeforeIssue"), body.get("rankAfterIssue")]}
+        self.assertEqual(touched - {None}, {"CHB-1", "CHB-2"})
+
+    def test_a_failed_rank_exits_1(self) -> None:
+        fake = sort_fake(["CHB-1", "CHB-2"], priorities={"CHB-2": "High"})
+        fake.routes[("PUT", RANK_PATH)] = 500
+        code, _, err = _run(["sort-todo"], fake)
+
+        self.assertEqual(code, 1)
+        self.assertIn("HTTP 500", err)
+
+    def test_ready_means_in_top_queue(self) -> None:
+        """The dependency rule lives in top_queue only, so CHB-151 changes it in one place."""
+        fake = sort_fake(["CHB-1", "CHB-2"], priorities={"CHB-2": "High"})
+        with mock.patch.object(jira, "top_queue", return_value=["CHB-1"]) as top_queue:
+            _run(["sort-todo"], fake)
+
+        top_queue.assert_called_once()
+        self.assertEqual(fake.writes(), [], "top_queue says CHB-2 is blocked, so CHB-1 stays first")
+
+    def test_create_sorts_to_do_and_places_the_new_ticket(self) -> None:
+        """The search can miss a ticket created a moment ago: it is sorted as the last To Do ticket."""
+        fake = create_fake()
+        fake.routes[("POST", SEARCH)] = keys_answer({"To Do": ["CHB-1", "CHB-2"]}, priorities={"CHB-1": "Low", "CHB-2": "Low"})
+        code, out, _, _ = _create_with(f"## {WHY}\n\nThe owner waits.", fake, priority="High")
+
+        self.assertEqual(code, 0)
+        self.assertEqual(out.splitlines()[0], "CHB-200")
+        self.assertEqual(_apply_ranks(["CHB-1", "CHB-2", "CHB-200"], fake), ["CHB-200", "CHB-1", "CHB-2"])
+        self.assertEqual(_write_paths(fake)[0], CREATE_PATH, "the ticket is created first")
+
+    def test_a_failed_sort_after_create_is_a_notice_and_exits_0(self) -> None:
+        fake = create_fake()
+        fake.routes[("POST", SEARCH)] = 500
+        code, out, _, _ = _create_with(f"## {WHY}\n\nThe owner waits.", fake)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(out.splitlines()[0], "CHB-200")
+        self.assertIn("could not sort To Do", out)
+        self.assertIn("factory/bin/jira sort-todo", out)
+
+    def test_a_start_sorts_to_do_before_the_top_ticket_check(self) -> None:
+        fake = transition_fake("To Do", {"To Do": ["CHB-5", "CHB-12"]}, priorities={"CHB-5": "Low", "CHB-12": "High"})
+        code, out, _ = _run(["transition", "CHB-12", "In Progress"], fake)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(out.splitlines()[0], "CHB-12 -> In Progress")
+        self.assertEqual(_write_paths(fake), [RANK_PATH, MOVE_PATH])
+
+    def test_a_start_refused_by_the_top_rule_names_the_priority_command(self) -> None:
+        fake = transition_fake("To Do", {"To Do": ["CHB-5", "CHB-12"]}, priorities={"CHB-5": "High", "CHB-12": "Medium"})
+        code, _, err = _run(["transition", "CHB-12", "In Progress"], fake)
+
+        self.assertEqual(code, 4)
+        self.assertIn("factory/bin/jira priority CHB-12", err)
+        self.assertEqual(fake.writes(), [])
+
+
+class SectionFirstTest(unittest.TestCase):
+    """CHB-148: `section --first` puts the section at the top and keeps every other node as it is."""
+
+    def _rest(self) -> list[dict[str, Any]]:
+        link = {"type": "text", "text": "the docs", "marks": [{"type": "link", "attrs": {"href": "https://x.y/z", "title": "t"}}]}
+        mention = {"type": "mention", "attrs": {"id": "a1", "text": "@Owner"}}
+        return [
+            _heading("Problem"),
+            _para("Intro."),
+            {"type": "paragraph", "content": [link, mention]},
+            {"type": "codeBlock", "attrs": {"language": "sh"}, "content": [{"type": "text", "text": "make check\n"}]},
+            _heading("Notes", 3),
+            {"type": "panel", "attrs": {"panelType": "info"}, "content": [_para("Careful.")]},
+            _heading("Acceptance criteria"),
+            _para("- AC1."),
+        ]
+
+    def test_inserts_the_section_first_and_keeps_the_rest_byte_for_byte(self) -> None:
+        rest = self._rest()
+        before = {"type": "doc", "version": 1, "content": rest}
+        after = replace_section(json.loads(json.dumps(before)), WHY, "The owner waits.", first=True)
+
+        self.assertEqual(after["content"][:2], [_heading(WHY), _para("The owner waits.")])
+        self.assertEqual(json.dumps(after["content"][2:]), json.dumps(rest))
+        self.assertEqual({k: v for k, v in after.items() if k != "content"}, {"type": "doc", "version": 1})
+
+    def test_replaces_a_first_section_in_place(self) -> None:
+        rest = self._rest()
+        after = replace_section(_doc(_heading(WHY), _para("Old."), *rest), WHY, "New.", first=True)
+
+        self.assertEqual(after["content"][:2], [_heading(WHY), _para("New.")])
+        self.assertEqual(json.dumps(after["content"][2:]), json.dumps(rest))
+
+    def test_moves_a_section_from_further_down_to_the_top(self) -> None:
+        rest = self._rest()
+        after = replace_section(_doc(*rest[:4], _heading(WHY, 3), _para("Old."), *rest[4:]), WHY, "New.", first=True)
+
+        self.assertEqual(after["content"][:2], [_heading(WHY), _para("New.")])
+        self.assertEqual(json.dumps(after["content"][2:]), json.dumps(rest))
+
+    def test_the_command_writes_the_section_first(self) -> None:
+        rest = self._rest()
+        fake = FakeJira({("GET", DESCRIPTION_PATH): {"fields": {"description": _doc(*rest)}}, ("PUT", "/rest/api/3/issue/CHB-12"): None})
+        with tempfile.NamedTemporaryFile("w") as handle:
+            handle.write("The owner waits.")
+            handle.flush()
+            code, out, _ = _run(["section", "CHB-12", "--heading", WHY, "--first", "--body-file", handle.name], fake)
+
+        self.assertEqual(code, 0)
+        self.assertIn("set", out)
+        (_, _, sent), = fake.writes()
+        content = sent["fields"]["description"]["content"]
+        self.assertEqual(content[:2], [_heading(WHY), _para("The owner waits.")])
+        self.assertEqual(json.dumps(content[2:]), json.dumps(rest))
+
+    def test_the_why_heading_always_goes_first(self) -> None:
+        fake = FakeJira({("GET", DESCRIPTION_PATH): {"fields": {"description": _doc(_para("Intro."))}}, ("PUT", "/rest/api/3/issue/CHB-12"): None})
+        with tempfile.NamedTemporaryFile("w") as handle:
+            handle.write("The owner waits.")
+            handle.flush()
+            _run(["section", "CHB-12", "--heading", WHY, "--body-file", handle.name], fake)
+
+        (_, _, sent), = fake.writes()
+        self.assertEqual(sent["fields"]["description"]["content"][0], _heading(WHY))
 
 
 if __name__ == "__main__":

@@ -25,14 +25,18 @@ All work is tracked in Jira space `CHB` (see `TODO.md`). Move tickets only as `d
   `as-agent gh pr create` also enables auto-merge (squash) on the new PR. Opt out for one PR with `AGENT_NO_AUTO_MERGE=1`. See `factory/README.md`.
 - Commit only through `factory/bin/as-agent` too. If it fails (for example no 1Password service account token in the keyring, exit code 3), stop and report.
   Never commit with another git identity, not even locally.
-- Do every Jira write (create, transition, comment, edit-comment, assign, rank, section, description, priority, link) through `factory/bin/jira`. It acts as the Atlassian account "Claude (CHB agent)".
+- Do every Jira write (create, transition, comment, edit-comment, assign, rank, sort-todo, section, description, priority, link) through `factory/bin/jira`.
+  It acts as the Atlassian account "Claude (CHB agent)".
   Write Jira text in Markdown. The wrapper renders headings, lists, `code` and bold, and links CHB keys and PR numbers.
   Every ticket gets High, Medium or Low as `docs/process/priorities.md` defines.
   Never write to Jira with `acli`: its login is the owner's. Read with `factory/bin/jira view` and `factory/bin/jira search`.
   A PreToolUse hook (`.claude/settings.json`, `factory/hooks/deny_raw_jira_writes.py`) blocks `acli jira` writes and `curl`, `wget` or Python writes to the Jira REST API.
   It matches the whole command text: put a commit message or PR body that quotes such a command in a file.
   If `factory/bin/jira transition` exits 4, a board rule blocks the move: a WIP limit blocks starting work (or entering a full Needs human), or a required section is missing.
-  Start only the top ticket of To Do; to start another, rank it first with the owner's go. If it lacks acceptance criteria, write them (`docs/process/kanban.md`, To Do).
+  Start only the top ticket of To Do; to start another, with the owner's go, raise its priority or rank it first within its priority.
+  If it lacks acceptance criteria, write them (`docs/process/kanban.md`, To Do).
+  Every ticket opens with a non-empty "Why it matters" section: the pain, who feels it, the value of solving it, in plain words. `create` and a start refuse a ticket without it.
+  To Do stays sorted: ready tickets High, Medium, Low, then blocked tickets. `create` and a start run `factory/bin/jira sort-todo`.
   Leave the ticket, comment, and report. Moves into In Review and Validating are never blocked by a limit. See `docs/process/kanban.md`.
   If `factory/bin/jira` fails (for example no 1Password service account token in the keyring, exit code 3), stop and report.
 - For any step that deletes or changes something, name the exact item, the system and location (URL or menu path), and the command or clicks. Say what must not be deleted when similar items exist.

@@ -47,8 +47,9 @@ The ticket can wait indefinitely at no cost.
 
 - A bug report is High from the start.
 - Among High tickets, production bugs come first, then a broken pipeline, then the rest by the owner's rank.
-- Priority informs the rank. The rank in To Do decides the order of work.
-  A High ticket ranked below a Medium or Low ticket gets a comment that says why.
+- Priority sets the rank. `factory/bin/jira sort-todo` keeps To Do in priority order: tickets that can start, High, Medium, then Low,
+  then blocked tickets (CHB-148, `kanban.md`, To Do). The rank within a priority decides the order of work there.
+  A High ticket sits below a Medium or Low ticket only while an open dependency blocks it.
 - The agent sets the priority when it creates a ticket (`factory/bin/jira create --priority`), with the reason in one line of the description.
 - Between two levels, take the higher one and say so in the ticket.
 - The agent changes a priority with `factory/bin/jira priority CHB-<n> High|Medium|Low` and writes the reason as a comment.

@@ -24,7 +24,7 @@ Each status below has a meaning, rules to enter and rules to leave.
 A ticket moves only when the rules to leave are true. Agents follow this document; the owner can override it, and the override is written as a comment on the ticket.
 
 ADR-ad3e defines "done". This document makes it operational.
-Priorities are defined in `priorities.md`. The rank in To Do decides the order of work.
+Priorities are defined in `priorities.md`. The rank in To Do decides the order of work, and `factory/bin/jira sort-todo` keeps that rank in the order of [To Do](#to-do).
 
 ## WIP limits
 
@@ -45,7 +45,8 @@ A WIP limit stops pulling new work. It never stops the board from recording what
   for example `In Progress is below its minimum (0/1)`.
 - Free slots: after every move between columns, the wrapper prints the free In Progress slots and the next top tickets of To Do, one per free slot,
   for example `In Progress 2/3: 1 slot free; next: CHB-123` (CHB-125).
-  A ticket without acceptance criteria is marked: `next: CHB-122 (needs acceptance criteria)`.
+  The next tickets follow the sorted order of [To Do](#to-do). A ticket that a start would refuse for a missing section is marked:
+  `next: CHB-122 (needs acceptance criteria)` or `next: CHB-122 (needs Why it matters and acceptance criteria)`.
   It prints no such line while In Progress, In Review or Validating is at its max: starting is blocked then.
   The moved ticket is never next, and it blocks its dependents unless it moved to Done or Discarded (CHB-143).
 - Pulling work: the agent fills In Progress up to its max, one agent per ticket, in parallel where it can (owner rule, 2026-11-10).
@@ -72,9 +73,26 @@ any status ──→ Discarded
 Meaning: accepted work that nobody has started.
 
 - Enter: the ticket has a summary, a description and a parent epic.
+- Why it matters (owner rule, 2026-11-10, CHB-148): every description opens with a section headed exactly "Why it matters", with text under it.
+  It states the pain, who feels it (the owner, users of the hotel booking app, or agents) and the value of solving it,
+  in 2 to 5 plain sentences without technical detail. Nothing comes before it. The technical sections follow.
+  `factory/bin/jira create` refuses a description without it (exit 2, before any request).
+  Add it to an existing ticket with `factory/bin/jira section CHB-<n> --heading "Why it matters" --first --body-file FILE`:
+  the section goes at the top and the rest of the description stays as it is.
+- Order (owner rule, 2026-11-10, CHB-148): To Do is sorted in this order.
+  1. Tickets that can start: not an epic, and no open ticket blocks them. High, then Medium, then Low.
+     A ticket without a priority counts as Medium.
+  2. Tickets blocked by an open ticket.
+  3. Epics.
+
+  Each group keeps its rank order, so the owner's order within a priority stays.
+  `factory/bin/jira sort-todo` applies the order and changes nothing when To Do is already sorted.
+  `create` runs it after creating a ticket, and a start from To Do runs it before the top-ticket check.
+  The rule decides the order: the sort undoes a hand rank across priorities or above a blocked ticket.
+  To move a ticket up, the owner changes its priority, or ranks it within its priority.
 - Leave to In Progress: someone starts working on it. Before that, the ticket has acceptance criteria that can be checked, and no open ticket blocks it.
 - Top ticket: an agent picks the top ticket of To Do: the highest-ranked ticket that is not an epic and that no open ticket blocks.
-  To start another ticket, rank it to the top first, with the owner's go.
+  After the sort, it is the first ticket of To Do. To start another ticket, with the owner's go, raise its priority or rank it first within its priority.
 - Dependencies: a dependency is a Jira "Blocks" link, never text (CHB-151).
   Add one with `factory/bin/jira link CHB-<a> --blocked-by CHB-<b>`: `CHB-<b>` blocks `CHB-<a>`.
   Both tickets show the link in Jira and in `factory/bin/jira view`. Running the command again changes nothing.
@@ -88,7 +106,8 @@ Meaning: accepted work that nobody has started.
   (`factory/bin/jira section CHB-<n> --heading "Acceptance criteria" --body-file FILE`), derived from the ticket, its epic and the ADRs.
   It asks the owner only for decisions that are the owner's (owner rule, 2026-11-10).
 - `factory/bin/jira transition <key> "In Progress"` from To Do exits 4 when `<key>` is not that top ticket, is blocked by an open ticket,
-  or is the top ticket without acceptance criteria (CHB-125). The message names the top ticket and the next step.
+  or is the top ticket without a "Why it matters" first section or without acceptance criteria (CHB-125, CHB-148).
+  The message names the top ticket and the next step, or the `section` command that adds the missing section.
   A move back into In Progress from another status is not checked.
 - WIP limit: none.
 
