@@ -75,7 +75,9 @@ The list must match exactly. A missing or an extra address fails.
 
 `github/guards.tf` fails the plan when a setting Terraform cannot manage is off, for example CodeQL default setup.
 `github/tests/guards.tftest.hcl` checks each guard against stubbed GitHub responses. It needs no credentials.
-`make check` runs it (`scripts/check_guard_tests.py`, CHB-158). CI does not run it yet.
+`make check` and the `backend` job of CI run it (`scripts/check_guard_tests.py`, CHB-158, CHB-166). A PR that breaks a guard shows `backend` failing.
+CI installs Terraform from releases.hashicorp.com, pinned by SHA-256 (`TERRAFORM_SHA256` in `.github/workflows/ci.yml`), and uses no third-party action and no credentials.
+When you change `github/.terraform-version`, update that hash from `terraform_<version>_SHA256SUMS` (the `linux_amd64` line) in the same PR.
 The script needs Terraform at the version in `github/.terraform-version`, network access to download the provider, and no credentials.
 It removes GitHub and Google credentials from the environment and keeps `.terraform` out of the checkout.
 Run it alone:
