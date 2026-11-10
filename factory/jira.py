@@ -1330,7 +1330,7 @@ def before_transition(jira: Jira, key: str, status: str, *, status_id: str, trig
     """Called with the target status just before every transition POST. Raise to block the move.
 
     Raises BlockedError (exit 4) when the target status needs a description section that is
-    missing, or when a WIP limit blocks the move (docs/process/kanban.md, CHB-127):
+    missing, and WipLimitError (exit 5) when a WIP limit blocks the move (docs/process/kanban.md, CHB-127, CHB-162):
     - starting work (a move into In Progress from a column that is not started work) is blocked
       while In Progress, In Review or Validating holds at least its board maximum of other tickets;
     - a move into Needs human is blocked while Needs human is full.
@@ -1387,9 +1387,10 @@ def before_transition(jira: Jira, key: str, status: str, *, status_id: str, trig
         where = source.name if source else issue["status"]["name"]
         raise WipLimitError(
             f"{key} cannot move to {status}: {'; '.join(full)}. "
-            f"Leave {key} in {where}, comment on it and start nothing else. Do not hand the wait to the owner: "
-            f"run this in the background (run_in_background) and carry on; it moves {key} when a slot frees "
-            f"and ends with the move or with an error: {wait_command(key, status)} "
+            f"Leave {key} in {where}, comment on it and start nothing else. "
+            f"Run this in the background (run_in_background) and carry on; it moves {key} when a slot frees, "
+            f"ends at once on any other refusal, and gives up after {WAIT_LIMIT_SECONDS // 60} minutes with one line, "
+            f"then tell the owner: {wait_command(key, status)} "
             "Only the owner overrides a limit, in the Jira UI, with a comment on the ticket (docs/process/kanban.md)."
         )
     if target.name == IN_PROGRESS and source is not None and source == pull:
@@ -1409,12 +1410,13 @@ def wait_command(key: str, status: str) -> str:
     which the transition already printed. After WAIT_LIMIT_SECONDS it prints one line and exits 1.
     """
     move = f"factory/bin/jira transition {key} {shlex.quote(status)}"
+    # A subshell: its `exit` ends the loop, never the shell that runs it.
     return (
-        f"end=$(( $(date +%s) + {WAIT_LIMIT_SECONDS} )); "
+        f"( end=$(( $(date +%s) + {WAIT_LIMIT_SECONDS} )); "
         f"while {move}; rc=$?; [ $rc -eq {EXIT_WIP_LIMIT} ]; do "
         "[ $(date +%s) -lt $end ] || "
         f"{{ echo \"{key}: the slot is still full after {WAIT_LIMIT_SECONDS // 60} minutes; tell the owner\"; exit 1; }}; "
-        f"sleep {WAIT_SECONDS}; done; exit $rc"
+        f"sleep {WAIT_SECONDS}; done; exit $rc )"
     )
 
 
