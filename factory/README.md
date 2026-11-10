@@ -226,7 +226,8 @@ The 1Password service account narrows who can read it to processes that can read
   One search, `statusCategory != Done ORDER BY Rank ASC`, gives the rank order and the open tickets.
   The search also returns each ticket's `issuelinks`. A ticket is blocked by every ticket on an "is blocked by" link of type "Blocks" that is still open (`open_blockers`, CHB-151).
   "Depends on" text is not read.
-  The check first sorts To Do (`sort-todo`, a rank write before the move) and takes the top ticket from the sorted order, without a second search.
+  A blocked ticket, an epic or a ticket missing from the search is refused first, with no write.
+  Then the check sorts To Do (`sort-todo`, a rank write before the move) and takes the top ticket from the sorted order, without a second search.
   The top ticket is the first non-epic ticket in To Do that no open ticket blocks. Missing "Why it matters" or acceptance criteria do not skip it.
   The ticket's own links and criteria come from the read just made.
   The message names the open blockers (or says the ticket is an epic), names the top ticket and the `priority` and `rank` commands that put the ticket first,
