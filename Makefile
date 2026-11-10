@@ -66,6 +66,7 @@ TF_ENV = GOOGLE_OAUTH_ACCESS_TOKEN=$$(CLOUDSDK_ACTIVE_CONFIG_NAME=chb gcloud aut
 # A destroy or replace fails both targets unless ALLOW_DESTROY lists exactly those addresses.
 infra-plan: ## Terraform plans for GCP and GitHub, saved in infra/.plans/ (from main only)
 	@python3 -I scripts/infra_guard.py git
+	@test -n "$$TF_VAR_alert_email" || { echo "Set the alert address first: export TF_VAR_alert_email=<address> (see infra/README.md)"; exit 1; }
 	export $(TF_ENV) GITHUB_TOKEN=$$(gh auth token) && test -n "$$TF_VAR_billing_account" && \
 	python3 -I scripts/infra_guard.py plan
 

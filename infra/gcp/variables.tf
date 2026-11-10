@@ -23,3 +23,14 @@ variable "billing_account" {
   type        = string
   sensitive   = true
 }
+
+variable "alert_email" {
+  description = "Address that receives the alerts. Pass with TF_VAR_alert_email; never commit it."
+  type        = string
+  sensitive   = true
+
+  validation {
+    condition     = can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", var.alert_email))
+    error_message = "alert_email must be an email address."
+  }
+}
