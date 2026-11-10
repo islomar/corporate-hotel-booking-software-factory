@@ -937,6 +937,42 @@ class SectionCommandTest(unittest.TestCase):
         self.assertIn("body is empty", err)
         self.assertEqual(fake.requests, [])
 
+    def test_a_when_without_speed_up_is_a_usage_error_before_credentials_or_requests(self) -> None:
+        fake = FakeJira({})
+        bodies = (
+            "AC1. Works.\n- When: the next Dependabot run\n- Where: https://x.y/z",
+            "AC1.\n- When: a\n- Speed up: run it\nAC2.\n- **When**: b\n- Where: c",
+        )
+        for body in bodies:
+            with tempfile.NamedTemporaryFile("w") as handle:
+                handle.write(body)
+                handle.flush()
+                argv = ["section", "CHB-12", "--heading", HEADING, "--body-file", handle.name]
+                code, _, err = _run(argv, fake, credentials_reader=mock.Mock(side_effect=AssertionError("read credentials")))
+
+            self.assertEqual(code, 2, body)
+            self.assertIn("Speed up:", err)
+            self.assertEqual(fake.requests, [])
+
+    def test_each_when_with_a_speed_up_line_is_accepted(self) -> None:
+        bodies = (
+            "AC1.\n- When: the next Dependabot run\n- Speed up: Insights, Dependency graph, Check for updates\n"
+            "AC2.\n1. when: 2026-11-12 06:00\n2. **Speed up:** cannot be sped up (a fixed date)",
+            "AC1. No timing line here.",
+        )
+        for body in bodies:
+            fake = FakeJira({("GET", DESCRIPTION_PATH): {"fields": {"description": None}}, ("PUT", "/rest/api/3/issue/CHB-12"): None})
+            self.assertEqual(self._section(fake, body)[0], 0, body)
+
+    def test_other_headings_need_no_speed_up(self) -> None:
+        fake = FakeJira({("GET", DESCRIPTION_PATH): {"fields": {"description": None}}, ("PUT", "/rest/api/3/issue/CHB-12"): None})
+        with tempfile.NamedTemporaryFile("w") as handle:
+            handle.write("1. Click Merge.\n- When: today")
+            handle.flush()
+            code, _, _ = _run(["section", "CHB-12", "--heading", "Needs human: owner steps", "--body-file", handle.name], fake)
+
+        self.assertEqual(code, 0)
+
     def test_two_matching_headings_exit_1_without_a_write(self) -> None:
         current = _doc(_heading(HEADING), _para("a"), _heading(HEADING), _para("b"))
         fake = FakeJira({("GET", DESCRIPTION_PATH): {"fields": {"description": current}}})

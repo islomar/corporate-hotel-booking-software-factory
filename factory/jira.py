@@ -25,6 +25,7 @@ wrapper is the guardrail. It only touches issues whose key is CHB-<n>, creates o
 Tasks under a CHB Epic, and has no delete, no project, board, workflow or permission
 writes, and no raw request command. Do not add one. `rank` changes only the rank of
 issues. `section` writes only the description field, and changes only one section of it.
+In "Acceptance criteria (Validating)", `section` refuses a "When:" line without a "Speed up:" line.
 `priority` writes only the priority field, and only High, Medium or Low (docs/process/priorities.md).
 `description` writes only the description field. `edit-comment` changes one comment body.
 
@@ -418,6 +419,33 @@ def check_section_input(heading: str, body: str) -> str:
     if not body.strip():
         raise UsageError("section body is empty")
     return heading
+
+
+# A "When:" or "Speed up:" line of an acceptance section, with an optional bullet and bold (CHB-133).
+_LABEL = r"^\s*(?:[-*]|\d+\.)?\s*(?:\*\*)?{}(?:\*\*)?\s*:"
+WHEN_PATTERN = re.compile(_LABEL.format("when"), re.IGNORECASE)
+SPEED_UP_PATTERN = re.compile(_LABEL.format(r"speed[ -]up"), re.IGNORECASE)
+
+
+def check_speed_up(heading: str, body: str) -> None:
+    """Refuse an acceptance section where a "When:" line has no "Speed up:" line (exit 2, CHB-133).
+
+    Applies only to the Validating section. Each "When:" line opens a part that runs to the next
+    "When:" line or the end of the body, and that part needs a "Speed up:" line.
+    """
+    if heading.strip() != REQUIRED_SECTIONS["validating"]:
+        return
+    part: list[str] = []
+    for line in [*body.splitlines(), None]:
+        if line is None or WHEN_PATTERN.match(line):
+            if part and not any(SPEED_UP_PATTERN.match(other) for other in part):
+                raise UsageError(
+                    f"{part[0].strip()!r} has no Speed up line. After each When line add "
+                    "'- Speed up: <exact step the owner can take>' or '- Speed up: cannot be sped up (<reason>)'"
+                )
+            part = [line] if line is not None else []
+        elif part:
+            part.append(line)
 
 
 def check_rank_input(keys: list[str], anchor: str) -> None:
@@ -905,6 +933,7 @@ def main(
         if args.command == "section":
             args.body = _read_text(args.body_file)
             check_section_input(args.heading, args.body)
+            check_speed_up(args.heading, args.body)
         if args.command == "edit-comment":
             check_comment_id(args.comment_id)
             args.text = _read_text(args.body_file)
