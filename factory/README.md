@@ -16,6 +16,8 @@
   - [Hook: branch names follow the ticket key](#hook-branch-names-follow-the-ticket-key)
   - [Hook: related tests only while iterating](#hook-related-tests-only-while-iterating)
   - [Hook: warn on repeated edits of one file](#hook-warn-on-repeated-edits-of-one-file)
+  - [Hook: no harness edits in feature tickets](#hook-no-harness-edits-in-feature-tickets)
+  - [Hook: no secrets in the agent's context](#hook-no-secrets-in-the-agents-context)
   - [Automated PR review (shadow mode)](#automated-pr-review-shadow-mode)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -290,6 +292,49 @@ It counts the edits of each file per session. On the 5th and 8th edit it adds co
 The counts live in `<temp dir>/chb-edit-loops-<uid>/<session id>.json`. The env var `CHB_EDIT_LOOP_STATE_DIR` overrides the folder.
 The hook refuses a folder that is a symlink, belongs to another user or is open to others, and opens the state file without following symlinks.
 The hook never blocks. Bad input, an unreadable state file or an internal error gives no warning and exit 0.
+
+## Hook: no harness edits in feature tickets
+
+`.claude/settings.json` runs `factory/hooks/deny_harness_edits.py` before every Write, Edit and MultiEdit call (CHB-30).
+CLAUDE.md: do not edit `.claude/`, `factory/` or `.github/` as part of a feature ticket.
+
+The hook denies the edit when all of these hold:
+
+- the path's first folder, relative to the top of its own git worktree, is `.claude`, `factory` or `.github`;
+- that worktree's branch is `CHB-<n>-...`;
+- CHB-<n> is a product epic, or its Jira parent is one. The product epics are CHB-4, CHB-14, CHB-19 and CHB-50 (`PRODUCT_EPICS` in the hook, set by the owner).
+
+These pass: tickets of other epics, tickets without a parent, `main`, `worktree-agent-...` and any other branch (the branch name hook guards names), and paths outside a git repository.
+A file under `<repo>/.claude/worktrees/agent-x/` belongs to that worktree, so `backend/` files there pass.
+
+The hook calls `factory/bin/jira view CHB-<n>` only for a harness path, with a 20-second timeout.
+It caches the parent per branch in `<temp dir>/chb-harness-epics-<uid>/<branch>.json`. The env var `CHB_HARNESS_EPIC_CACHE_DIR` overrides the folder.
+A folder that is a symlink, belongs to another user or is open to others is not used. Cache files open without following symlinks.
+The cache never expires. If a ticket moves to another epic, delete its branch file.
+If the Jira read fails (no token, timeout, HTTP error), the hook denies the edit and names `factory/bin/jira view CHB-<n>`. A failure is not cached.
+Writes through Bash are not covered.
+
+## Hook: no secrets in the agent's context
+
+`.claude/settings.json` runs `factory/hooks/deny_secret_reads.py` before every Read and Bash call (CHB-30).
+`factory/bin/as-agent` and `factory/bin/jira` read their token inside their own process, so the agent never needs a secret. `.env.example` lists the variable names.
+
+Secret paths: a path with a `.ssh` folder (`~/.ssh/**`), `*.pem`, `*.key`, `.env` and `.env.*` except `.env.example`, and a path with `.config/op` (`~/.config/op/**`).
+`~`, `$HOME` and `${HOME}` expand. A glob such as `*.pem` or `.env*` counts. `.envrc` and a bare `.key` (a `jq` filter) do not.
+
+The hook exits 2 for:
+
+- Read of a secret path; a relative path resolves against the session folder;
+- a Bash command with a secret path as an argument, as an `--option=<path>` value, or after a `:` (`git show HEAD:.env`, `scp host:~/.ssh/id`);
+- input redirected from a secret path (`< .env`), whatever the program;
+- `secret-tool lookup` and `op read` run directly.
+
+These pass even with a secret path: `ls`, `stat`, `test`, `[`, `chmod`, `chown`, `mkdir`, `touch`, `rm`, `echo`, `printf`, `ssh` and `ssh-add`. They do not print the file.
+`factory/bin/as-agent`, `factory/bin/jira` and `make` are not blocked.
+
+Known false denials: `grep .env docs/` (the pattern reads as a path), and a heredoc line that names a secret path, such as a commit message. Write such a message to a file with the Write tool.
+Known gaps: a path built at run time, `cd ~/.ssh` followed by a relative name, a script that reads the file, the Grep tool, and `op` subcommands other than `read`.
+Like the other Bash hooks, it reads the command text only, denies on unreadable input or an internal error, and lets the call run if `python3` cannot start.
 
 ## Automated PR review (shadow mode)
 
