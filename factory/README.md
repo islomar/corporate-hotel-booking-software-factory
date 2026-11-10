@@ -90,7 +90,7 @@ Text files are plain text. Blank lines separate paragraphs and URLs become links
 A file that is not valid UTF-8, an empty summary or an empty comment body exits 2 before the wrapper reads 1Password.
 
 `search` reads only CHB. It sends `project = CHB AND (<jql>)`, with a trailing `ORDER BY` kept outside the parentheses.
-JQL with a `)` before its `(`, a `(` never closed, an unterminated quote or a backslash outside quotes exits 2 before any request.
+JQL with a `)` before its `(`, a `(` never closed, an unterminated quote, a backslash outside quotes or a parenthesis after `ORDER BY` exits 2 before any request.
 An answer that lists an issue outside CHB exits 1 and prints nothing.
 
 `rank` calls `PUT /rest/agile/1.0/issue/rank`. When Jira ranks only some of the issues (HTTP 207), it exits 1 and names each issue that failed.

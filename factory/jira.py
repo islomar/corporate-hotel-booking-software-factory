@@ -284,9 +284,10 @@ def scope_jql(jql: str) -> str:
     """The JQL limited to the CHB project: project = CHB AND (<jql>) [ORDER BY ...].
 
     Refuses (UsageError, exit 2) JQL that could leave the parentheses: a ")" without its "(",
-    a "(" never closed, an unterminated quote, or a backslash outside quotes (Jira may read it
-    as an escape the scanner does not). A trailing ORDER BY stays outside them. The check of
-    the answer's issue keys in Jira.search is the final guard.
+    a "(" never closed, an unterminated quote, a backslash outside quotes (Jira may read it
+    as an escape the scanner does not), or a parenthesis after ORDER BY (an ORDER BY inside
+    parentheses would close them). A trailing ORDER BY stays outside them. The check of the
+    answer's issue keys in Jira.search is the final guard.
     """
     masked = []  # the JQL with the text inside quotes blanked, so only the syntax is left
     quote = ""
@@ -319,22 +320,23 @@ def scope_jql(jql: str) -> str:
         raise UsageError("search JQL has a quote that is never closed")
     if depth:
         raise UsageError("search JQL has a '(' that is never closed")
-    order = ORDER_BY_PATTERN.search("".join(masked))
+    syntax = "".join(masked)
+    order = ORDER_BY_PATTERN.search(syntax)
+    if order and any(char in "()" for char in syntax[order.start() :]):
+        raise UsageError("search JQL has a parenthesis after ORDER BY")
     where, order_by = (jql[: order.start()], " " + jql[order.start() :].strip()) if order else (jql, "")
     where = where.strip()
     return f"project = {PROJECT}{f' AND ({where})' if where else ''}{order_by}"
 
 
-def check_summary(summary: str) -> str:
+def check_summary(summary: str) -> None:
     if not summary.strip():
         raise UsageError("summary is empty")
-    return summary.strip()
 
 
-def check_comment_body(body: str) -> str:
+def check_comment_body(body: str) -> None:
     if not body.strip():
         raise UsageError("comment body is empty")
-    return body
 
 
 def check_comment_id(comment_id: str) -> str:
@@ -559,7 +561,7 @@ class Jira:
 
     def create(self, parent: str, summary: str, description: str, priority: str) -> str:
         check_priority(priority)
-        summary = check_summary(summary)
+        check_summary(summary)
         epic = self.request("GET", f"/rest/api/3/issue/{check_key(parent)}?fields=issuetype")
         if epic["fields"]["issuetype"]["name"] != "Epic":
             raise JiraError(f"parent {parent} is a {epic['fields']['issuetype']['name']}, not an Epic")
@@ -571,7 +573,7 @@ class Jira:
                     "project": {"key": PROJECT},
                     "issuetype": {"name": "Task"},
                     "parent": {"key": parent},
-                    "summary": summary,
+                    "summary": summary.strip(),
                     "description": text_to_adf(description),
                     "priority": {"name": priority},
                 }
@@ -974,13 +976,15 @@ def main(
             check_summary(args.summary)
             args.description = _read_text(args.description_file)
         if args.command == "comment":
-            args.body = check_comment_body(_read_text(args.body_file))
+            args.body = _read_text(args.body_file)
+            check_comment_body(args.body)
         if args.command == "section":
             args.body = _read_text(args.body_file)
             check_section_input(args.heading, args.body)
         if args.command == "edit-comment":
             check_comment_id(args.comment_id)
             args.text = _read_text(args.body_file)
+            check_comment_body(args.text)
         if args.command == "description":
             args.text = _read_text(args.file)
             if not args.text.strip():

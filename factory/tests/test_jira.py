@@ -623,7 +623,16 @@ class SearchScopeTest(unittest.TestCase):
             self.assertEqual((code, searches), (0, [sent]), jql)
 
     def test_jql_that_escapes_the_parentheses_is_a_usage_error(self) -> None:
-        cases = ("x) OR (project = OTHER", "x)", "(x", 'summary ~ "open', "a ORDER BY key ) OR (project = OTHER", 'a \\"b) OR (c"')
+        cases = (
+            "x) OR (project = OTHER",
+            "x)",
+            "(x",
+            'summary ~ "open',
+            "a ORDER BY key ) OR (project = OTHER",
+            'a \\"b) OR (c"',
+            "(a ORDER BY key) OR (project = OTHER)",
+            "a ORDER BY key, (b) OR (project = OTHER)",
+        )
         for jql in cases:
             code, searches, err = self._search(jql)
             self.assertEqual(code, 2, jql)
@@ -1332,6 +1341,18 @@ class EditCommentTest(unittest.TestCase):
             code, _, _ = _run(["edit-comment", "CHB-12", "../worklog", "--body-file", body.name], fake)
 
         self.assertEqual(code, 2)
+        self.assertEqual(fake.requests, [])
+
+    def test_empty_body_is_a_usage_error_before_1password(self) -> None:
+        fake = FakeJira({})
+        with tempfile.NamedTemporaryFile("w") as body:
+            body.write("\n")
+            body.flush()
+            argv = ["edit-comment", "CHB-12", "10071", "--body-file", body.name]
+            code, _, err = _run(argv, fake, credentials_reader=_no_credentials)
+
+        self.assertEqual(code, 2)
+        self.assertIn("comment body is empty", err)
         self.assertEqual(fake.requests, [])
 
 
