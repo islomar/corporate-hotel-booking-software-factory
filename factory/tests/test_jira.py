@@ -2728,6 +2728,7 @@ def ready_fake(
     )
     fake.routes[("PUT", ISSUE_PATH)] = None
     fake.routes[("POST", COMMENT_PATH)] = {"id": "5"}
+    fake.routes[("GET", DESCRIPTION_PATH)] = {"fields": {"description": dor_description() if description is None else description}}
     return fake
 
 
@@ -3004,6 +3005,42 @@ class ReadyCommandTest(unittest.TestCase):
         (ticked,) = _put_descriptions(fake)
         self.assertEqual(jira.box_states(ticked), dict.fromkeys(ALL_BOXES, "DONE"))
         self.assertEqual(_comments(fake), ["Moved to Ready. Trigger: 2. the owner asked for it on 2026-11-10"])
+
+    def test_the_ticks_go_on_a_fresh_read_of_the_description(self) -> None:
+        """An edit made while `ready` checks and reads the board is kept."""
+        fake = ready_fake()
+        edited = dor_description()
+        edited["content"].append(_para("Added by someone else meanwhile."))
+        fake.routes[("GET", DESCRIPTION_PATH)] = {"fields": {"description": edited}}
+        code, _, err = _run(["ready", "CHB-12", *self.TRIGGER], fake)
+
+        self.assertEqual(code, 0, err)
+        (ticked,) = _put_descriptions(fake)
+        self.assertEqual(ticked["content"][-1], _para("Added by someone else meanwhile."))
+        self.assertEqual(jira.box_states(ticked), dict.fromkeys(ALL_BOXES, "DONE"))
+
+    def test_a_missing_verified_box_refuses(self) -> None:
+        for box in jira.VERIFIED_BOXES:
+            with self.subTest(box):
+                text = next(b.text for b in jira.DOR_BOXES if b.name == box)
+                lines = [line for line in jira.checklist_markdown(jira.JUDGMENT_BOXES).splitlines() if text not in line]
+                description = doc(f"{WHY_SECTION}\n\n## Definition of Ready\n\n" + "\n".join(lines) + "\n\n## Acceptance criteria\n\n- A test.")
+                fake = ready_fake(description)
+                code, _, err = _run(["ready", "CHB-12", *self.TRIGGER], fake)
+
+                self.assertEqual(code, 4)
+                self.assertIn("the box is missing from the checklist", err)
+                self.assertEqual(fake.writes(), [])
+
+    def test_a_ticket_that_leaves_backlog_during_the_checks_does_not_move(self) -> None:
+        fake = ready_fake()
+        reads = [issue_in("Backlog", dor_description()), issue_in("In Progress", dor_description())]
+        fake.routes[("GET", f"/rest/api/3/issue/CHB-12?fields={ISSUE_FIELDS}")] = lambda _: reads.pop(0)
+        code, _, err = _run(["ready", "CHB-12", *self.TRIGGER], fake)
+
+        self.assertEqual(code, 1)
+        self.assertIn("CHB-12 left Backlog while ready checked it; nothing moved", err)
+        self.assertEqual(fake.writes(), [])
 
     def test_a_move_jira_does_not_offer_writes_nothing(self) -> None:
         """The verified boxes are ticked only once the move is about to be sent."""

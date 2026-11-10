@@ -699,7 +699,7 @@ def readiness_problems(key: str, description: Any, blocking: list[str]) -> list[
     states = box_states(description) or {}
     problems = []
     for box in DOR_BOXES:
-        if box.name in JUDGMENT_BOXES and states.get(box.name) is None:
+        if states.get(box.name) is None:
             problems.append(f"{box.prefix}: the box is missing from the checklist; fix it by hand")
         elif box.name in JUDGMENT_BOXES and states[box.name] != "DONE":
             problems.append(f"{box.prefix}: not ticked (factory/bin/jira tick {key} {box.name})")
@@ -968,11 +968,13 @@ class Jira:
             raise BlockedError(
                 f"{key} is not ready: {'; '.join(problems)}. It stays in {BACKLOG} (docs/process/kanban.md, Backlog, {DOR_HEADING})."
             )
-        states = box_states(description) or {}
-
-        def tick_verified() -> None:  # only once the move is about to be sent, so a refused move writes nothing
-            if any(states.get(name) != "DONE" for name in VERIFIED_BOXES):
-                ticked = tick_boxes(description, VERIFIED_BOXES)
+        def tick_verified() -> None:
+            """Runs once the move is about to be sent, so a refused move writes nothing. It ticks a fresh read
+            of the description, so an edit made during the checks is kept; one made after this read is lost."""
+            current = self.request("GET", f"/rest/api/3/issue/{key}?fields=description")["fields"].get("description")
+            states = box_states(current) or {}
+            if isinstance(current, dict) and any(states.get(name) == "TODO" for name in VERIFIED_BOXES):
+                ticked = tick_boxes(current, VERIFIED_BOXES)
                 self.request("PUT", f"/rest/api/3/issue/{key}", {"fields": {"description": ticked}}, empty_ok=True)
 
         return self.transition(key, pull.name, trigger, prepare=tick_verified)
@@ -1195,7 +1197,8 @@ def backlog_column(columns: Sequence[Column]) -> Column | None:
 def check_trigger(key: str, move: Move, trigger: str | None) -> str | None:
     """The trigger comment for a move from Backlog into the pull list, or None for any other move (CHB-153).
 
-    Refuses (UsageError, exit 2) that move without a trigger, and a trigger on any other move.
+    Refuses (UsageError, exit 2) that move without a trigger. Only `ready` passes a trigger, after it saw the
+    ticket in Backlog; a trigger on another move means the ticket moved since, so nothing moves (JiraError).
     """
     columns = list(move.columns)
     pull = pull_list(columns)
@@ -1209,7 +1212,7 @@ def check_trigger(key: str, move: Move, trigger: str | None) -> str | None:
             "3. it unblocks work in progress; 4. the same pain appeared twice (docs/process/kanban.md, Backlog)."
         )
     if trigger and not promotes:
-        raise UsageError(f"a trigger applies only to a move from {BACKLOG} to {pull.name if pull else READY} (factory/bin/jira ready); {key} makes another move")
+        raise JiraError(f"{key} left {BACKLOG} while ready checked it; nothing moved. Check its status and run ready again")
     if not promotes or move.target is None:
         return None
     return f"Moved to {move.target.name}. Trigger: {trigger}"
@@ -1232,7 +1235,7 @@ def before_transition(jira: Jira, key: str, status: str, *, status_id: str, trig
     issue = jira.request("GET", f"/rest/api/3/issue/{key}?fields=status,description,issuelinks")["fields"]
     current_id = str(issue["status"]["id"])
     if current_id == status_id:
-        check_trigger(key, Move(None, None), trigger)  # a trigger on no move is refused
+        check_trigger(key, Move(None, None), trigger)  # `ready` on a ticket that moved meanwhile
         return Move(None, None)
     heading = REQUIRED_SECTIONS.get(status.casefold())
     if heading and not has_section(issue.get("description"), heading):
@@ -1638,6 +1641,12 @@ def _link_lines(links: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
+def _print_move(key: str, target: str, notices: list[str]) -> None:
+    print(f"{key} -> {target}")
+    for notice in notices:
+        print(notice)
+
+
 def _checklist(jira: Jira, keys: list[str]) -> None:
     """Add the Definition of Ready to each ticket and print one line per key, then a count (CHB-154).
 
@@ -1799,11 +1808,10 @@ def run(args: argparse.Namespace, jira: Jira) -> None:
         order, sent = jira.sort_todo()
         state = f"sorted ({sent} rank requests)" if sent else "already sorted"
         print(f"{order.column} {state}: {', '.join(order.desired) or 'empty'}")
-    elif args.command in ("transition", "ready"):
-        target, notices = jira.ready(args.key, args.trigger) if args.command == "ready" else jira.transition(args.key, args.status)
-        print(f"{args.key} -> {target}")
-        for notice in notices:
-            print(notice)
+    elif args.command == "transition":
+        _print_move(args.key, *jira.transition(args.key, args.status))
+    elif args.command == "ready":
+        _print_move(args.key, *jira.ready(args.key, args.trigger))
     elif args.command == "tick":
         changed = jira.tick(args.key, args.box)
         print(f"{args.key} box {args.box!r} {'ticked' if changed else 'unchanged'}")
