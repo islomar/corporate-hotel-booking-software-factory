@@ -13,6 +13,9 @@
     - [Hook against raw Jira writes](#hook-against-raw-jira-writes)
   - [Hook: commands for the owner work from any folder](#hook-commands-for-the-owner-work-from-any-folder)
   - [Hook: no personal agent memory](#hook-no-personal-agent-memory)
+  - [Hook: branch names follow the ticket key](#hook-branch-names-follow-the-ticket-key)
+  - [Hook: related tests only while iterating](#hook-related-tests-only-while-iterating)
+  - [Hook: warn on repeated edits of one file](#hook-warn-on-repeated-edits-of-one-file)
   - [Automated PR review (shadow mode)](#automated-pr-review-shadow-mode)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -243,6 +246,46 @@ On 2026-11-07 a session saved a work-in-progress snapshot to Claude Code's per-u
 
 The hook denies any path under `.claude/projects/<project>/memory/`. Work state goes in Jira with `factory/bin/jira`. Learnings go in `docs/knowledge/`, a hook or a check (ADR-eedb).
 Writes through Bash (`>`, `cp`, `sed -i`) are not covered: the hook stops accidents, not a deliberate bypass.
+
+## Hook: branch names follow the ticket key
+
+`.claude/settings.json` runs `factory/hooks/deny_bad_branch_names.py` before every Bash command (CHB-54).
+One Jira ticket per branch, named `CHB-<n>-<slug>`: `^CHB-[0-9]+-[a-z0-9]+(-[a-z0-9]+)*$`.
+
+The hook exits 2 when one of these commands names a branch that does not match:
+
+- `git switch -c`, `-C`, `--create`, `--force-create` or `--orphan`;
+- `git checkout -b`, `-B` or `--orphan`, and `git worktree add -b` or `-B`;
+- `git branch <name>`, and the new name of `git branch -m`, `-M`, `-c` or `-C`;
+- `git push <remote> <name>`, `<src>:<name>` or `refs/heads/<name>`.
+
+These pass: `main`, `dependabot/...`, Claude Code's worktree branches `worktree-agent-...`, `git branch` listing and deleting, `git push` with no refspec, of `HEAD`, of a tag, or a deletion.
+A name built from `$VAR` or `$(...)` passes: the hook cannot read it.
+The hook denies a plain `git push origin <tag>`. Push the tag as `refs/tags/<tag>`.
+
+## Hook: related tests only while iterating
+
+`.claude/settings.json` runs `factory/hooks/deny_full_test_suite.py` before every Bash command (CHB-54).
+It denies a bare full-suite run and names the related-test form:
+
+- `pytest`, `python -m pytest` or `uv run pytest` without a path, a node id, `-k` or `--lf`;
+- `vitest`, `npx vitest run`, `npm test` or `npm run test` without a file filter, `-t` or `--changed`;
+- `python3 -m unittest` or `python3 -m unittest discover` without `-s <folder>`, `-p <pattern>`, `-k`, a module or a file.
+
+A path of `.` counts as no filter. `make check` and `make test` run the full suite and stay allowed: CLAUDE.md requires `make check` before every commit.
+
+The two Bash hooks strip `rtk`, `rtk proxy`, `factory/bin/as-agent`, `env`, `uv run`, `npx` and `python -m` before they read a command.
+Like the Jira hook, they read the command text only, deny on unreadable input or an internal error, and let the command run if `python3` cannot start.
+They split a command with unbalanced quotes, such as a heredoc with an apostrophe, on spaces and separators instead.
+
+## Hook: warn on repeated edits of one file
+
+`.claude/settings.json` runs `factory/hooks/warn_edit_loops.py` after every Write, Edit and MultiEdit call (PostToolUse, CHB-54).
+It counts the edits of each file per session. On the 5th and 8th edit it adds context for the agent:
+"5th edit of <file> this session: step back, re-read the failing test and the plan before editing again."
+
+The counts live in `<temp dir>/chb-edit-loops/<session id>.json`. The env var `CHB_EDIT_LOOP_STATE_DIR` overrides the folder.
+The hook never blocks. Bad input, an unreadable state file or an internal error gives no warning and exit 0.
 
 ## Automated PR review (shadow mode)
 
