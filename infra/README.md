@@ -16,7 +16,7 @@ Terraform manages the infrastructure. See ADR-aae8.
 
 | Folder | Scope | Credentials | State |
 |---|---|---|---|
-| `gcp/` | Google Cloud: APIs, registry, service accounts, Workload Identity, budget, Cloud Run, Identity Platform (email and password sign-in, browser API key) | your gcloud login (configuration `chb`) | `gs://chb-factory-a92932-tfstate/gcp` |
+| `gcp/` | Google Cloud: APIs, registry, service accounts, Workload Identity, budget, Cloud Run, monitoring (uptime check, SLO, alert policies, email channel), Identity Platform (email and password sign-in, browser API key) | your gcloud login (configuration `chb`) | `gs://chb-factory-a92932-tfstate/gcp` |
 | `github/` | Repository settings, Actions variables and permissions (allow list, SHA pinning), the `main` ruleset, deployment environments, the Dependabot labels, the Jira autolink, and guards for what it cannot manage (`guards.tf`) | your `gh auth token` (admin) | `gs://chb-factory-a92932-tfstate/github` |
 
 The state bucket was created by hand (CHB-10) and is imported into `gcp/`.
@@ -24,6 +24,17 @@ The state bucket was created by hand (CHB-10) and is imported into `gcp/`.
 ## Use
 
 Requirements: [tfenv](https://github.com/tfutils/tfenv) (reads `.terraform-version`), gcloud with the `chb` configuration.
+
+The alerts go to an email address that is not in the repository.
+Export it in the shell that runs `make infra-plan`, for example from 1Password:
+
+```sh
+export TF_VAR_alert_email="$(op read 'op://<vault>/<item>/<field>')"
+```
+
+Never write the address in a file that git tracks, dotfiles included.
+
+`make infra-plan` stops without it. `make infra-apply` reads it from the saved plan.
 
 Until CI applies (CHB-13), the owner applies locally, after the PR with the Terraform change merges:
 
