@@ -92,6 +92,8 @@ DENIED = [
     "echo $(echo $(cat .env))",
     'echo "$(cd /repo && (head -1 .env))"',
     "echo $( (cat .env)",
+    'X="$($($($($($($(cat .env)))))))"',
+    "echo $( ( ( ( ( ( (cat .env) ) ) ) ) ) )",
     "bash -c 'cat .env'",
     'sh -c "head ~/.ssh/config"',
     "ssh localhost cat ~/.ssh/id_rsa",
@@ -229,6 +231,13 @@ class BashTest(unittest.TestCase):
         for command in ALLOWED:
             with self.subTest(command):
                 self.assertIsNone(hook.bash_reason(command, home=HOME))
+
+    def test_substitutions_give_the_outermost_and_the_innermost_bodies(self) -> None:
+        bodies = hook.substitutions('X="$(a "$(b "$(c "$(d "$(e "$(cat x)")")")")")" `f`')
+
+        self.assertEqual(bodies[0], 'a "$(b "$(c "$(d "$(e "$(cat x)")")")")"')
+        self.assertIn("cat x", bodies)  # checked one level down, so nesting never runs past MAX_DEPTH
+        self.assertIn("f", bodies)
 
     def test_the_reason_names_the_secret_and_the_wrappers(self) -> None:
         why = hook.bash_reason("cat .env", home=HOME) or ""

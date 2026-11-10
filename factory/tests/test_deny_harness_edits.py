@@ -283,6 +283,15 @@ class GitFailureTest(unittest.TestCase):
         self.assertIn("Blocked", why)
         self.assertIn("did not start (FileNotFoundError)", why)
 
+    def test_a_symlink_into_the_harness_names_the_real_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "factory").mkdir()
+            (Path(tmp) / "link").symlink_to(Path(tmp) / "factory")
+            with mock.patch.object(hook.subprocess, "run", side_effect=FileNotFoundError("git")):
+                why = hook.reason("link/x.py", cwd=tmp) or ""
+
+        self.assertIn("`factory/`", why)
+
     def test_the_hook_exits_2_with_the_git_message(self) -> None:
         timeout = subprocess.TimeoutExpired(["git"], hook.GIT_TIMEOUT)
         with mock.patch.object(hook.subprocess, "run", side_effect=timeout):

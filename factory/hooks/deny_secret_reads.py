@@ -54,6 +54,7 @@ KEY_FILE_PROGRAMS = {"ssh", "scp"}
 KEY_FILE_OPTIONS = {"-i", "-F"}
 SSH_VALUE_OPTIONS = {"-o", "-p", "-P", "-l", "-J", "-L", "-R", "-D", "-E", "-c", "-b", "-m", "-O", "-Q", "-S", "-W", "-w", "-e", "-B"}
 BACKTICK = re.compile(r"`([^`]*)`")
+INNERMOST = re.compile(r"\$\(([^()]*)\)")  # a `$(...)` without parentheses inside
 MAX_DEPTH = 4
 OP_VALUE_OPTIONS = {"--account", "--config", "--session", "--encoding", "--format", "--cache"}
 
@@ -124,10 +125,11 @@ def read_reason(path: str, *, home: str, cwd: str) -> str | None:
 
 
 def substitutions(command: str) -> list[str]:
-    """The bodies of the outermost `$(...)` substitutions, nested parentheses included, and of backticks.
+    """The bodies of the outermost and the innermost `$(...)` substitutions, and of backticks.
 
-    Parentheses are counted, quotes are not: a `$(` that never closes gives the rest of the command,
-    so a miscount checks more text, never less.
+    Outermost bodies keep nested parentheses (`$( (cat x) )`). Parentheses are counted, quotes are not:
+    a `$(` that never closes gives the rest of the command, so a miscount checks more text, never less.
+    Innermost bodies are checked one level down, so deep nesting never runs past MAX_DEPTH.
     """
     bodies: list[str] = []
     i = command.find("$(")
@@ -138,6 +140,7 @@ def substitutions(command: str) -> list[str]:
             j += 1
         bodies.append(command[start : j - 1] if depth == 0 else command[start:])
         i = command.find("$(", j)
+    bodies.extend(match.group(1) for match in INNERMOST.finditer(command))
     bodies.extend(match.group(1) for match in BACKTICK.finditer(command))
     return bodies
 

@@ -174,7 +174,8 @@ def reason(path: str, *, cwd: str) -> str | None:
     try:
         found = worktree_of(path)
     except GitUnreadable as error:
-        folder = next((p for p in path.split("/") if p in HARNESS), "harness") + "/"
+        words = path.split("/") + posixpath.realpath(path).split("/")
+        folder = next(p for p in words if p in HARNESS) + "/"  # may_be_harness found one
         return (
             f"Blocked: could not read the git branch of `{path}` ({error}). "
             f"Edits under `{folder}` need it to tell a feature ticket from a factory ticket (CHB-30). "
