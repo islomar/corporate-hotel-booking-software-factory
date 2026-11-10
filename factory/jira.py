@@ -101,6 +101,7 @@ import urllib.request
 import uuid
 from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -1183,6 +1184,20 @@ class Jira:
         check_comment_body(body)
         created = self.request("POST", f"/rest/api/3/issue/{check_key(key)}/comment", {"body": text_to_adf(body)})
         return str(created["id"])
+
+    def agent_comment_times(self, key: str) -> list[datetime]:
+        """When the agent account (this client's login) commented on the ticket, newest first, from the last 100 comments (CHB-163)."""
+        me = self.myself()["accountId"]
+        answer = self.request("GET", f"/rest/api/3/issue/{check_key(key)}/comment?orderBy=-created&maxResults=100")
+        times: list[datetime] = []
+        for comment in answer.get("comments", []):
+            if (comment.get("author") or {}).get("accountId") != me:
+                continue
+            try:
+                times.append(datetime.fromisoformat(str(comment["created"])))
+            except (KeyError, ValueError):
+                raise JiraError(f"{key}: a comment has no readable creation time") from None
+        return times
 
     def assign(self, key: str, account_id: str) -> None:
         self.request("PUT", f"/rest/api/3/issue/{check_key(key)}/assignee", {"accountId": account_id}, empty_ok=True)
