@@ -25,11 +25,13 @@ The state bucket was created by hand (CHB-10) and is imported into `gcp/`.
 Requirements: [tfenv](https://github.com/tfutils/tfenv) (reads `.terraform-version`), gcloud with the `chb` configuration.
 
 The alerts go to an email address that is not in the repository.
-Export it in the shell that runs `make infra-plan`, for example in `~/.zshrc`:
+Export it in the shell that runs `make infra-plan`, for example from 1Password:
 
 ```sh
-export TF_VAR_alert_email='<address>'
+export TF_VAR_alert_email="$(op read 'op://<vault>/<item>/<field>')"
 ```
+
+Never write the address in a file that git tracks, dotfiles included.
 
 `make infra-plan` stops without it. `make infra-apply` reads it from the saved plan.
 
