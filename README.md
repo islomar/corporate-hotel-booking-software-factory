@@ -158,6 +158,7 @@ The sampled flag in an incoming `traceparent` header is ignored; its trace ID is
 | `docs/decisions/` | Decision records |
 | `docs/specs/` | Product specs |
 | `docs/knowledge/` | Learnings |
+| `docs/assets/github-apps/` | Avatars of the agent and reviewer GitHub Apps: SVG source and the uploaded 512×512 PNG |
 | `docs/postmortems/` | One per ticket |
 | `docs/sessions/` | Curated agent session logs |
 
