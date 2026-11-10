@@ -38,6 +38,7 @@ class Health(BaseModel):
 class Me(BaseModel):
     uid: str
     email: str | None
+    email_verified: bool
 
 
 def create_app(
@@ -71,7 +72,7 @@ def create_app(
 
     @app.get("/api/me")
     def me(user: Annotated[User, Depends(current_user)]) -> Me:  # pyright: ignore[reportUnusedFunction]
-        return Me(uid=user.uid, email=user.email)
+        return Me(uid=user.uid, email=user.email, email_verified=user.email_verified)
 
     # Outside /api: part of the public frontend. 404 until Terraform sets the values (CHB-20).
     @app.get("/auth-config.json", include_in_schema=False)

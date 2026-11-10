@@ -1,3 +1,4 @@
+import threading
 import time
 from collections.abc import Mapping
 
@@ -85,11 +86,23 @@ def verifier(issuer: TokenIssuer) -> FirebaseTokenVerifier:
 
 
 def test_verify_returns_the_user(issuer: TokenIssuer) -> None:
-    assert verifier(issuer).verify(issuer.token()) == User(uid="user-123", email="ada@example.com")
+    assert verifier(issuer).verify(issuer.token()) == User(
+        uid="user-123", email="ada@example.com", email_verified=True
+    )
 
 
 def test_verify_accepts_a_user_without_email(issuer: TokenIssuer) -> None:
-    assert verifier(issuer).verify(issuer.token(email=None)) == User(uid="user-123", email=None)
+    user = verifier(issuer).verify(issuer.token(email=None, email_verified=None))
+
+    assert user == User(uid="user-123", email=None, email_verified=False)
+
+
+@pytest.mark.parametrize("claim", [False, None, "true"])
+def test_verify_marks_an_unconfirmed_email(issuer: TokenIssuer, claim: object) -> None:
+    user = verifier(issuer).verify(issuer.token(email_verified=claim))
+
+    assert user.email == "ada@example.com"
+    assert user.email_verified is False
 
 
 @pytest.mark.parametrize("sub", [None, "", 42])
@@ -183,6 +196,33 @@ def test_a_failed_fetch_waits_before_the_next_attempt() -> None:
     fetch.failing = False
     clock.now += 1
     assert certs() == {"k": "cert-3"}
+
+
+def test_requests_serve_the_last_certs_while_another_request_fetches() -> None:
+    clock = Clock()
+    started, release = threading.Event(), threading.Event()
+    calls: list[int] = []
+
+    def fetch() -> tuple[Mapping[str, str], float]:
+        calls.append(1)
+        if len(calls) == 2:  # the refresh: hold it until the test releases it
+            started.set()
+            release.wait(timeout=5)
+        return {"k": f"cert-{len(calls)}"}, 60
+
+    certs = CachedCerts(fetch, clock)
+    certs()
+    clock.now += 60
+    refresher = threading.Thread(target=certs)
+    refresher.start()
+    assert started.wait(timeout=5)
+
+    assert certs() == {"k": "cert-1"}
+
+    release.set()
+    refresher.join(timeout=5)
+    assert certs() == {"k": "cert-2"}
+    assert len(calls) == 2
 
 
 def test_without_any_certs_a_failed_fetch_fails_fast_until_the_retry() -> None:

@@ -40,6 +40,9 @@ type CertsFetch = Callable[[], tuple[Mapping[str, str], float]]
 class User:
     uid: str
     email: str | None
+    # False for an email and password account until its owner confirms the address.
+    # Never authorize by an unverified email.
+    email_verified: bool = False
 
 
 @dataclass(frozen=True)
@@ -84,39 +87,54 @@ def fetch_google_certs() -> tuple[Mapping[str, str], float]:
 class CachedCerts:
     """Keeps the certificates for as long as Google's Cache-Control allows.
 
-    When a fetch fails, it serves the last certificates it had and waits RETRY_AFTER_SECONDS
-    before it fetches again: an outage of Google's endpoint does not make every request wait.
+    One request at a time fetches. While it does, the others serve the last certificates;
+    only the very first fetch makes them wait. When a fetch fails, the last certificates keep
+    serving and the next fetch waits RETRY_AFTER_SECONDS: an outage of Google's endpoint does
+    not make every request wait.
     """
 
     def __init__(self, fetch: CertsFetch, clock: Callable[[], float] = time.monotonic) -> None:
         self._fetch = fetch
         self._clock = clock
-        self._lock = threading.Lock()
-        self._certs: Mapping[str, str] = {}
-        self._expires_at = float("-inf")
-        self._retry_at = float("-inf")
+        self._fetch_lock = threading.Lock()
+        # (certificates, expires at, next fetch not before): replaced as a whole, read at once.
+        self._state: tuple[Mapping[str, str], float, float] = ({}, float("-inf"), float("-inf"))
 
     def __call__(self) -> Mapping[str, str]:
-        with self._lock:
-            now = self._clock()
-            if now < self._expires_at:
-                return self._certs
-            if now < self._retry_at:
-                return self._last_known()
-            try:
-                certs, max_age = self._fetch()
-            except Exception:
-                self._retry_at = now + RETRY_AFTER_SECONDS
-                if self._certs:
-                    return self._certs
-                raise
-            self._certs, self._expires_at = certs, self._clock() + max_age
-            return self._certs
-
-    def _last_known(self) -> Mapping[str, str]:
-        if not self._certs:
+        certs, expires_at, retry_at = self._state
+        now = self._clock()
+        if now < expires_at:
+            return certs
+        if certs:
+            if now < retry_at or not self._fetch_lock.acquire(blocking=False):
+                return certs
+        elif now < retry_at:
             raise CertsUnavailableError("the last certificate fetch failed")
-        return self._certs
+        else:
+            self._fetch_lock.acquire()
+        try:
+            return self._refresh()
+        finally:
+            self._fetch_lock.release()
+
+    def _refresh(self) -> Mapping[str, str]:
+        certs, expires_at, retry_at = self._state
+        now = self._clock()
+        if now < expires_at:  # another request fetched while this one waited
+            return certs
+        if now < retry_at:  # another request failed while this one waited
+            if certs:
+                return certs
+            raise CertsUnavailableError("the last certificate fetch failed")
+        try:
+            fetched, max_age = self._fetch()
+        except Exception:
+            self._state = (certs, expires_at, now + RETRY_AFTER_SECONDS)
+            if certs:
+                return certs
+            raise
+        self._state = (fetched, self._clock() + max_age, retry_at)
+        return fetched
 
 
 class FirebaseTokenVerifier:
@@ -147,7 +165,11 @@ class FirebaseTokenVerifier:
         if not isinstance(auth_time, int | float) or auth_time > time.time() + CLOCK_SKEW_SECONDS:
             raise InvalidTokenError("sign-in time missing or in the future")
         email = claims.get("email")
-        return User(uid=uid, email=email if isinstance(email, str) else None)
+        return User(
+            uid=uid,
+            email=email if isinstance(email, str) else None,
+            email_verified=claims.get("email_verified") is True,
+        )
 
 
 def _unauthorized(detail: str) -> HTTPException:

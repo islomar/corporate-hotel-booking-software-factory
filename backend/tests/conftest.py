@@ -49,6 +49,7 @@ class TokenIssuer:
             "sub": "user-123",
             "user_id": "user-123",
             "email": "ada@example.com",
+            "email_verified": True,
             "iat": now - 60,
             "exp": now + 3600,
         }

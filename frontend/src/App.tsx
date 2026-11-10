@@ -161,7 +161,12 @@ function Account({ client }: { client: AuthClient }) {
       <h2 id="account">Account</h2>
       {me && <p>Signed in as {me.email ?? me.uid}</p>}
       {error && <p role="alert">{error}</p>}
-      <button type="button" onClick={() => void client.signOut()}>
+      <button
+        type="button"
+        onClick={() =>
+          client.signOut().catch((reason: unknown) => setError(String(reason)))
+        }
+      >
         Sign out
       </button>
     </section>

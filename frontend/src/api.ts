@@ -1,5 +1,5 @@
 export type Health = { status: string; version: string };
-export type Me = { uid: string; email: string | null };
+export type Me = { uid: string; email: string | null; email_verified: boolean };
 export type AuthConfig = { apiKey: string; authDomain: string };
 
 /** Returns the current ID token, or null when nobody is signed in. */

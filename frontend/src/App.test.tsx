@@ -168,4 +168,25 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
     expect(auth.signOut).toHaveBeenCalledOnce();
   });
+
+  it("shows why a sign-out failed", async () => {
+    stubApi({
+      ...healthy,
+      "/api/me": () =>
+        new Response(
+          JSON.stringify({ uid: "u1", email: null, email_verified: false }),
+        ),
+    });
+    const auth = new FakeAuth();
+    auth.signOut.mockRejectedValue(new Error("auth/network-request-failed"));
+
+    render(<App loadAuth={async () => auth} />);
+    await screen.findByRole("button", { name: "Sign in with Google" });
+    auth.signIn("ada@example.com", "id-token");
+    fireEvent.click(await screen.findByRole("button", { name: "Sign out" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "auth/network-request-failed",
+    );
+  });
 });

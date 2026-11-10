@@ -39,7 +39,11 @@ def test_valid_token_reaches_a_closed_route(client: TestClient, issuer: TokenIss
     response = client.get("/api/me", headers=bearer(issuer.token()))
 
     assert response.status_code == 200
-    assert response.json() == {"uid": "user-123", "email": "ada@example.com"}
+    assert response.json() == {
+        "uid": "user-123",
+        "email": "ada@example.com",
+        "email_verified": True,
+    }
 
 
 def test_missing_token_gets_401(client: TestClient) -> None:
