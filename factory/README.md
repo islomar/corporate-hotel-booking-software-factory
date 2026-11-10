@@ -176,11 +176,11 @@ The first node must be a heading with exactly that text, and text must follow be
 
 The pull list is the board column "Ready", or "To Do" on a board without that column (`pull_list`, CHB-153). The board was renamed on 2026-11-10.
 The "Ready" column holds two statuses, "To Do" (10003) and "Ready" (10010); "Backlog" holds status 10009.
-Backlog is never sorted, never "next" and never the top ticket. A start from Backlog exits 4.
+Backlog is never sorted, never "next" and never the top ticket. A ticket leaves Backlog only for the pull list, Done or Discarded: any other move exits 4.
 `transition` takes a status name or, when no status has that name, a column name.
 A move from Backlog to the pull list needs `--trigger "<which trigger and its evidence>"`: without it the command exits 2 and moves nothing.
 With it, the ticket moves and gets the comment `Moved to Ready. Trigger: <text>`. A failed comment exits 1 and says the ticket moved.
-`--trigger` on any other move, or an empty trigger, exits 2 before any write.
+`--trigger` on any other move, or an empty trigger, exits 2 before any write, the sort of a start included.
 `create` puts a new ticket in Backlog when the board has that column: it reads the new ticket's status and moves it only when Jira put it elsewhere.
 `create --ready --trigger "<text>"` puts it in the pull list and comments `Created in Ready. Trigger: <text>`. One flag without the other exits 2 before any request.
 Every failure after the ticket exists is a notice with exit 0, so nobody creates it twice.

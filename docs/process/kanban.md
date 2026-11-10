@@ -84,7 +84,7 @@ Meaning: work that is not needed yet (owner decision, 2026-11-10, CHB-153). It s
   and the agent tells the owner in one line. The owner's yes is trigger 2.
 - Enter: any ticket that is not needed now, from any open status. `factory/bin/jira transition CHB-<n> Backlog` needs no trigger.
 - Not sorted, no WIP limit. A Backlog ticket is never the top ticket, never "next", and never starts:
-  a move from Backlog into In Progress exits 4.
+  a move from Backlog into any column other than Ready, Done or Discarded exits 4.
 - Leave to Ready: only with a comment that names the trigger and its evidence. The four triggers:
   1. something is broken;
   2. the owner asked for it, directly or because it is in the product slice the owner agreed;
@@ -105,7 +105,7 @@ Meaning: work that is not needed yet (owner decision, 2026-11-10, CHB-153). It s
   - deleting data.
 
   Such a go is a decision ticket that blocks the work (a "Blocks" link, see [Ready](#ready), Dependencies).
-- Leave to Discarded: the work will not be done.
+- Leave to Discarded: the work will not be done. Leave to Done: it is done already. Neither needs a trigger.
 
 ### Ready
 

@@ -31,7 +31,7 @@ writes, and no raw request command. Do not add one. `rank` changes only the rank
 issues. `section` writes only the description field, and changes only one section of it.
 In "Acceptance criteria (Validating)", `section` refuses a "When:" line without a "Speed up:" line.
 `priority` writes only the priority field, and only High, Medium or Low (docs/process/priorities.md).
-The pull list is the board column "Ready", or "To Do" until the owner renames it (pull_list, CHB-153).
+The pull list is the board column "Ready", or "To Do" on a board without it (pull_list, CHB-153).
 "Backlog" holds work not needed yet: it is never sorted, never next and never started.
 `sort-todo` changes only the rank of pull-list issues. `create` runs it after creating a ticket in the
 pull list, and a start from the pull list runs it before the top-ticket check (CHB-148).
@@ -57,7 +57,7 @@ Exit codes:
   3  no credential: no service account token in the keyring (keyring locked, item absent)
      or `op` failed. The agent stops and reports.
   4  a board rule blocks the transition: the target column is at its WIP limit, the
-     description lacks the section the target status requires, a start from Backlog, or a start
+     description lacks the section the target status requires, a move from Backlog other than to Ready, Done or Discarded, or a start
      from the pull list that is not its top ticket, or has no "Why it matters" first section or
      no acceptance criteria (docs/process/kanban.md).
      The ticket stays where it is.
@@ -193,6 +193,7 @@ class Move:
     source: Column | None
     target: Column | None
     columns: tuple[Column, ...] = ()
+    comment: str | None = None  # the trigger comment to post after the move (check_trigger, CHB-153)
 
 
 def read_secret(
@@ -720,8 +721,8 @@ class Jira:
             names = sorted({t["to"]["name"] for t in transitions})
             raise JiraError(f"{key} cannot move to {status!r}. Allowed: {', '.join(names) or 'none'}")
         target = matches[0]["to"]["name"]
-        move = before_transition(self, key, target, status_id=str(matches[0]["to"]["id"]))
-        comment = check_trigger(key, move, trigger)
+        move = before_transition(self, key, target, status_id=str(matches[0]["to"]["id"]), trigger=trigger)
+        comment = move.comment
         self.request("POST", f"/rest/api/3/issue/{key}/transitions", {"transition": {"id": matches[0]["id"]}}, empty_ok=True)
         if comment:
             try:
@@ -964,7 +965,7 @@ def check_trigger(key: str, move: Move, trigger: str | None) -> str | None:
     return f"Moved to {move.target.name}. Trigger: {trigger}"
 
 
-def before_transition(jira: Jira, key: str, status: str, *, status_id: str) -> Move:
+def before_transition(jira: Jira, key: str, status: str, *, status_id: str, trigger: str | None = None) -> Move:
     """Called with the target status just before every transition POST. Raise to block the move.
 
     Raises BlockedError (exit 4) when the target status needs a description section that is
@@ -974,11 +975,14 @@ def before_transition(jira: Jira, key: str, status: str, *, status_id: str) -> M
     - a move into Needs human is blocked while Needs human is full.
     No other move is blocked by a limit: a column can go over its max.
     A start from the pull list must also be its top ticket, with acceptance criteria (CHB-125, check_top_of_to_do).
+    A ticket leaves Backlog only for the pull list (with `trigger`), Done or Discarded (CHB-153). The trigger
+    is checked (check_trigger, UsageError) before any check that writes, such as the sort of a start.
     A failed read of the board or of the open tickets raises JiraError and blocks too.
     """
     issue = jira.request("GET", f"/rest/api/3/issue/{key}?fields=status,description,issuelinks")["fields"]
     current_id = str(issue["status"]["id"])
     if current_id == status_id:
+        check_trigger(key, Move(None, None), trigger)  # a trigger on no move is refused
         return Move(None, None)
     heading = REQUIRED_SECTIONS.get(status.casefold())
     if heading and not has_section(issue.get("description"), heading):
@@ -991,15 +995,16 @@ def before_transition(jira: Jira, key: str, status: str, *, status_id: str) -> M
     source = _column_of(columns, current_id)
     target = _column_of(columns, status_id)
     move = Move(source, target, tuple(columns))
+    move = Move(source, target, tuple(columns), check_trigger(key, move, trigger))
     if target is None or target == source:
         return move
     pull = pull_list(columns)
-    if target.name == IN_PROGRESS and source is not None and source == backlog_column(columns):
+    if source is not None and source == backlog_column(columns) and target != pull and target.name not in CLOSED:
         name = pull.name if pull else READY
         raise BlockedError(
             f"{key} is in {BACKLOG}: move it to {name} first, with its trigger: "
             f'factory/bin/jira transition {key} "{name}" --trigger "<which trigger and its evidence>". '
-            f"Then pull the top ticket of {name} (docs/process/kanban.md, Backlog)."
+            f"From {BACKLOG} a ticket goes only to {name}, Done or Discarded (docs/process/kanban.md, Backlog)."
         )
     if target.name == IN_PROGRESS and (source is None or source.name not in (*STARTED_WORK, NEEDS_HUMAN)):
         limited = [column for column in columns if column.name in STARTED_WORK]
@@ -1489,8 +1494,12 @@ def run(args: argparse.Namespace, jira: Jira) -> None:
         try:
             column = jira.place_created(key, ready=args.ready)
         except (JiraError, KeyError, TypeError, AttributeError) as error:
-            where = READY if args.ready else BACKLOG
-            print(f'could not place {key}: {error}. Move it: factory/bin/jira transition {key} "{where}"')
+            column, failure = None, str(error)
+        else:
+            failure = "the board has no Ready or To Do column" if column is None and args.ready else ""
+        if failure:
+            move = f'"{READY}" --trigger {args.trigger!r}' if args.ready else f'"{BACKLOG}"'
+            print(f"could not place {key}: {failure}. Move it: factory/bin/jira transition {key} {move}")
             return
         if column is not None and column.name == BACKLOG:
             print(f"{key} in {BACKLOG}")

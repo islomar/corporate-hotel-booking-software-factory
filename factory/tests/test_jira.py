@@ -335,7 +335,7 @@ class TransitionTest(unittest.TestCase):
 
         self.assertEqual(code, 1)
         self.assertEqual(hook.call_args.args[1:], ("CHB-12", "In Progress"))
-        self.assertEqual(hook.call_args.kwargs, {"status_id": "3"})
+        self.assertEqual(hook.call_args.kwargs, {"status_id": "3", "trigger": None})
         self.assertIn("WIP limit reached", err)
         self.assertEqual(fake.writes(), [])
 
@@ -2490,16 +2490,31 @@ class PullListTest(unittest.TestCase):
                 self.assertEqual(fake.writes(), [])
 
     def test_a_start_from_backlog_is_refused(self) -> None:
-        for state in ("half", "after"):
-            with self.subTest(state):
-                fake = transition_fake("Backlog", {"In Progress": ["CHB-1"]}, state=state)
-                code, out, err = _run(["transition", "CHB-12", "In Progress"], fake)
+        for state, target in [("half", "In Progress"), ("after", "In Progress"), ("after", "In Review"), ("after", "Needs human")]:
+            with self.subTest(f"{state}: {target}"):
+                description = description_with("Acceptance criteria", *SECTIONS.values())
+                fake = transition_fake("Backlog", {"In Progress": ["CHB-1"]}, description=description, state=state)
+                code, out, err = _run(["transition", "CHB-12", target], fake)
 
                 self.assertEqual(code, 4)
                 self.assertEqual(out, "")
                 self.assertIn(f"CHB-12 is in Backlog: move it to {pull_name(state)} first", err)
                 self.assertIn(f'factory/bin/jira transition CHB-12 "{pull_name(state)}" --trigger', err)
                 self.assertEqual(fake.writes(), [])
+
+    def test_backlog_to_done_or_discarded_needs_no_trigger(self) -> None:
+        board = board_config(state="after", **BOARD_LIMITS)
+        board["columnConfig"]["columns"].append({"name": "Discarded", "statuses": [{"id": "10008", "self": "x"}]})
+        for target in ("Done", "Discarded"):
+            with self.subTest(target):
+                fake = transition_fake("Backlog", board=board, state="after")
+                transitions = transitions_of("after")
+                transitions["transitions"].append({"id": "99", "to": {"name": "Discarded", "id": "10008"}})
+                fake.routes[("GET", "/rest/api/3/issue/CHB-12/transitions")] = transitions
+                code, out, err = _run(["transition", "CHB-12", target], fake)
+
+                self.assertEqual(code, 0, err)
+                self.assertEqual(_write_paths(fake), [MOVE_PATH])
 
     def test_the_free_slot_line_names_only_pull_list_tickets(self) -> None:
         for state in BOARD_STATES:
@@ -2579,6 +2594,26 @@ class TriggerTest(unittest.TestCase):
                 self.assertIn("--trigger applies only to a move from Backlog", err)
                 self.assertEqual(fake.writes(), [])
 
+    def test_a_trigger_on_a_start_writes_no_rank(self) -> None:
+        """The trigger is checked before the start check sorts the pull list."""
+        for state in BOARD_STATES:
+            with self.subTest(state):
+                pull = pull_name(state)
+                fake = transition_fake(pull, {pull: ["CHB-5", "CHB-12"]}, priorities={"CHB-12": "High"}, state=state)
+                code, _, err = _run(["transition", "CHB-12", "In Progress", "--trigger", "1. broken"], fake)
+
+                self.assertEqual(code, 2)
+                self.assertIn("--trigger applies only to a move from Backlog", err)
+                self.assertEqual(fake.writes(), [])
+
+    def test_a_trigger_on_no_move_exits_2(self) -> None:
+        fake = transition_fake("Ready", state="after")
+        code, _, err = _run(["transition", "CHB-12", "Ready", "--trigger", "2. the owner asked"], fake)
+
+        self.assertEqual(code, 2)
+        self.assertIn("--trigger applies only to a move from Backlog", err)
+        self.assertEqual(fake.writes(), [])
+
     def test_an_empty_trigger_exits_2_before_1password(self) -> None:
         fake = FakeJira({})
         code, _, err = _run(["transition", "CHB-12", "Ready", "--trigger", "  "], fake, credentials_reader=_no_credentials)
@@ -2656,6 +2691,26 @@ class CreateInBacklogTest(unittest.TestCase):
                 self.assertEqual(out, "")
                 self.assertIn("trigger is empty" if extra[-1] == " " else "--ready and --trigger go together", err)
                 self.assertEqual(fake.requests, [])
+
+    def test_a_failed_ready_placement_names_the_command_with_its_trigger(self) -> None:
+        fake = backlog_create_fake("after", "Backlog")
+        fake.routes[("POST", NEW_MOVE)] = 500
+        code, out, _ = _create_args(fake, "--ready", "--trigger", "2. the owner asked")
+
+        self.assertEqual(code, 0)
+        self.assertIn("""factory/bin/jira transition CHB-200 "Ready" --trigger '2. the owner asked'""", out)
+        self.assertEqual(_comments(fake, NEW_COMMENT), [], "no trigger comment on a ticket that did not reach Ready")
+
+    def test_ready_on_a_board_without_a_pull_list_is_a_notice_without_a_comment(self) -> None:
+        fake = backlog_create_fake("after", "Backlog")
+        board = board_config(state="after", **BOARD_LIMITS)
+        board["columnConfig"]["columns"] = [c for c in board["columnConfig"]["columns"] if c["name"] != "Ready"]
+        fake.routes[("GET", BOARD)] = board
+        code, out, _ = _create_args(fake, "--ready", "--trigger", "1. broken")
+
+        self.assertEqual(code, 0)
+        self.assertIn("could not place CHB-200: the board has no Ready or To Do column", out)
+        self.assertEqual(_comments(fake, NEW_COMMENT), [])
 
     def test_a_failed_move_after_create_is_a_notice_and_exits_0(self) -> None:
         fake = backlog_create_fake("after", "Ready")
