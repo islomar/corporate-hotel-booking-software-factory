@@ -148,6 +148,14 @@ def _uv_settings(name: str, text: str | None) -> dict[str, object]:
     return _exclude_newer(tool.get("uv", {}))
 
 
+RELEASE_AGE_NAMES = (".npmrc", "pyproject.toml", "uv.toml", *OPAQUE_RELEASE_AGE_NAMES)
+
+
+def has_release_age_settings(path: str) -> bool:
+    """True for the files release_age_change() reads. gather() reads no other content (CHB-161)."""
+    return PurePosixPath(path).name in RELEASE_AGE_NAMES
+
+
 def release_age_change(path: str, base_text: str | None, head_text: str | None) -> str | None:
     """Why the release-age settings of a file differ between base and head, or None.
 
@@ -411,7 +419,7 @@ def gather(args: argparse.Namespace, token: str) -> Evidence:
     files = changed_files(args.base, args.head)
     fork_point = merge_base(args.base, args.head)
     release_age_files = []
-    for path in files:
+    for path in filter(has_release_age_settings, files):
         reason = release_age_change(path, file_at(fork_point, path), file_at(args.head, path))
         if reason:
             print(f"{path}: release-age settings: {reason}")
