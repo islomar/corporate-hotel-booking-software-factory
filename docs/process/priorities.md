@@ -22,6 +22,7 @@ Leaving the ticket open risks harm now.
 
 - A bug that affects users in production. It goes to the top of To Do, above every other ticket, and the agent tells the owner at once.
 - The delivery pipeline is broken: CI on `main`, the deploy, a required check, or anything that stops a change from reaching production.
+- The agent cannot work: `factory/bin/as-agent`, `factory/bin/jira`, a hook or a credential fails, and no agent can commit, push or update Jira.
 - Something else is broken: a feature, check, link or command does not do what it says, or a document states something false.
 - Security: a secret, token or private data can leak; private content can reach a public repository; an authentication or permission bypass; a supply-chain path that merges unreviewed code.
 - Data loss or a destructive change: a command, script or Terraform plan can delete or overwrite data, infrastructure or repository state.
