@@ -5,9 +5,11 @@ Usage:
   factory/bin/jira view CHB-12 [--json]
   factory/bin/jira search 'status = "In Review"' [--json]   (sent as project = CHB AND (<jql>))
   factory/bin/jira create --parent CHB-27 --summary TEXT --description-file FILE --priority High|Medium|Low
-                          [--ready --trigger TEXT]       (Backlog by default; --ready puts it in Ready)
+                                                          (in Backlog, with the Definition of Ready)
   factory/bin/jira transition CHB-12 "In Review"
-  factory/bin/jira transition CHB-12 Ready --trigger TEXT  (from Backlog: which trigger, and its evidence)
+  factory/bin/jira tick CHB-12 why|trigger|decision|small   (ticks one box of the Definition of Ready)
+  factory/bin/jira ready CHB-12 --trigger TEXT            (Backlog to Ready: checks the Definition of Ready)
+  factory/bin/jira checklist CHB-12 [CHB-13 ...] | --open  (adds the Definition of Ready where it is missing)
   factory/bin/jira comment CHB-12 --body-file FILE      (FILE "-" reads stdin)
   factory/bin/jira assign CHB-12 --me | --account-id ID
   factory/bin/jira rank CHB-12 [CHB-13 ...] --before CHB-9 | --after CHB-9
@@ -35,15 +37,19 @@ The pull list is the board column "Ready", or "To Do" on a board without it (pul
 "Backlog" holds work not needed yet: it is never sorted, never next and never started.
 `sort-todo` changes only the rank of pull-list issues. `create` runs it after creating a ticket in the
 pull list, and a start from the pull list runs it before the top-ticket check (CHB-148).
-`create` puts a new ticket in Backlog when the board has that column; `--ready --trigger` puts it in
-the pull list and posts the trigger as a comment. A move from Backlog to the pull list needs
-`--trigger`, posted as the comment "Moved to Ready. Trigger: <text>" (CHB-153).
+`create` puts a new ticket in Backlog when the board has that column (CHB-153).
+Every ticket carries a "Definition of Ready" task list right after "Why it matters" (CHB-154): `create`
+adds it, and `checklist` adds it to a ticket without it. `tick` and `checklist` write only the
+description field: `tick` changes the state of one task item, `checklist` inserts the section and
+changes no other node. `ready` is the only way from Backlog to the pull list: it re-checks every
+box (readiness_problems), ticks the boxes it verifies, moves the ticket and posts the trigger as the
+comment "Moved to Ready. Trigger: <text>". `transition` refuses that move and any --trigger.
 `create` refuses a description that does not open with a non-empty "Why it matters" section (CHB-148).
 `description` writes only the description field. `edit-comment` changes one comment body.
 `link` creates only "Blocks" links between two different CHB issues, and never removes one.
 
 Descriptions, comments and section bodies are Markdown: headings, bullet and numbered lists,
-`code`, **bold** and links render in Jira (text_to_adf). CHB-<n> links to the ticket, and
+task lists ("- [ ]" and "- [x]" become Jira checkboxes), `code`, **bold** and links render in Jira (text_to_adf). CHB-<n> links to the ticket, and
 "PR #<n>" or "(#<n>" links to the pull request.
 
 Exit codes:
@@ -52,15 +58,17 @@ Exit codes:
      an issue that could not be ranked, a search answer with an issue outside CHB)
   2  usage error (also a bad section heading, an empty body or summary, a file that is not
      UTF-8, a duplicate rank key, JQL whose parentheses or quotes do not balance, a ticket
-     linked to itself, a move from Backlog to Ready without --trigger, --trigger on another
-     move, --ready without --trigger)
+     linked to itself, a move from Backlog to Ready with `transition`, --trigger on `transition`,
+     --ready or --trigger on `create`, `ready` without --trigger or on a ticket outside Backlog,
+     `tick` of a box that `ready` verifies)
   3  no credential: no service account token in the keyring (keyring locked, item absent)
      or `op` failed. The agent stops and reports.
   4  a board rule blocks the transition: the target column is at its WIP limit, the
      description lacks the section the target status requires, a move from Backlog other than to Ready, Done or Discarded, or a start
      from the pull list that is not its top ticket, or has no "Why it matters" first section or
-     no acceptance criteria (docs/process/kanban.md).
-     The ticket stays where it is.
+     no acceptance criteria (docs/process/kanban.md); `ready` on a ticket whose Definition of Ready
+     has a box unticked or a check that fails (no "Why it matters", no acceptance criteria, an open
+     blocker). The message names each open box. The ticket stays where it is.
 
 `transition` reads the column limits from the board configuration (board 2) on every call.
 After a move it prints the free In Progress slots and the next tickets of the pull list (CHB-125).
@@ -70,6 +78,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import copy
 import json
 import os
 import re
@@ -78,7 +87,8 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable, Sequence
+import uuid
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -102,6 +112,7 @@ PRIORITIES = ("High", "Medium", "Low")  # Highest and Lowest exist in Jira but C
 HEADING_PATTERN = re.compile(r"^(#{1,6}) +(\S.*?)\s*$")
 BULLET_PATTERN = re.compile(r"^- (?P<text>.*)$")
 ORDERED_PATTERN = re.compile(r"^([1-9][0-9]*)\. (?P<text>.*)$")
+TASK_PATTERN = re.compile(r"^- \[(?P<mark>[ xX])\] (?P<text>.*)$")  # a task list item (CHB-154)
 ORDER_BY_PATTERN = re.compile(r"\border\s+by\b", re.IGNORECASE)
 PULL_URL = "https://github.com/islomar/corporate-hotel-booking-software-factory/pull/"
 REFERENCE_PATTERN = re.compile(
@@ -196,6 +207,44 @@ class Move:
     comment: str | None = None  # the trigger comment to post after the move (check_trigger, CHB-153)
 
 
+@dataclass(frozen=True)
+class Box:
+    """One box of the Definition of Ready checklist (CHB-154)."""
+
+    name: str  # the name `tick` takes
+    prefix: str  # the start of the box text: it finds the box in a description, so keep it when editing the text
+    text: str
+
+
+# The Definition of Ready (CHB-154, docs/process/kanban.md, Backlog): a task list in every ticket, right after
+# "Why it matters". `ready` moves a ticket from Backlog to Ready only when every box is ticked and every check holds.
+DOR_HEADING = "Definition of Ready"
+DOR_BOXES = (
+    Box(
+        "why",
+        "Why it matters",
+        "Why it matters states the need and when it becomes real, never the solution. (agent ticks; `ready` checks the section)",
+    ),
+    Box(
+        "trigger",
+        "Trigger named",
+        "Trigger named with evidence: broken, owner asked (or in the agreed product slice), unblocks work in progress, "
+        "or the same pain twice. (agent ticks; `ready` requires the trigger text and posts it)",
+    ),
+    Box("acceptance", "Acceptance criteria", "Acceptance criteria that can be checked. (`ready` verifies the section and ticks)"),
+    Box("unblocked", "Not blocked", 'Not blocked: every "is blocked by" ticket is Done or Discarded. (`ready` verifies the links and ticks)'),
+    Box(
+        "decision",
+        "No owner decision",
+        "No owner decision pending (money, lock-in, public exposure, deletion), or its decision ticket is Done. "
+        "(agent ticks; a pending decision is a Blocks link that `ready` verifies)",
+    ),
+    Box("small", "Small", "Small: one PR, about a day of agent work; otherwise split first. (agent ticks)"),
+)
+VERIFIED_BOXES = ("acceptance", "unblocked")  # `ready` checks and ticks them; `tick` refuses them
+JUDGMENT_BOXES = tuple(box.name for box in DOR_BOXES if box.name not in VERIFIED_BOXES)
+
+
 def read_secret(
     command: list[str],
     token_reader: Callable[[], str] = op_service_account.read_token,
@@ -271,31 +320,35 @@ def _block_nodes(lines: list[str]) -> list[dict[str, Any]]:
     """Split one block into paragraphs and lists, in order."""
     nodes: list[dict[str, Any]] = []
     run: list[str] = []
-    kind = ""  # "bullet" or "ordered" while a list is open
+    kind = ""  # "bullet", "ordered" or "task" while a list is open
     first_number = 1
     items: list[list[str]] = []
+    states: list[str] = []  # TODO or DONE per item of a task list
 
     def close() -> None:
-        nonlocal run, items, kind
+        nonlocal run, items, states, kind
         if run:
             nodes.append(_paragraph(run))
             run = []
         if items:
-            nodes.append(_list(kind, items, first_number))
-            items = []
+            nodes.append(_list(kind, items, first_number, states))
+            items, states = [], []
         kind = ""
 
     for line in lines:
-        bullet = BULLET_PATTERN.match(line)
+        task = TASK_PATTERN.match(line)
+        bullet = None if task else BULLET_PATTERN.match(line)
         numbered = ORDERED_PATTERN.match(line)
-        if bullet or numbered:
-            new_kind = "bullet" if bullet else "ordered"
+        match = task or bullet or numbered
+        if match:
+            new_kind = "task" if task else "bullet" if bullet else "ordered"
             if run or kind != new_kind:
                 close()
             if not items and numbered:
                 first_number = int(numbered.group(1))
             kind = new_kind
-            items.append([(bullet or numbered).group("text")])  # type: ignore[union-attr]
+            items.append([match.group("text")])
+            states.append("DONE" if task and task.group("mark") in "xX" else "TODO")
         elif items and line[:1].isspace():
             items[-1].append(line.strip())
         else:
@@ -306,7 +359,13 @@ def _block_nodes(lines: list[str]) -> list[dict[str, Any]]:
     return nodes
 
 
-def _list(kind: str, items: list[list[str]], first_number: int) -> dict[str, Any]:
+def _list(kind: str, items: list[list[str]], first_number: int, states: list[str]) -> dict[str, Any]:
+    if kind == "task":  # a Jira task list: its items hold inline nodes, not paragraphs (CHB-154)
+        tasks = [
+            {"type": "taskItem", "attrs": {"localId": str(uuid.uuid4()), "state": state}, "content": _paragraph(item)["content"]}
+            for item, state in zip(items, states)
+        ]
+        return {"type": "taskList", "attrs": {"localId": str(uuid.uuid4())}, "content": tasks}
     content = [{"type": "listItem", "content": [_paragraph(item)]} for item in items]
     if kind == "ordered":
         return {"type": "orderedList", "attrs": {"order": first_number}, "content": content}
@@ -474,6 +533,16 @@ def adf_to_text(node: Any) -> str:
         start = node.get("attrs", {}).get("order", 1)
         items = (adf_to_text(item).strip("\n") for item in node.get("content", []))
         return "".join(f"{n}. {_indent(item, len(str(n)) + 2)}\n" for n, item in enumerate(items, start)) + "\n"
+    if kind == "taskList":
+        lines = []
+        for item in node.get("content", []):
+            if isinstance(item, dict) and item.get("type") == "taskItem":
+                mark = "x" if (item.get("attrs") or {}).get("state") == "DONE" else " "
+                text = "".join(adf_to_text(child) for child in item.get("content", []))
+                lines.append(f"- [{mark}] {_indent(text, 6)}\n")
+            else:  # a nested task list
+                lines.append(adf_to_text(item).strip("\n") + "\n")
+        return "".join(lines) + "\n"
     inner = "".join(adf_to_text(child) for child in node.get("content", []))
     if kind == "doc":
         return inner.strip("\n")
@@ -510,12 +579,7 @@ def replace_section(description: dict[str, Any] | None, heading: str, body: str,
         raise JiraError(f"the description has {len(starts)} sections headed {heading!r}; fix it by hand")
     if starts:
         start = starts[0]
-        level = _level(content[start])
-        end = next(
-            (i for i in range(start + 1, len(content)) if _is_heading(content[i]) and _level(content[i]) <= level),
-            len(content),
-        )
-        content[start:end] = [] if first else new
+        content[start : _section_end(content, start)] = [] if first else new
     if first:
         content[0:0] = new
     elif not starts:
@@ -523,6 +587,130 @@ def replace_section(description: dict[str, Any] | None, heading: str, body: str,
     result = dict(doc) if doc else {"type": "doc", "version": 1}
     result["content"] = content
     return result
+
+
+def _section_end(content: list[Any], start: int) -> int:
+    """Index after the section headed at `start`: the next heading of the same or a higher level, or the end."""
+    level = _level(content[start])
+    return next((i for i in range(start + 1, len(content)) if _is_heading(content[i]) and _level(content[i]) <= level), len(content))
+
+
+def with_checklist(description: dict[str, Any]) -> dict[str, Any]:
+    """The description with the Definition of Ready added unless it has one (`create`, CHB-154)."""
+    return add_checklist(description) or description
+
+
+def checklist_markdown(done: Collection[str] = ()) -> str:
+    """The Definition of Ready as Markdown task lines, with the boxes named in `done` ticked (CHB-154)."""
+    return "\n".join(f"- [{'x' if box.name in done else ' '}] {box.text}" for box in DOR_BOXES)
+
+
+def _content(description: Any) -> list[Any]:
+    return list(description.get("content", [])) if isinstance(description, dict) else []
+
+
+def _checklist_starts(content: list[Any]) -> list[int]:
+    return [i for i, node in enumerate(content) if _is_heading(node) and _heading_text(node) == DOR_HEADING]
+
+
+def checklist_count(description: Any) -> int:
+    """How many top-level "Definition of Ready" sections the description has."""
+    return len(_checklist_starts(_content(description)))
+
+
+def add_checklist(description: Any) -> dict[str, Any] | None:
+    """A copy of the description with an unticked Definition of Ready, or None when it has one already.
+
+    The section goes right after the "Why it matters" section, with a heading of the same level, so an
+    empty Why section stays empty (why_problem). Without a Why section it goes first. No other node changes.
+    """
+    content = _content(description)
+    if _checklist_starts(content):
+        return None
+    why = next((i for i, node in enumerate(content) if _is_heading(node) and _heading_text(node) == WHY_HEADING), None)
+    level = 2 if why is None else _level(content[why])
+    at = 0 if why is None else _section_end(content, why)
+    heading = {"type": "heading", "attrs": {"level": level}, "content": [{"type": "text", "text": DOR_HEADING}]}
+    content[at:at] = [heading, *text_to_adf(checklist_markdown())["content"]]
+    doc = description if isinstance(description, dict) and description.get("type") == "doc" else None
+    result = dict(doc) if doc else {"type": "doc", "version": 1}
+    result["content"] = content
+    return result
+
+
+def _checklist_items(description: Any) -> list[dict[str, Any]] | None:
+    """The task items of the first Definition of Ready section (the nodes themselves), or None without one."""
+    content = _content(description)
+    starts = _checklist_starts(content)
+    if not starts:
+        return None
+    section = content[starts[0] + 1 : _section_end(content, starts[0])]
+    lists = [node for node in section if isinstance(node, dict) and node.get("type") == "taskList"]
+    return [item for node in lists for item in node.get("content", []) if isinstance(item, dict) and item.get("type") == "taskItem"]
+
+
+def _box_of(item: dict[str, Any]) -> Box | None:
+    text = "".join(adf_to_text(child) for child in item.get("content", [])).strip()
+    return next((box for box in DOR_BOXES if text.startswith(box.prefix)), None)
+
+
+def box_states(description: Any) -> dict[str, str] | None:
+    """Box name -> TODO or DONE for the boxes of the Definition of Ready, or None without that section."""
+    items = _checklist_items(description)
+    if items is None:
+        return None
+    states: dict[str, str] = {}
+    for item in items:
+        box = _box_of(item)
+        if box is not None and box.name not in states:
+            states[box.name] = str((item.get("attrs") or {}).get("state", "TODO"))
+    return states
+
+
+def tick_boxes(description: dict[str, Any], names: Collection[str]) -> dict[str, Any]:
+    """A copy of the description with the named boxes ticked. Only their state changes; ids and text stay."""
+    result = copy.deepcopy(description)
+    for item in _checklist_items(result) or []:
+        box = _box_of(item)
+        if box is not None and box.name in names:
+            item["attrs"] = {**(item.get("attrs") or {}), "state": "DONE"}
+    return result
+
+
+def check_box(name: str) -> None:
+    """Refuse (UsageError, exit 2) a box that `tick` does not tick."""
+    if name in VERIFIED_BOXES:
+        raise UsageError(f"box {name!r} is verified, not ticked: factory/bin/jira ready verifies it and ticks it")
+    if name not in JUDGMENT_BOXES:
+        raise UsageError(f"unknown box {name!r}; tick one of: {', '.join(JUDGMENT_BOXES)}")
+
+
+def readiness_problems(key: str, description: Any, blocking: list[str]) -> list[str]:
+    """Why the ticket may not move to Ready (CHB-154): each open box, by its text. Empty when it may.
+
+    A judgment box must be ticked. A verified box must pass its check, ticked or not: ticking cannot
+    replace checking. `blocking` are the open tickets that block it (open_blockers).
+    """
+    count = checklist_count(description)
+    if count == 0:
+        return [f"its description has no {DOR_HEADING} section; add it: factory/bin/jira checklist {key}"]
+    if count > 1:
+        return [f"its description has {count} {DOR_HEADING} sections; fix it by hand"]
+    states = box_states(description) or {}
+    problems = []
+    for box in DOR_BOXES:
+        if box.name in JUDGMENT_BOXES and states.get(box.name) is None:
+            problems.append(f"{box.prefix}: the box is missing from the checklist; fix it by hand")
+        elif box.name in JUDGMENT_BOXES and states[box.name] != "DONE":
+            problems.append(f"{box.prefix}: not ticked (factory/bin/jira tick {key} {box.name})")
+        why = why_problem(description) if box.name == "why" else None
+        if why:
+            problems.append(f'{box.prefix}: the description {why} (factory/bin/jira section {key} --heading "{WHY_HEADING}" --first --body-file FILE)')
+        if box.name == "acceptance" and not has_acceptance_criteria(description):
+            problems.append(f'{box.prefix}: no acceptance criteria (factory/bin/jira section {key} --heading "Acceptance criteria" --body-file FILE)')
+        if box.name == "unblocked" and blocking:
+            problems.append(f"{box.prefix}: blocked by open tickets: {', '.join(blocking)}")
+    return problems
 
 
 def check_section_input(heading: str, body: str) -> str:
@@ -697,7 +885,7 @@ class Jira:
                     "issuetype": {"name": "Task"},
                     "parent": {"key": parent},
                     "summary": summary.strip(),
-                    "description": text_to_adf(description),
+                    "description": with_checklist(text_to_adf(description)),
                     "priority": {"name": priority},
                 }
             },
@@ -734,8 +922,8 @@ class Jira:
                 ) from None
         return target, after_transition(self, key, move)
 
-    def place_created(self, key: str, *, ready: bool) -> Column | None:
-        """Put a ticket just created in Backlog, or in the pull list when `ready` (CHB-153). Return its column.
+    def place_created(self, key: str) -> Column | None:
+        """Put a ticket just created in Backlog (CHB-153). Return its column. `ready` moves it on (CHB-154).
 
         Without a Backlog column (before the owner adds it), the ticket stays where Jira put it, the
         pull list, and nothing is read. Jira may put a new ticket in either column, so the status is
@@ -744,21 +932,74 @@ class Jira:
         """
         columns = self.board_columns()
         backlog = backlog_column(columns)
-        pull = pull_list(columns)
         if backlog is None:
-            return pull
-        target = pull if ready else backlog
-        if target is None:
-            return None
+            return pull_list(columns)
         status = self.request("GET", f"/rest/api/3/issue/{check_key(key)}?fields=status")["fields"]["status"]
-        if str(status["id"]) in target.status_ids:
-            return target
+        if str(status["id"]) in backlog.status_ids:
+            return backlog
         transitions = self.request("GET", f"/rest/api/3/issue/{key}/transitions")["transitions"]
-        match = next((t for t in transitions if str(t["to"]["id"]) in target.status_ids), None)
+        match = next((t for t in transitions if str(t["to"]["id"]) in backlog.status_ids), None)
         if match is None:
-            raise JiraError(f"{key} has no transition into {target.name}")
+            raise JiraError(f"{key} has no transition into {backlog.name}")
         self.request("POST", f"/rest/api/3/issue/{key}/transitions", {"transition": {"id": match["id"]}}, empty_ok=True)
-        return target
+        return backlog
+
+    def ready(self, key: str, trigger: str) -> tuple[str, list[str]]:
+        """Move a Backlog ticket to the pull list once its Definition of Ready holds (CHB-154). The only way into Ready.
+
+        Refuses (UsageError) a ticket outside Backlog. Refuses (BlockedError) while readiness_problems names a
+        box. Then ticks the verified boxes, moves the ticket and posts "Moved to Ready. Trigger: <text>" (transition).
+        """
+        fields = self.request("GET", f"/rest/api/3/issue/{check_key(key)}?fields=status,description,issuelinks")["fields"]
+        columns = self.board_columns()
+        backlog, pull = backlog_column(columns), pull_list(columns)
+        if backlog is None or pull is None or str(fields["status"]["id"]) not in backlog.status_ids:
+            raise UsageError(f"ready moves a ticket from {BACKLOG} to {pull.name if pull else READY}; {key} is in {fields['status']['name']}")
+        description = fields.get("description")
+        blocking = open_blockers(fields, {str(issue["key"]) for issue in self.open_issues()}) if blockers(fields) else []
+        problems = readiness_problems(key, description, blocking)
+        if problems:
+            raise BlockedError(
+                f"{key} is not ready: {'; '.join(problems)}. It stays in {BACKLOG} (docs/process/kanban.md, Backlog, {DOR_HEADING})."
+            )
+        states = box_states(description) or {}
+        if any(states.get(name) != "DONE" for name in VERIFIED_BOXES):
+            ticked = tick_boxes(description, VERIFIED_BOXES)
+            self.request("PUT", f"/rest/api/3/issue/{key}", {"fields": {"description": ticked}}, empty_ok=True)
+        return self.transition(key, pull.name, trigger)
+
+    def tick(self, key: str, box: str) -> bool:
+        """Tick one judgment box of the Definition of Ready. Return False when it was ticked already."""
+        check_box(box)
+        current = self.request("GET", f"/rest/api/3/issue/{check_key(key)}?fields=description")["fields"].get("description")
+        count = checklist_count(current)
+        if count != 1:
+            fix = f"add it: factory/bin/jira checklist {key}" if count == 0 else "fix it by hand"
+            raise JiraError(f"{key} has {count} {DOR_HEADING} sections; {fix}")
+        state = (box_states(current) or {}).get(box)
+        if state is None:
+            prefix = next(b.prefix for b in DOR_BOXES if b.name == box)
+            raise JiraError(f"{key}'s {DOR_HEADING} has no box that starts with {prefix!r}; fix it by hand")
+        if state == "DONE":
+            return False
+        self.request("PUT", f"/rest/api/3/issue/{key}", {"fields": {"description": tick_boxes(current, {box})}}, empty_ok=True)
+        return True
+
+    def checklist(self, key: str) -> str:
+        """Add the Definition of Ready to one ticket, from a fresh read. Return "added", "already there" or
+        "skipped (epic)". Two or more sections raise JiraError: nothing is written then."""
+        fields = self.request("GET", f"/rest/api/3/issue/{check_key(key)}?fields=description,issuetype")["fields"]
+        if fields["issuetype"]["name"] == "Epic":
+            return "skipped (epic)"
+        current = fields.get("description")
+        count = checklist_count(current)
+        if count > 1:
+            raise JiraError(f"{count} {DOR_HEADING} sections; fix it by hand")
+        updated = add_checklist(current)
+        if updated is None:
+            return "already there"
+        self.request("PUT", f"/rest/api/3/issue/{key}", {"fields": {"description": updated}}, empty_ok=True)
+        return "added"
 
     def board_columns(self) -> list[Column]:
         """The columns of the CHB board with their WIP limits. The board is the only source of limits."""
@@ -954,8 +1195,8 @@ def check_trigger(key: str, move: Move, trigger: str | None) -> str | None:
     if promotes and not trigger:
         name = pull.name if pull else READY
         raise UsageError(
-            f'{key} moves from {BACKLOG} to {name} only with a trigger: factory/bin/jira transition {key} "{name}" '
-            '--trigger "<which trigger and its evidence>". Triggers: 1. something is broken; 2. the owner asked for it; '
+            f'{key} moves from {BACKLOG} to {name} only with factory/bin/jira ready {key} --trigger "<which trigger and its evidence>", '
+            f"once every box of its {DOR_HEADING} is ticked. Triggers: 1. something is broken; 2. the owner asked for it; "
             "3. it unblocks work in progress; 4. the same pain appeared twice (docs/process/kanban.md, Backlog)."
         )
     if trigger and not promotes:
@@ -1002,8 +1243,8 @@ def before_transition(jira: Jira, key: str, status: str, *, status_id: str, trig
     if source is not None and source == backlog_column(columns) and target != pull and target.name not in CLOSED:
         name = pull.name if pull else READY
         raise BlockedError(
-            f"{key} is in {BACKLOG}: move it to {name} first, with its trigger: "
-            f'factory/bin/jira transition {key} "{name}" --trigger "<which trigger and its evidence>". '
+            f"{key} is in {BACKLOG}: move it to {name} first, once its {DOR_HEADING} is ticked: "
+            f'factory/bin/jira ready {key} --trigger "<which trigger and its evidence>". '
             f"From {BACKLOG} a ticket goes only to {name}, Done or Discarded (docs/process/kanban.md, Backlog)."
         )
     if target.name == IN_PROGRESS and (source is None or source.name not in (*STARTED_WORK, NEEDS_HUMAN)):
@@ -1388,6 +1629,30 @@ def _link_lines(links: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
+def _checklist(jira: Jira, keys: list[str]) -> None:
+    """Add the Definition of Ready to each ticket and print one line per key, then a count (CHB-154).
+
+    A ticket that fails is reported and skipped; the others still get the checklist. Any failure raises
+    JiraError (exit 1) at the end.
+    """
+    results: dict[str, int] = {"added": 0, "already there": 0, "skipped (epic)": 0}
+    failed = []
+    for key in keys:
+        try:
+            result = jira.checklist(key)
+        except JiraError as error:
+            failed.append(key)
+            print(f"{key}: {error}")
+            continue
+        results[result] += 1
+        print(f"{key}: {result}")
+    epics = results["skipped (epic)"]
+    summary = f"{len(keys)} tickets: {results['added']} added, {results['already there']} already there, {epics} epic{'' if epics == 1 else 's'} skipped"
+    print(summary + (f", {len(failed)} failed" if failed else ""))
+    if failed:
+        raise JiraError(f"checklist failed for {', '.join(failed)}")
+
+
 def _read_text(path: str) -> str:
     """The file, or stdin for "-", as UTF-8 text. An unreadable or non-UTF-8 file is a UsageError."""
     name = "stdin" if path == "-" else path
@@ -1420,13 +1685,26 @@ def _parser() -> argparse.ArgumentParser:
     create.add_argument("--summary", required=True)
     create.add_argument("--description-file", required=True)
     create.add_argument("--priority", required=True, choices=PRIORITIES)
-    create.add_argument("--ready", action="store_true", help="create in Ready, not Backlog; needs --trigger")
-    create.add_argument("--trigger", help="the trigger that makes it needed now, and its evidence")
+    # Refused (CHB-154): kept so the message names the ready command instead of argparse's.
+    create.add_argument("--ready", action="store_true", help=argparse.SUPPRESS)
+    create.add_argument("--trigger", help=argparse.SUPPRESS)
 
     transition = commands.add_parser("transition", help="move an issue to a status, by status name")
     transition.add_argument("key")
     transition.add_argument("status")
-    transition.add_argument("--trigger", help="needed for a move from Backlog to Ready: which trigger, and its evidence")
+    transition.add_argument("--trigger", help=argparse.SUPPRESS)  # refused: `ready` moves a ticket to Ready (CHB-154)
+
+    ready = commands.add_parser("ready", help="move a Backlog ticket to Ready once its Definition of Ready holds")
+    ready.add_argument("key")
+    ready.add_argument("--trigger", required=True, help="which trigger makes it needed now, and its evidence")
+
+    tick = commands.add_parser("tick", help="tick one judgment box of the Definition of Ready")
+    tick.add_argument("key")
+    tick.add_argument("box", help=f"one of: {', '.join(JUDGMENT_BOXES)}")
+
+    checklist = commands.add_parser("checklist", help="add the Definition of Ready to tickets that lack it")
+    checklist.add_argument("keys", nargs="*", metavar="key")
+    checklist.add_argument("--open", action="store_true", help="every open ticket that is not an epic")
 
     comment = commands.add_parser("comment", help="add a plain-text comment")
     comment.add_argument("key")
@@ -1492,24 +1770,13 @@ def run(args: argparse.Namespace, jira: Jira) -> None:
         print(key)
         # The ticket exists: from here on a failure is a notice, never an exit code that invites a second create.
         try:
-            column = jira.place_created(key, ready=args.ready)
+            column = jira.place_created(key)
         except (JiraError, KeyError, TypeError, AttributeError) as error:
-            column, failure = None, str(error)
-        else:
-            failure = "the board has no Ready or To Do column" if column is None and args.ready else ""
-        if failure:
-            move = f'"{READY}" --trigger {args.trigger!r}' if args.ready else f'"{BACKLOG}"'
-            print(f"could not place {key}: {failure}. Move it: factory/bin/jira transition {key} {move}")
+            print(f'could not place {key}: {error}. Move it: factory/bin/jira transition {key} "{BACKLOG}"')
             return
         if column is not None and column.name == BACKLOG:
             print(f"{key} in {BACKLOG}")
             return
-        if args.ready:
-            line = f"Created in {column.name if column else READY}. Trigger: {args.trigger}"
-            try:
-                jira.comment(key, line)
-            except JiraError as error:
-                print(f"could not post the trigger comment: {error}. Post it: factory/bin/jira comment {key} with {line!r}")
         # The ticket exists: a failed sort is a notice, never an exit code that invites a second create.
         # KeyError, TypeError and AttributeError mean an answer of unexpected shape, as in main().
         try:
@@ -1523,11 +1790,16 @@ def run(args: argparse.Namespace, jira: Jira) -> None:
         order, sent = jira.sort_todo()
         state = f"sorted ({sent} rank requests)" if sent else "already sorted"
         print(f"{order.column} {state}: {', '.join(order.desired) or 'empty'}")
-    elif args.command == "transition":
-        target, notices = jira.transition(args.key, args.status, args.trigger)
+    elif args.command in ("transition", "ready"):
+        target, notices = jira.ready(args.key, args.trigger) if args.command == "ready" else jira.transition(args.key, args.status)
         print(f"{args.key} -> {target}")
         for notice in notices:
             print(notice)
+    elif args.command == "tick":
+        changed = jira.tick(args.key, args.box)
+        print(f"{args.key} box {args.box!r} {'ticked' if changed else 'unchanged'}")
+    elif args.command == "checklist":
+        _checklist(jira, args.keys or [str(issue["key"]) for issue in jira.open_issues()])
     elif args.command == "comment":
         print(f"{args.key} comment {jira.comment(args.key, args.body)}")
     elif args.command == "assign":
@@ -1576,8 +1848,20 @@ def main(
             scope_jql(args.jql)
         if getattr(args, "trigger", None) is not None and not args.trigger.strip():
             raise UsageError("trigger is empty: name the trigger and its evidence")
-        if args.command == "create" and args.ready != (args.trigger is not None):
-            raise UsageError('--ready and --trigger go together: --ready --trigger "<which trigger and its evidence>"')
+        if args.command == "create" and (args.ready or args.trigger is not None):
+            raise UsageError(
+                f"create puts a ticket in {BACKLOG}. To move it to {READY}, tick its {DOR_HEADING} "
+                '(factory/bin/jira tick CHB-<n> <box>), then run factory/bin/jira ready CHB-<n> --trigger "<which trigger and its evidence>"'
+            )
+        if args.command == "transition" and args.trigger is not None:
+            raise UsageError(
+                f'transition takes no --trigger: factory/bin/jira ready {args.key} --trigger "<which trigger and its evidence>" '
+                f"moves a ticket from {BACKLOG} to {READY} once its {DOR_HEADING} holds"
+            )
+        if args.command == "tick":
+            check_box(args.box)
+        if args.command == "checklist" and bool(args.keys) == args.open:
+            raise UsageError("checklist takes issue keys or --open, not both")
         if args.command == "create":
             check_summary(args.summary)
             args.description = _read_text(args.description_file)

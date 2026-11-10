@@ -1087,7 +1087,8 @@ class CreateTest(unittest.TestCase):
         self.assertEqual(fields["project"], {"key": "CHB"})
         self.assertEqual(fields["issuetype"], {"name": "Task"})
         self.assertEqual(fields["parent"], {"key": "CHB-27"})
-        self.assertEqual(adf_to_text(fields["description"]), f"{WHY_SECTION}\n\nAC1: works.")
+        checklist = f"## Definition of Ready\n\n{jira.checklist_markdown()}"
+        self.assertEqual(adf_to_text(fields["description"]), f"{WHY_SECTION}\n\nAC1: works.\n\n{checklist}")
         self.assertEqual(fields["priority"], {"name": "Medium"})
 
     def test_priority_is_required(self) -> None:
@@ -2499,7 +2500,7 @@ class PullListTest(unittest.TestCase):
                 self.assertEqual(code, 4)
                 self.assertEqual(out, "")
                 self.assertIn(f"CHB-12 is in Backlog: move it to {pull_name(state)} first", err)
-                self.assertIn(f'factory/bin/jira transition CHB-12 "{pull_name(state)}" --trigger', err)
+                self.assertIn("factory/bin/jira ready CHB-12 --trigger", err)
                 self.assertEqual(fake.writes(), [])
 
     def test_backlog_to_done_or_discarded_needs_no_trigger(self) -> None:
@@ -2552,23 +2553,31 @@ class TriggerTest(unittest.TestCase):
                 self.assertIn("--trigger", err)
                 self.assertEqual(fake.writes(), [])
 
-    def test_with_a_trigger_it_moves_and_comments(self) -> None:
+    def test_the_message_points_to_the_ready_command(self) -> None:
+        """CHB-154: `ready` replaces `transition ... Ready --trigger`."""
+        fake = transition_fake("Backlog", state="after")
+        code, _, err = _run(["transition", "CHB-12", "Ready"], fake)
+
+        self.assertEqual(code, 2)
+        self.assertIn('factory/bin/jira ready CHB-12 --trigger "<which trigger and its evidence>"', err)
+        self.assertNotIn("transition CHB-12", err)
+
+    def test_with_a_trigger_ready_moves_and_comments(self) -> None:
         for state in ("half", "after"):
             with self.subTest(state):
                 pull = pull_name(state)
-                fake = transition_fake("Backlog", state=state)
-                fake.routes[("POST", COMMENT_PATH)] = {"id": "5"}
-                code, out, err = _run(["transition", "CHB-12", pull, "--trigger", "1. broken: the build fails on main"], fake)
+                fake = ready_fake(state=state)
+                code, out, err = _run(["ready", "CHB-12", "--trigger", "1. broken: the build fails on main"], fake)
 
                 self.assertEqual(code, 0, err)
                 self.assertEqual(out.splitlines()[0], f"CHB-12 -> {pull}")
-                self.assertEqual(_write_paths(fake), [MOVE_PATH, COMMENT_PATH])
+                self.assertEqual(_write_paths(fake), [ISSUE_PATH, MOVE_PATH, COMMENT_PATH])
                 self.assertEqual(_comments(fake), [f"Moved to {pull}. Trigger: 1. broken: the build fails on main"])
 
     def test_a_failed_trigger_comment_says_the_ticket_moved(self) -> None:
-        fake = transition_fake("Backlog", state="after")
+        fake = ready_fake()
         fake.routes[("POST", COMMENT_PATH)] = 500
-        code, _, err = _run(["transition", "CHB-12", "Ready", "--trigger", "2. the owner asked"], fake)
+        code, _, err = _run(["ready", "CHB-12", "--trigger", "2. the owner asked"], fake)
 
         self.assertEqual(code, 1)
         self.assertIn("CHB-12 moved to Ready, but the trigger comment failed", err)
@@ -2591,11 +2600,11 @@ class TriggerTest(unittest.TestCase):
                 code, _, err = _run(["transition", "CHB-12", target, "--trigger", "1. broken"], fake)
 
                 self.assertEqual(code, 2)
-                self.assertIn("--trigger applies only to a move from Backlog", err)
+                self.assertIn("transition takes no --trigger: factory/bin/jira ready CHB-12", err)
                 self.assertEqual(fake.writes(), [])
 
     def test_a_trigger_on_a_start_writes_no_rank(self) -> None:
-        """The trigger is checked before the start check sorts the pull list."""
+        """`transition` refuses any --trigger (CHB-154) before it reads or sorts anything."""
         for state in BOARD_STATES:
             with self.subTest(state):
                 pull = pull_name(state)
@@ -2603,7 +2612,7 @@ class TriggerTest(unittest.TestCase):
                 code, _, err = _run(["transition", "CHB-12", "In Progress", "--trigger", "1. broken"], fake)
 
                 self.assertEqual(code, 2)
-                self.assertIn("--trigger applies only to a move from Backlog", err)
+                self.assertIn("transition takes no --trigger: factory/bin/jira ready CHB-12", err)
                 self.assertEqual(fake.writes(), [])
 
     def test_a_trigger_on_no_move_exits_2(self) -> None:
@@ -2611,7 +2620,7 @@ class TriggerTest(unittest.TestCase):
         code, _, err = _run(["transition", "CHB-12", "Ready", "--trigger", "2. the owner asked"], fake)
 
         self.assertEqual(code, 2)
-        self.assertIn("--trigger applies only to a move from Backlog", err)
+        self.assertIn("transition takes no --trigger: factory/bin/jira ready CHB-12", err)
         self.assertEqual(fake.writes(), [])
 
     def test_an_empty_trigger_exits_2_before_1password(self) -> None:
@@ -2623,21 +2632,20 @@ class TriggerTest(unittest.TestCase):
         self.assertEqual(fake.requests, [])
 
     def test_a_column_name_finds_the_status_of_that_column(self) -> None:
-        """A column renamed on a board whose status keeps its old name: `transition X Ready` still works."""
+        """A column renamed on a board whose status keeps its old name: `ready` still finds the status."""
         board = board_config(state="half", **BOARD_LIMITS)
         board["columnConfig"]["columns"][1]["name"] = "Ready"  # the column holds the status "To Do"
-        fake = transition_fake("Backlog", board=board, state="half")
-        fake.routes[("POST", COMMENT_PATH)] = {"id": "5"}
-        code, out, err = _run(["transition", "CHB-12", "ready", "--trigger", "3. unblocks CHB-1"], fake)
+        fake = ready_fake(state="half", board=board)
+        code, out, err = _run(["ready", "CHB-12", "--trigger", "3. unblocks CHB-1"], fake)
 
         self.assertEqual(code, 0, err)
         self.assertEqual(out.splitlines()[0], "CHB-12 -> To Do")
-        self.assertEqual(fake.writes()[0], ("POST", MOVE_PATH, {"transition": {"id": "12"}}))
+        self.assertIn(("POST", MOVE_PATH, {"transition": {"id": "12"}}), fake.writes())
         self.assertEqual(_comments(fake), ["Moved to Ready. Trigger: 3. unblocks CHB-1"])
 
 
 class CreateInBacklogTest(unittest.TestCase):
-    """CHB-153 AC3: `create` lands in Backlog; with --ready --trigger, in the pull list."""
+    """CHB-153 AC3: `create` lands in Backlog (CHB-154: always; `ready` moves it on)."""
 
     def test_without_a_backlog_column_the_ticket_stays_in_the_pull_list(self) -> None:
         fake = backlog_create_fake("before", "To Do")
@@ -2667,50 +2675,18 @@ class CreateInBacklogTest(unittest.TestCase):
         self.assertEqual(out.splitlines(), ["CHB-200", "CHB-200 in Backlog"])
         self.assertEqual(_write_paths(fake), [CREATE_PATH])
 
-    def test_ready_with_a_trigger_lands_in_the_pull_list_comments_and_sorts(self) -> None:
-        for state, initial in [("before", "To Do"), ("half", "To Do"), ("after", "Ready"), ("after", "Backlog")]:
-            with self.subTest(f"{state}, created in {initial}"):
-                pull = pull_name(state)
-                fake = backlog_create_fake(state, initial, pull=["CHB-1"], priorities={"CHB-1": "Low"})
-                code, out, err = _create_args(fake, "--ready", "--trigger", "2. the owner asked for it", priority="High")
-
-                self.assertEqual(code, 0, err)
-                self.assertEqual(out.splitlines()[0], "CHB-200")
-                self.assertEqual(_comments(fake, NEW_COMMENT), [f"Created in {pull}. Trigger: 2. the owner asked for it"])
-                moves = [body for method, path, body in fake.writes() if path == NEW_MOVE]
-                self.assertEqual(moves, [{"transition": {"id": "12"}}] if initial == "Backlog" else [])
-                self.assertEqual(_apply_ranks(["CHB-1", "CHB-200"], fake), ["CHB-200", "CHB-1"])
-
-    def test_ready_and_trigger_go_together(self) -> None:
-        for extra in (["--ready"], ["--trigger", "1. broken"], ["--ready", "--trigger", " "]):
+    def test_ready_and_trigger_are_refused_and_point_to_the_ready_command(self) -> None:
+        """CHB-154: `ready` is the only way into Ready, so `create` always lands in Backlog."""
+        for extra in (["--ready"], ["--trigger", "1. broken"], ["--ready", "--trigger", "2. the owner asked"]):
             with self.subTest(extra):
                 fake = backlog_create_fake("after", "Ready")
                 code, out, err = _create_args(fake, *extra, credentials_reader=_no_credentials)
 
                 self.assertEqual(code, 2)
                 self.assertEqual(out, "")
-                self.assertIn("trigger is empty" if extra[-1] == " " else "--ready and --trigger go together", err)
+                self.assertIn("create puts a ticket in Backlog", err)
+                self.assertIn("factory/bin/jira ready CHB-<n> --trigger", err)
                 self.assertEqual(fake.requests, [])
-
-    def test_a_failed_ready_placement_names_the_command_with_its_trigger(self) -> None:
-        fake = backlog_create_fake("after", "Backlog")
-        fake.routes[("POST", NEW_MOVE)] = 500
-        code, out, _ = _create_args(fake, "--ready", "--trigger", "2. the owner asked")
-
-        self.assertEqual(code, 0)
-        self.assertIn("""factory/bin/jira transition CHB-200 "Ready" --trigger '2. the owner asked'""", out)
-        self.assertEqual(_comments(fake, NEW_COMMENT), [], "no trigger comment on a ticket that did not reach Ready")
-
-    def test_ready_on_a_board_without_a_pull_list_is_a_notice_without_a_comment(self) -> None:
-        fake = backlog_create_fake("after", "Backlog")
-        board = board_config(state="after", **BOARD_LIMITS)
-        board["columnConfig"]["columns"] = [c for c in board["columnConfig"]["columns"] if c["name"] != "Ready"]
-        fake.routes[("GET", BOARD)] = board
-        code, out, _ = _create_args(fake, "--ready", "--trigger", "1. broken")
-
-        self.assertEqual(code, 0)
-        self.assertIn("could not place CHB-200: the board has no Ready or To Do column", out)
-        self.assertEqual(_comments(fake, NEW_COMMENT), [])
 
     def test_a_failed_move_after_create_is_a_notice_and_exits_0(self) -> None:
         fake = backlog_create_fake("after", "Ready")
@@ -2721,6 +2697,390 @@ class CreateInBacklogTest(unittest.TestCase):
         self.assertEqual(out.splitlines()[0], "CHB-200")
         self.assertIn("could not place CHB-200", out)
         self.assertIn('factory/bin/jira transition CHB-200 "Backlog"', out)
+
+
+# CHB-154: the Definition of Ready checklist.
+ISSUE_PATH = "/rest/api/3/issue/CHB-12"
+ALL_BOXES = tuple(box.name for box in jira.DOR_BOXES)
+
+
+def dor_description(done: tuple[str, ...] = jira.JUDGMENT_BOXES, *, why: bool = True, acceptance: bool = True) -> dict[str, Any]:
+    """A description with the checklist (`done` ticked), and optionally Why it matters and acceptance criteria."""
+    parts = [WHY_SECTION] if why else []
+    parts.append(f"## Definition of Ready\n\n{jira.checklist_markdown(done)}")
+    if acceptance:
+        parts.append("## Acceptance criteria\n\n- A test shows the thing.")
+    return doc("\n\n".join(parts))
+
+
+def ready_fake(
+    description: Any = None,
+    *,
+    state: str = "after",
+    links: dict[str, list[dict[str, Any]]] | None = None,
+    by_status: dict[str, list[str]] | None = None,
+    board: Any = None,
+    current: str = "Backlog",
+) -> FakeJira:
+    """CHB-12 sits in Backlog with a passing checklist unless told otherwise."""
+    fake = transition_fake(
+        current, by_status, description=dor_description() if description is None else description, board=board, links=links, state=state
+    )
+    fake.routes[("PUT", ISSUE_PATH)] = None
+    fake.routes[("POST", COMMENT_PATH)] = {"id": "5"}
+    return fake
+
+
+def _put_descriptions(fake: FakeJira, path: str = ISSUE_PATH) -> list[Any]:
+    return [body["fields"]["description"] for method, where, body in fake.writes() if (method, where) == ("PUT", path)]
+
+
+def _task_items(description: Any) -> list[dict[str, Any]]:
+    return [item for node in description["content"] if node.get("type") == "taskList" for item in node["content"]]
+
+
+def _heading_of(node: dict[str, Any]) -> str:
+    return adf_to_text(node).strip().lstrip("#").strip()
+
+
+class TaskListTest(unittest.TestCase):
+    """CHB-154: "- [ ]" and "- [x]" lines render as a Jira task list (ADF taskList, taskItem)."""
+
+    def test_task_lines_become_a_task_list(self) -> None:
+        (task_list,) = text_to_adf("- [ ] first `x`\n- [x] second\n- [X] third")["content"]
+
+        self.assertEqual(task_list["type"], "taskList")
+        self.assertTrue(task_list["attrs"]["localId"])
+        states = [item["attrs"]["state"] for item in task_list["content"]]
+        self.assertEqual(states, ["TODO", "DONE", "DONE"])
+        ids = [item["attrs"]["localId"] for item in task_list["content"]]
+        self.assertEqual(len(set(ids + [task_list["attrs"]["localId"]])), 4)
+        first = task_list["content"][0]
+        self.assertEqual(first["type"], "taskItem")
+        self.assertEqual(first["content"], [_text("first "), _text("x", CODE)])
+
+    def test_reads_back_as_markdown(self) -> None:
+        text = "- [ ] first\n- [x] second"
+        self.assertEqual(adf_to_text(text_to_adf(text)), text)
+
+    def test_a_bullet_list_and_a_task_list_stay_apart(self) -> None:
+        nodes = text_to_adf("- plain\n- [ ] task\n- plain again")["content"]
+
+        self.assertEqual([node["type"] for node in nodes], ["bulletList", "taskList", "bulletList"])
+
+    def test_checklist_text_is_neither_acceptance_criteria_nor_a_why_section(self) -> None:
+        description = doc(f"## Definition of Ready\n\n{jira.checklist_markdown()}")
+
+        self.assertFalse(jira.has_acceptance_criteria(description))
+        self.assertIsNotNone(jira.why_problem(description))
+
+
+class AddChecklistTest(unittest.TestCase):
+    """CHB-154 AC2: the checklist goes right after "Why it matters"; other nodes stay as they are."""
+
+    def test_goes_after_the_why_section_and_keeps_the_rest(self) -> None:
+        before = doc(f"{WHY_SECTION}\n\nSecond paragraph.\n\n## Plan\n\n- [ ] an old line\n\nDo it.")
+        after = jira.add_checklist(before)
+
+        assert after is not None
+        headings = [_heading_of(node) for node in after["content"] if node["type"] == "heading"]
+        self.assertEqual(headings, ["Why it matters", "Definition of Ready", "Plan"])
+        self.assertEqual(json.dumps(after["content"][:3]), json.dumps(before["content"][:3]))
+        self.assertEqual(json.dumps(after["content"][5:]), json.dumps(before["content"][3:]))
+        self.assertEqual(jira.box_states(after), dict.fromkeys(ALL_BOXES, "TODO"))
+
+    def test_without_a_why_section_it_goes_first(self) -> None:
+        after = jira.add_checklist(doc("## Plan\n\nDo it."))
+
+        assert after is not None
+        self.assertEqual(_heading_of(after["content"][0]), "Definition of Ready")
+        self.assertEqual(_heading_of(after["content"][2]), "Plan")
+
+    def test_an_empty_description_gets_only_the_checklist(self) -> None:
+        after = jira.add_checklist(None)
+
+        assert after is not None
+        self.assertEqual(after["type"], "doc")
+        self.assertEqual(jira.checklist_count(after), 1)
+
+    def test_the_heading_takes_the_level_of_the_why_heading(self) -> None:
+        """A level-1 Why followed by a level-2 checklist would make an empty Why look full."""
+        after = jira.add_checklist(doc("# Why it matters\n\n# Plan\n\nDo it."))
+
+        assert after is not None
+        self.assertEqual(after["content"][1]["attrs"]["level"], 1)
+        self.assertIsNotNone(jira.why_problem(after))
+
+    def test_a_description_with_the_checklist_is_left_alone(self) -> None:
+        self.assertIsNone(jira.add_checklist(dor_description()))
+
+
+class CreateChecklistTest(unittest.TestCase):
+    """CHB-154 AC2: `create` adds the checklist, once."""
+
+    def test_create_adds_one_unticked_checklist(self) -> None:
+        code, _, err, fake = _create_with(f"{WHY_SECTION}\n\n## Plan\n\nDo it.")
+
+        self.assertEqual(code, 0, err)
+        sent = fake.writes()[0][2]["fields"]["description"]
+        self.assertEqual(jira.checklist_count(sent), 1)
+        self.assertEqual(jira.box_states(sent), dict.fromkeys(ALL_BOXES, "TODO"))
+
+    def test_a_description_with_the_checklist_keeps_one(self) -> None:
+        text = f"{WHY_SECTION}\n\n## Definition of Ready\n\n{jira.checklist_markdown(('small',))}"
+        code, _, err, fake = _create_with(text)
+
+        self.assertEqual(code, 0, err)
+        sent = fake.writes()[0][2]["fields"]["description"]
+        self.assertEqual(jira.checklist_count(sent), 1)
+        self.assertEqual(jira.box_states(sent)["small"], "DONE")
+
+
+def backfill_fake(by_status: dict[str, list[str]], descriptions: dict[str, Any], epics: tuple[str, ...] = ()) -> FakeJira:
+    """Open tickets as the search lists them. Each issue read answers from `descriptions`, which a PUT updates."""
+    routes: dict[tuple[str, str], Any] = {("POST", SEARCH): keys_answer(by_status, epics=epics)}
+    for key in [k for keys in by_status.values() for k in keys]:
+
+        def read(_: Any, key: str = key) -> dict[str, Any]:
+            kind = "Epic" if key in epics else "Task"
+            return {"fields": {"description": descriptions.get(key), "issuetype": {"name": kind}}}
+
+        def write(body: dict[str, Any], key: str = key) -> None:
+            descriptions[key] = body["fields"]["description"]
+
+        routes[("GET", f"/rest/api/3/issue/{key}?fields=description,issuetype")] = read
+        routes[("PUT", f"/rest/api/3/issue/{key}")] = write
+    return FakeJira(routes)
+
+
+class BackfillTest(unittest.TestCase):
+    """CHB-154 AC2: a backfill run leaves every open ticket with exactly one checklist."""
+
+    BY_STATUS = {
+        "Backlog": ["CHB-1"],
+        "Ready": ["CHB-2", "CHB-3"],
+        "In Progress": ["CHB-4"],
+        "Validating": ["CHB-5"],
+        "Needs human": ["CHB-6"],
+    }
+
+    def _descriptions(self) -> dict[str, Any]:
+        return {
+            "CHB-1": doc(f"{WHY_SECTION}\n\n## Plan\n\nDo it."),
+            "CHB-2": dor_description(()),
+            "CHB-4": doc("## Plan\n\nNo Why section yet."),
+            "CHB-5": doc(WHY_SECTION),
+            "CHB-6": None,
+        }
+
+    def test_every_open_ticket_gets_exactly_one_checklist_and_epics_none(self) -> None:
+        descriptions = self._descriptions()
+        fake = backfill_fake(self.BY_STATUS, descriptions, epics=("CHB-3",))
+        code, out, err = _run(["checklist", "--open"], fake)
+
+        self.assertEqual(code, 0, err)
+        self.assertEqual(
+            out.splitlines(),
+            [
+                "CHB-1: added",
+                "CHB-2: already there",
+                "CHB-3: skipped (epic)",
+                "CHB-4: added",
+                "CHB-5: added",
+                "CHB-6: added",
+                "6 tickets: 4 added, 1 already there, 1 epic skipped",
+            ],
+        )
+        for key in ("CHB-1", "CHB-2", "CHB-4", "CHB-5", "CHB-6"):
+            self.assertEqual(jira.checklist_count(descriptions[key]), 1, key)
+        self.assertNotIn("CHB-3", descriptions)
+
+    def test_a_second_run_writes_nothing(self) -> None:
+        descriptions = self._descriptions()
+        _run(["checklist", "--open"], backfill_fake(self.BY_STATUS, descriptions, epics=("CHB-3",)))
+        fake = backfill_fake(self.BY_STATUS, descriptions, epics=("CHB-3",))
+        code, out, _ = _run(["checklist", "--open"], fake)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(fake.writes(), [])
+        self.assertIn("0 added, 5 already there", out)
+
+    def test_existing_text_is_never_changed(self) -> None:
+        descriptions = self._descriptions()
+        before = json.dumps(descriptions["CHB-1"]["content"])
+        _run(["checklist", "CHB-1"], backfill_fake({"Backlog": ["CHB-1"]}, descriptions))
+
+        content = descriptions["CHB-1"]["content"]
+        self.assertEqual(json.dumps(content[:2] + content[4:]), before)
+
+    def test_two_checklists_are_reported_and_left_alone(self) -> None:
+        twice = doc(f"{WHY_SECTION}\n\n## Definition of Ready\n\n- [ ] a\n\n## Definition of Ready\n\n- [ ] b")
+        descriptions = {"CHB-1": twice, "CHB-2": doc(WHY_SECTION)}
+        fake = backfill_fake({"Backlog": ["CHB-1", "CHB-2"]}, descriptions)
+        code, out, err = _run(["checklist", "--open"], fake)
+
+        self.assertEqual(code, 1)
+        self.assertIn("CHB-1: 2 Definition of Ready sections; fix it by hand", out)
+        self.assertIn("CHB-2: added", out)
+        self.assertIn("CHB-1", err)
+        self.assertEqual(_write_paths(fake), ["/rest/api/3/issue/CHB-2"])
+
+    def test_keys_or_open_but_not_both(self) -> None:
+        for argv in (["checklist"], ["checklist", "CHB-1", "--open"]):
+            with self.subTest(argv):
+                code, _, _ = _run(argv, FakeJira({}), credentials_reader=_no_credentials)
+                self.assertEqual(code, 2)
+
+
+class TickTest(unittest.TestCase):
+    """CHB-154: `tick` ticks one judgment box and keeps the rest of the description."""
+
+    def _fake(self, description: Any) -> FakeJira:
+        return FakeJira({("GET", DESCRIPTION_PATH): {"fields": {"description": description}}, ("PUT", ISSUE_PATH): None})
+
+    def test_ticks_one_box_and_keeps_the_ids(self) -> None:
+        before = dor_description(())
+        fake = self._fake(before)
+        code, out, err = _run(["tick", "CHB-12", "small"], fake)
+
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.strip(), "CHB-12 box 'small' ticked")
+        (after,) = _put_descriptions(fake)
+        self.assertEqual(jira.box_states(after), {**dict.fromkeys(ALL_BOXES, "TODO"), "small": "DONE"})
+        ids = [item["attrs"]["localId"] for item in _task_items(after)]
+        self.assertEqual(ids, [item["attrs"]["localId"] for item in _task_items(before)])
+
+    def test_a_ticked_box_writes_nothing(self) -> None:
+        fake = self._fake(dor_description(("small",)))
+        code, out, _ = _run(["tick", "CHB-12", "small"], fake)
+
+        self.assertEqual(code, 0)
+        self.assertIn("unchanged", out)
+        self.assertEqual(fake.writes(), [])
+
+    def test_a_verified_box_cannot_be_ticked(self) -> None:
+        for box in jira.VERIFIED_BOXES:
+            with self.subTest(box):
+                fake = FakeJira({})
+                code, _, err = _run(["tick", "CHB-12", box], fake, credentials_reader=_no_credentials)
+
+                self.assertEqual(code, 2)
+                self.assertIn("ready verifies", err)
+                self.assertEqual(fake.requests, [])
+
+    def test_an_unknown_box_is_a_usage_error(self) -> None:
+        code, _, _ = _run(["tick", "CHB-12", "everything"], FakeJira({}), credentials_reader=_no_credentials)
+
+        self.assertEqual(code, 2)
+
+    def test_no_checklist_names_the_command_that_adds_it(self) -> None:
+        fake = self._fake(READY)
+        code, _, err = _run(["tick", "CHB-12", "small"], fake)
+
+        self.assertEqual(code, 1)
+        self.assertIn("factory/bin/jira checklist CHB-12", err)
+        self.assertEqual(fake.writes(), [])
+
+
+class ReadyCommandTest(unittest.TestCase):
+    """CHB-154 AC1: `ready` re-verifies the checklist and moves a Backlog ticket to Ready with its trigger."""
+
+    TRIGGER = ["--trigger", "2. the owner asked for it on 2026-11-10"]
+
+    def test_all_boxes_pass_it_ticks_the_verified_ones_moves_and_comments(self) -> None:
+        fake = ready_fake()
+        code, out, err = _run(["ready", "CHB-12", *self.TRIGGER], fake)
+
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.splitlines()[0], "CHB-12 -> Ready")
+        self.assertEqual(_write_paths(fake), [ISSUE_PATH, MOVE_PATH, COMMENT_PATH])
+        (ticked,) = _put_descriptions(fake)
+        self.assertEqual(jira.box_states(ticked), dict.fromkeys(ALL_BOXES, "DONE"))
+        self.assertEqual(_comments(fake), ["Moved to Ready. Trigger: 2. the owner asked for it on 2026-11-10"])
+
+    def test_all_boxes_ticked_already_it_writes_no_description(self) -> None:
+        fake = ready_fake(dor_description(ALL_BOXES))
+        code, _, err = _run(["ready", "CHB-12", *self.TRIGGER], fake)
+
+        self.assertEqual(code, 0, err)
+        self.assertEqual(_write_paths(fake), [MOVE_PATH, COMMENT_PATH])
+
+    def test_each_unticked_judgment_box_refuses(self) -> None:
+        for box in jira.JUDGMENT_BOXES:
+            with self.subTest(box):
+                fake = ready_fake(dor_description(tuple(b for b in jira.JUDGMENT_BOXES if b != box)))
+                code, out, err = _run(["ready", "CHB-12", *self.TRIGGER], fake)
+
+                self.assertEqual(code, 4)
+                self.assertEqual(out, "")
+                self.assertIn(f"factory/bin/jira tick CHB-12 {box}", err)
+                self.assertEqual(fake.writes(), [])
+
+    def test_no_acceptance_criteria_refuses_even_with_the_box_ticked(self) -> None:
+        fake = ready_fake(dor_description(ALL_BOXES, acceptance=False))
+        code, _, err = _run(["ready", "CHB-12", *self.TRIGGER], fake)
+
+        self.assertEqual(code, 4)
+        self.assertIn("no acceptance criteria", err)
+        self.assertEqual(fake.writes(), [])
+
+    def test_an_open_blocker_refuses_even_with_the_box_ticked(self) -> None:
+        fake = ready_fake(dor_description(ALL_BOXES), links={"CHB-12": blocked_by("CHB-3")}, by_status={"In Progress": ["CHB-3"]})
+        code, _, err = _run(["ready", "CHB-12", *self.TRIGGER], fake)
+
+        self.assertEqual(code, 4)
+        self.assertIn("blocked by open tickets: CHB-3", err)
+        self.assertEqual(fake.writes(), [])
+
+    def test_a_closed_blocker_does_not_refuse(self) -> None:
+        fake = ready_fake(links={"CHB-12": blocked_by("CHB-3")}, by_status={"Done": ["CHB-3"]})
+        code, _, err = _run(["ready", "CHB-12", *self.TRIGGER], fake)
+
+        self.assertEqual(code, 0, err)
+
+    def test_no_why_section_refuses_even_with_the_box_ticked(self) -> None:
+        fake = ready_fake(dor_description(ALL_BOXES, why=False))
+        code, _, err = _run(["ready", "CHB-12", *self.TRIGGER], fake)
+
+        self.assertEqual(code, 4)
+        self.assertIn("does not start with a section headed 'Why it matters'", err)
+        self.assertEqual(fake.writes(), [])
+
+    def test_the_refusal_names_every_open_box(self) -> None:
+        description = dor_description((), why=False, acceptance=False)
+        fake = ready_fake(description, links={"CHB-12": blocked_by("CHB-3")}, by_status={"In Progress": ["CHB-3"]})
+        code, _, err = _run(["ready", "CHB-12", *self.TRIGGER], fake)
+
+        self.assertEqual(code, 4)
+        for box in jira.DOR_BOXES:
+            self.assertIn(box.prefix, err)
+
+    def test_no_checklist_refuses_and_names_the_command_that_adds_it(self) -> None:
+        fake = ready_fake(READY)
+        code, _, err = _run(["ready", "CHB-12", *self.TRIGGER], fake)
+
+        self.assertEqual(code, 4)
+        self.assertIn("factory/bin/jira checklist CHB-12", err)
+        self.assertEqual(fake.writes(), [])
+
+    def test_no_trigger_is_a_usage_error_before_1password(self) -> None:
+        for argv in (["ready", "CHB-12"], ["ready", "CHB-12", "--trigger", "  "]):
+            with self.subTest(argv):
+                fake = FakeJira({})
+                code, _, _ = _run(argv, fake, credentials_reader=_no_credentials)
+
+                self.assertEqual(code, 2)
+                self.assertEqual(fake.requests, [])
+
+    def test_a_ticket_outside_backlog_is_refused(self) -> None:
+        for state, current in [("after", "In Progress"), ("after", "Ready"), ("before", "To Do")]:
+            with self.subTest(f"{state}: {current}"):
+                fake = ready_fake(state=state, current=current)
+                code, _, err = _run(["ready", "CHB-12", *self.TRIGGER], fake)
+
+                self.assertEqual(code, 2)
+                self.assertIn("ready moves a ticket from Backlog", err)
+                self.assertEqual(fake.writes(), [])
 
 
 if __name__ == "__main__":

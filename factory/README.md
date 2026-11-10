@@ -141,6 +141,9 @@ factory/bin/jira view CHB-12
 factory/bin/jira search 'status = "In Review"'   # sent as project = CHB AND (<jql>)
 factory/bin/jira create --parent CHB-27 --summary "Short title" --description-file description.txt --priority Medium
 factory/bin/jira transition CHB-12 "In Review"
+factory/bin/jira tick CHB-12 small   # one box of the Definition of Ready: why, trigger, decision or small
+factory/bin/jira ready CHB-12 --trigger "2. the owner asked for it on 2026-11-10"   # Backlog to Ready
+factory/bin/jira checklist CHB-12   # or --open: adds the Definition of Ready where it is missing
 factory/bin/jira comment CHB-12 --body-file comment.txt   # "-" reads stdin
 factory/bin/jira assign CHB-12 --me
 factory/bin/jira rank CHB-12 CHB-14 --before CHB-9   # or --after; up to 50 issues, kept in that order
@@ -178,12 +181,21 @@ The pull list is the board column "Ready", or "To Do" on a board without that co
 The "Ready" column holds two statuses, "To Do" (10003) and "Ready" (10010); "Backlog" holds status 10009.
 Backlog is never sorted, never "next" and never the top ticket. A ticket leaves Backlog only for the pull list, Done or Discarded: any other move exits 4.
 `transition` takes a status name or, when no status has that name, a column name.
-A move from Backlog to the pull list needs `--trigger "<which trigger and its evidence>"`: without it the command exits 2 and moves nothing.
-With it, the ticket moves and gets the comment `Moved to Ready. Trigger: <text>`. A failed comment exits 1 and says the ticket moved.
-`--trigger` on any other move, or an empty trigger, exits 2 before any write, the sort of a start included.
 `create` puts a new ticket in Backlog when the board has that column: it reads the new ticket's status and moves it only when Jira put it elsewhere.
-`create --ready --trigger "<text>"` puts it in the pull list and comments `Created in Ready. Trigger: <text>`. One flag without the other exits 2 before any request.
 Every failure after the ticket exists is a notice with exit 0, so nobody creates it twice.
+
+Definition of Ready (CHB-154). Every ticket has a section headed "Definition of Ready" with six Jira checkboxes (an ADF `taskList`), right after "Why it matters".
+The heading takes the level of the "Why it matters" heading. Without that section the checklist goes first.
+`create` adds it. `checklist CHB-<n> ...` or `checklist --open` adds it to tickets without it, from a fresh read of each ticket, and changes no other node.
+It skips epics, prints one line per key and a count, and leaves a ticket with two such sections alone (exit 1 at the end).
+`tick CHB-<n> <box>` ticks one judgment box: `why`, `trigger`, `decision` or `small`. It changes only that box's `state`; ids and text stay.
+`acceptance` and `unblocked` are verified boxes: `tick` refuses them (exit 2). A box is found by the start of its text (`Box.prefix` in `jira.py`).
+`ready CHB-<n> --trigger "<which trigger and its evidence>"` is the only way from Backlog to the pull list.
+It refuses (exit 4, naming each open box) a missing checklist, an unticked judgment box, a description without a "Why it matters" first section,
+no acceptance criteria, or an open blocker. A ticked box does not replace its check. On a ticket outside Backlog it exits 2.
+When every box passes, it ticks the verified boxes, moves the ticket and comments `Moved to Ready. Trigger: <text>`. A failed comment exits 1 and says the ticket moved.
+`transition` refuses a move from Backlog to the pull list, and any `--trigger` (exit 2, before any request); both messages name `ready`.
+`create --ready` and `create --trigger` exit 2 before any request: tick the boxes, then run `ready`.
 
 `sort-todo` ranks the pull list in the order of `docs/process/kanban.md`, Ready (CHB-148): tickets in `top_queue` (they can start) first, High, then Medium, then Low;
 then the other non-epic tickets (blocked by an open ticket); then epics. Each group keeps its rank order. A missing priority counts as Medium.
