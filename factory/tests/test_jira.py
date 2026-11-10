@@ -3,6 +3,7 @@ import contextlib
 import http.server
 import io
 import json
+import subprocess
 import sys
 import tempfile
 import threading
@@ -357,7 +358,7 @@ class WipLimitTest(unittest.TestCase):
                 fake = transition_fake("To Do", {full_column: ["CHB-1", "CHB-2", "CHB-3"]})
                 code, out, err = _run(["transition", "CHB-12", "In Progress"], fake)
 
-                self.assertEqual(code, 4)
+                self.assertEqual(code, 5)
                 self.assertEqual(out, "")
                 self.assertIn(f"column {full_column!r} is at its WIP limit (3/3): CHB-1, CHB-2, CHB-3", err)
                 self.assertIn("Leave CHB-12 in To Do", err)
@@ -368,22 +369,31 @@ class WipLimitTest(unittest.TestCase):
         fake = transition_fake("To Do", {"In Progress": ["CHB-1", "CHB-2", "CHB-3"]})
         code, _, err = _run(["transition", "CHB-12", "In Progress"], fake)
 
-        self.assertEqual(code, 4)
+        self.assertEqual(code, 5)
         self.assertIn("in the background", err)
-        self.assertIn("until factory/bin/jira transition CHB-12 'In Progress'; do [ $? -eq 4 ] || break; sleep 120; done", err)
+        self.assertIn(jira.wait_command("CHB-12", "In Progress"), err)
         self.assertEqual(fake.writes(), [])
 
     def test_a_full_needs_human_names_the_wait_command_too(self) -> None:
         fake = transition_fake("In Progress", {"Needs human": ["CHB-1", "CHB-2", "CHB-3"]}, description=description_with(SECTIONS["Needs human"]))
         _, _, err = _run(["transition", "CHB-12", "Needs human"], fake)
 
-        self.assertIn("until factory/bin/jira transition CHB-12 'Needs human'; do", err)
+        self.assertIn(jira.wait_command("CHB-12", "Needs human"), err)
+
+    def test_other_refusals_exit_4_and_name_no_wait_command(self) -> None:
+        """Waiting does not clear a missing section or a start out of order: exit 4, no wait command."""
+        fake = transition_fake("In Progress", {}, description=description_with("Why it matters"))
+        code, _, err = _run(["transition", "CHB-12", "Needs human"], fake)
+
+        self.assertEqual(code, 4)
+        self.assertNotIn("in the background", err)
+
 
     def test_starting_names_every_full_column(self) -> None:
         fake = transition_fake("To Do", {"In Review": ["CHB-1", "CHB-2", "CHB-3"], "Validating": ["CHB-4", "CHB-5", "CHB-6"]})
         code, _, err = _run(["transition", "CHB-12", "In Progress"], fake)
 
-        self.assertEqual(code, 4)
+        self.assertEqual(code, 5)
         self.assertIn("'In Review' is at its WIP limit (3/3): CHB-1, CHB-2, CHB-3", err)
         self.assertIn("'Validating' is at its WIP limit (3/3): CHB-4, CHB-5, CHB-6", err)
 
@@ -391,7 +401,7 @@ class WipLimitTest(unittest.TestCase):
         fake = transition_fake("To Do", {"Validating": ["CHB-1", "CHB-2", "CHB-3", "CHB-4"]})
         code, _, err = _run(["transition", "CHB-12", "In Progress"], fake)
 
-        self.assertEqual(code, 4)
+        self.assertEqual(code, 5)
         self.assertIn("(4/3)", err)
 
     def test_count_asks_for_the_column_statuses_in_chb_without_the_ticket(self) -> None:
@@ -414,7 +424,7 @@ class WipLimitTest(unittest.TestCase):
         fake = transition_fake("To Do", {"Validating": ["CHB-1"]}, board=board)
         code, _, err = _run(["transition", "CHB-12", "In Progress"], fake)
 
-        self.assertEqual(code, 4)
+        self.assertEqual(code, 5)
         self.assertIn("(1/1): CHB-1", err)
 
     def test_recording_a_pr_or_a_merge_is_never_blocked(self) -> None:
@@ -443,7 +453,7 @@ class WipLimitTest(unittest.TestCase):
         fake = transition_fake("In Progress", {"Needs human": ["CHB-1", "CHB-2", "CHB-3"]}, description=description_with(SECTIONS["Needs human"]))
         code, _, err = _run(["transition", "CHB-12", "Needs human"], fake)
 
-        self.assertEqual(code, 4)
+        self.assertEqual(code, 5)
         self.assertIn("column 'Needs human' is at its WIP limit (3/3)", err)
         self.assertIn("Leave CHB-12 in In Progress", err)
         self.assertEqual(fake.writes(), [])
@@ -484,6 +494,68 @@ class WipLimitTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("board/2/configuration: HTTP 500", err)
         self.assertEqual(fake.writes(), [])
+
+
+class WaitCommandTest(unittest.TestCase):
+    """CHB-162: the loop the exit 5 message names stops after an hour and retries only a WIP-limit refusal."""
+
+    def _run(self, exit_codes: list[int], limit: int = 3600) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+        """Run the real command in bash with a fake `factory/bin/jira`, `sleep` and `date`; return the result and the calls."""
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "factory" / "bin").mkdir(parents=True)
+            calls = root / "calls"
+            codes = root / "codes"
+            codes.write_text("\n".join(str(c) for c in exit_codes) + "\n")
+            clock = root / "clock"
+            clock.write_text("1000\n")
+            fake = (
+                "#!/bin/bash\n"
+                f'echo "$@" >> {calls}\n'
+                f"code=$(head -n 1 {codes}); sed -i 1d {codes}\n"
+                '[ "$code" = 5 ] && echo "jira: blocked: WIP limit" >&2\n'
+                '[ "$code" = 4 ] && echo "jira: blocked: not the top ticket" >&2\n'
+                'exit "${code:-5}"\n'
+            )
+            (root / "factory" / "bin" / "jira").write_text(fake)
+            (root / "factory" / "bin" / "jira").chmod(0o755)
+            (root / "sleep").write_text(f"#!/bin/bash\necho $(( $(cat {clock}) + $1 )) > {clock}\n")
+            (root / "date").write_text(f"#!/bin/bash\ncat {clock}\n")
+            for name in ("sleep", "date"):
+                (root / name).chmod(0o755)
+            command = jira.wait_command("CHB-12", "In Progress").replace("3600", str(limit))
+            result = subprocess.run(
+                ["bash", "-c", command], cwd=root, env={"PATH": f"{root}:/usr/bin:/bin"}, capture_output=True, text=True, timeout=30
+            )
+            return result, calls.read_text().splitlines() if calls.exists() else []
+
+    def test_retries_while_the_refusal_is_a_wip_limit_then_moves(self) -> None:
+        result, calls = self._run([5, 5, 0])
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(calls, ["transition CHB-12 In Progress"] * 3)
+
+    def test_gives_up_after_an_hour_with_one_line_and_a_non_zero_exit(self) -> None:
+        result, calls = self._run([5] * 100)
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout.strip(), "CHB-12: the slot is still full after 60 minutes; tell the owner")
+        self.assertEqual(len(calls), 31)  # tries at 0, 120, ... 3600 seconds
+
+    def test_a_refusal_that_waiting_does_not_clear_ends_the_loop_at_once(self) -> None:
+        result, calls = self._run([5, 4, 5, 5])
+
+        self.assertEqual(result.returncode, 4)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("not the top ticket", result.stderr)
+
+    def test_any_other_failure_ends_the_loop_with_its_exit_code(self) -> None:
+        for code in (1, 2, 3):
+            with self.subTest(code=code):
+                result, calls = self._run([code, 5])
+
+                self.assertEqual(result.returncode, code)
+                self.assertEqual(len(calls), 1)
 
 
 class MinimumSignalTest(unittest.TestCase):

@@ -40,10 +40,10 @@ The CHB board (board 2) holds the WIP limits: a min and a max per column, set by
 
 A WIP limit stops pulling new work. It never stops the board from recording what already happened (CHB-127).
 
-- Max, starting work: a move from Ready into In Progress exits 4 while In Progress, In Review or Validating holds its max or more.
+- Max, starting work: a move from Ready into In Progress exits 5 while In Progress, In Review or Validating holds its max or more.
   The message names every full column, the limit and the tickets in it, and the wait command.
   The ticket stays in Ready. The agent comments on it, runs the wait command in the background and starts nothing else.
-- Max, Needs human: a move into Needs human exits 4 while that column is full. The ticket stays where it is; the agent comments and tells the owner.
+- Max, Needs human: a move into Needs human exits 5 while that column is full. The ticket stays where it is; the agent comments and runs the wait command in the background.
 - Max, Ready: a move into Ready exits 4 while Ready is full (CHB-157, see [Ready](#ready)).
 - Epics never count toward any column limit, min or max: the board shows no epic as a card (CHB-157).
 - An [expedite](#expedite) ticket skips every limit and may take a column one over its max.
@@ -57,8 +57,10 @@ A WIP limit stops pulling new work. It never stops the board from recording what
   In Progress is below its min and Ready has a ticket that can start (it names the ticket), or when Ready is below its min and the reply
   does not report the Backlog scan ("Ready is low" with the result). It fails open when Jira is unreachable and allows the stop on a
   second refusal for the same board.
-- Waiting for a slot: the exit 4 message of a WIP limit names a wait command. The agent runs it in the background (`run_in_background`):
-  it retries the move every 120 seconds until the slot is free. The agent does not hand the wait to the owner.
+- Waiting for a slot: exit 5 means a WIP limit (exit 4 is every other board refusal). Its message names a wait command.
+  The agent runs it in the background (`run_in_background`): it retries the move every 120 seconds while the refusal is exit 5.
+  Any other result ends it at once: exit 0 (moved), or a refusal such as exit 4 (not the top ticket, a missing section, a blocked ticket), which it prints.
+  After 60 minutes it prints that the slot is still full and exits 1: the agent then tells the owner. The agent never waits longer than an hour without telling the owner.
 - Free slots: after every move between columns, the wrapper prints the free In Progress slots and the next top tickets of Ready, one per free slot,
   for example `In Progress 2/3: 1 slot free; next: CHB-123` (CHB-125).
   The next tickets follow the sorted order of [Ready](#ready). A Backlog ticket is never next. A ticket that a start would refuse for a missing section is marked:
