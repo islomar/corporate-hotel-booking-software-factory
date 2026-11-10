@@ -15,7 +15,52 @@ concurrency:
 # Dependency checks run inside the required jobs (backend, frontend, e2e), so auto-merge
 # waits for them. See docs/decisions/ADR-ebe6-unattended-dependency-updates.md.
 jobs:
+  # CHB-117: a docs-only PR skips backend, frontend and e2e. They are required checks, so the
+  # skip is a job-level `if:`, never a workflow `paths-ignore`: a workflow skipped by path
+  # filtering leaves its required checks Pending, while a job skipped by `if:` reports success.
+  # The allowlist is factory/review/docs_list.py (shared with the reviewer), run as it is on the
+  # base commit so a PR cannot change the rule that judges it. Pushes to main always run every
+  # job: deploy.yml deploys after CI succeeds, docs-only merges included.
+  # Fail-safe: the test jobs run unless this job reports docs_only=true. If it fails, they run.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.decide.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'pull_request'
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # the diff needs the merge base
+      - name: Fetch the PR head and base (the merge ref can lag behind the event)
+        if: github.event_name == 'pull_request'
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          for sha in "$HEAD_SHA" "$BASE_SHA"; do
+            git cat-file -e "$sha^{commit}" 2>/dev/null || git fetch --no-tags origin "$sha"
+          done
+      - id: decide
+        name: Docs-only PR? (allowlist from the base commit)
+        env:
+          EVENT: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          script="$RUNNER_TEMP/docs_list.py"
+          if [ "$EVENT" = pull_request ] && git show "$BASE_SHA:factory/review/docs_list.py" > "$script" 2>/dev/null; then
+            python3 -I "$script" --repo . --base "$BASE_SHA" --head "$HEAD_SHA" --event "$EVENT" > "$RUNNER_TEMP/decision"
+          else
+            echo "docs_only=false" > "$RUNNER_TEMP/decision"
+          fi
+          cat "$RUNNER_TEMP/decision"
+          grep -x 'docs_only=\(true\|false\)' "$RUNNER_TEMP/decision" >> "$GITHUB_OUTPUT"
+
   backend:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
@@ -42,6 +87,8 @@ jobs:
       - run: uv run --locked pytest
 
   frontend:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     # Dependabot alerts read: the release-age check exempts a fresh fix for an open alert (CHB-95).
     permissions:
       contents: read
@@ -92,7 +139,10 @@ jobs:
       vulnerability-alerts: read
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [backend, frontend]
+    needs: [changes, backend, frontend]
+    if: >-
+      ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' &&
+      needs.backend.result == 'success' && needs.frontend.result == 'success' }}
     env:
       # Browsers and their system packages ship in this image: no apt mirror on the critical
       # path (CHB-101). Keep the tag equal to @playwright/test in e2e/package-lock.json:
