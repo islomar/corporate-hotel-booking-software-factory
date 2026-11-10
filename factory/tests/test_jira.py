@@ -3223,6 +3223,25 @@ class ReadyMaximumTest(unittest.TestCase):
         self.assertEqual(code, 0, err)
 
 
+class EpicsInStartedWorkTest(unittest.TestCase):
+    """CHB-157: epics count toward no column limit, in started work too."""
+
+    def test_epics_filling_in_progress_do_not_block_a_start(self) -> None:
+        epics = ("CHB-90", "CHB-91", "CHB-92")
+        fake = transition_fake("To Do", {"In Progress": list(epics)}, epics=epics)
+        code, out, err = _run(["transition", "CHB-12", "In Progress"], fake)
+
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.splitlines()[1], "In Progress 1/3: 2 slots free; next: nothing to start in To Do")
+
+    def test_the_free_slot_line_does_not_count_epics(self) -> None:
+        fake = transition_fake("In Progress", {"In Progress": ["CHB-90", "CHB-1"]}, epics=("CHB-90",))
+        code, out, _ = _run(["transition", "CHB-12", "In Review"], fake)
+
+        self.assertEqual(code, 0)
+        self.assertIn("In Progress 1/3: 2 slots free; next: nothing to start in To Do", out.splitlines())
+
+
 class ReadyMinimumTest(unittest.TestCase):
     """CHB-157 AC2: a move that leaves Ready below its board min prints the signal line; nothing is promoted."""
 
@@ -3369,6 +3388,17 @@ class ExpediteTest(unittest.TestCase):
         self.assertIn("could not start CHB-200", out)
         self.assertIn("Jira UI", out)
         self.assertEqual(_write_paths(fake), [CREATE_PATH, NEW_MOVE])
+
+    def test_a_board_without_in_progress_is_a_notice_that_names_the_column(self) -> None:
+        board = ready_board()
+        board["columnConfig"]["columns"] = [c for c in board["columnConfig"]["columns"] if c["name"] != "In Progress"]
+        fake = expedite_fake()
+        fake.routes[("GET", BOARD)] = board
+        code, out, _ = _create_args(fake, *EXPEDITE, priority=None)
+
+        self.assertEqual(code, 0)
+        self.assertIn("could not start CHB-200 as expedite: the board has no column 'In Progress'", out)
+        self.assertEqual(_write_paths(fake), [CREATE_PATH])
 
     def test_a_failed_comment_or_assign_after_the_move_says_the_ticket_is_in_progress(self) -> None:
         for path, command in ((NEW_COMMENT, "factory/bin/jira comment CHB-200"), (NEW_ASSIGNEE, "factory/bin/jira assign CHB-200 --me")):

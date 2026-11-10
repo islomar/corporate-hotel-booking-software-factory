@@ -929,8 +929,10 @@ class Jira:
         expedite ticket at a time keeps the excess at one.
         """
         in_progress = next((column for column in self.board_columns() if column.name == IN_PROGRESS), None)
+        if in_progress is None:
+            raise JiraError(f"the board has no column {IN_PROGRESS!r}")
         transitions = self.request("GET", f"/rest/api/3/issue/{check_key(key)}/transitions")["transitions"]
-        match = next((t for t in transitions if in_progress is not None and str(t["to"]["id"]) in in_progress.status_ids), None)
+        match = next((t for t in transitions if str(t["to"]["id"]) in in_progress.status_ids), None)
         if match is None:
             raise JiraError(f"{key} has no transition into {IN_PROGRESS}")
         self.request("POST", f"/rest/api/3/issue/{key}/transitions", {"transition": {"id": match["id"]}}, empty_ok=True)
