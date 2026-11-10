@@ -78,8 +78,10 @@ The list must match exactly. A missing or an extra address fails.
 `github/tests/guards.tftest.hcl` checks each guard against stubbed GitHub responses. It needs no credentials.
 `gcp/guards.tf` fails the plan when the planner holds a role outside a read-only allowlist or the deployer's `refs/heads/main` condition changes (CHB-81).
 `gcp/tests/guards.tftest.hcl` breaks each guard with a mocked Google provider.
-`make check` runs it (`scripts/check_guard_tests.py`, CHB-158). CI does not run it yet.
-The script runs both folders. It needs Terraform at the version in each `.terraform-version`, network access to download the provider, and no credentials.
+`make check` and the `backend` job of CI run both folders (`scripts/check_guard_tests.py`, CHB-158, CHB-166). A PR that breaks a guard shows `backend` failing.
+CI installs Terraform from releases.hashicorp.com, pinned by SHA-256 (`TERRAFORM_SHA256` in `.github/workflows/ci.yml`), and uses no third-party action and no credentials.
+Both folders pin the same Terraform version. When you change a `.terraform-version`, change both, and update that hash from `terraform_<version>_SHA256SUMS` (the `linux_amd64` line) in the same PR.
+The script needs Terraform at the version in each `.terraform-version`, network access to download the provider, and no credentials.
 It removes GitHub and Google credentials from the environment and keeps `.terraform` out of the checkout.
 Run it alone:
 
