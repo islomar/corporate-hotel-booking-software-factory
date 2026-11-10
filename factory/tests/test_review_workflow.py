@@ -69,6 +69,14 @@ class ReviewCommentTest(unittest.TestCase):
         check_token = self.text[self.text.index("- id: app-token") : self.text.index("- id: comment-token")]
         self.assertIn("permission-pull-requests: read", check_token)
 
+    def test_the_comment_follows_a_posted_check_of_a_model_review(self) -> None:
+        self.assertIn("- id: gate\n        name: Gate and post the review check", self.text)
+        token_step = self.text[self.text.index("- id: comment-token") :].split("\n")[1]
+        self.assertIn("steps.gate.outcome == 'success'", token_step)
+        self.assertIn("steps.plan.outputs.action == 'review'", token_step)
+        post_step = self.text[self.text.index("- name: Post the review comment") :].split("\n")[1]
+        self.assertIn("steps.comment-token.outputs.token != ''", post_step)
+
     @unittest.skipUnless(shutil.which("jq"), "jq is not installed")
     def test_the_jq_line_sends_the_file_as_the_body(self) -> None:
         line = COMMENT_JSON.search(self.text).group(1)  # type: ignore[union-attr]

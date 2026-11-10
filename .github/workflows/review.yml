@@ -271,7 +271,8 @@ jobs:
           permission-checks: write
           permission-pull-requests: read
 
-      - name: Gate and post the review check
+      - id: gate
+        name: Gate and post the review check
         if: ${{ !cancelled() && steps.app-token.outputs.token != '' }}
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -308,10 +309,10 @@ jobs:
 
       # CHB-141: a PR comment the owner reacts to with 👍 or 👎. factory/review/agreement.py counts them
       # (ADR-ea8c stage 1). gate.py writes the comment only for a valid model review.
-      # Own token with pull requests write, after the check is posted, and continue-on-error:
+      # Only after the check posted. Own token with pull requests write, and continue-on-error:
       # a missing permission or a failed comment never blocks the review check.
       - id: comment-token
-        if: ${{ !cancelled() && steps.app-token.outputs.token != '' && steps.plan.outputs.action == 'review' }}
+        if: ${{ !cancelled() && steps.gate.outcome == 'success' && steps.plan.outputs.action == 'review' }}
         continue-on-error: true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
