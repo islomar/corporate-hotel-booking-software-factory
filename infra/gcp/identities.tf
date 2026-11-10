@@ -87,3 +87,11 @@ resource "google_project_iam_member" "runtime_metric_writer" {
   role    = "roles/monitoring.metricWriter"
   member  = google_service_account.runtime.member
 }
+
+# The deploy workflow writes one deployment event per deploy as a Cloud Logging entry
+# (scripts/deploy_event.py, CHB-74). logWriter only creates entries; it reads none.
+resource "google_project_iam_member" "deployer_log_writer" {
+  project = var.project_id
+  role    = "roles/logging.logWriter"
+  member  = google_service_account.deployer.member
+}
