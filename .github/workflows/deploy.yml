@@ -36,7 +36,13 @@ jobs:
     environment:
       name: production
       url: ${{ steps.url.outputs.url }}
+    # The record job reads these. Job outputs are set even when a later step fails.
+    outputs:
+      started: ${{ steps.started.outputs.at }}
+      finished: ${{ steps.finished.outputs.at }}
     steps:
+      - id: started
+        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
@@ -67,6 +73,9 @@ jobs:
             sleep 3
           done
           echo "Expected version $EXPECTED, got '$version'"; exit 1
+      - id: finished
+        if: ${{ always() }}
+        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
   smoke:
     needs: deploy
@@ -91,3 +100,41 @@ jobs:
         timeout-minutes: 3
         env:
           APP_URL: ${{ vars.APP_URL }}
+
+  # One deployment event per production deploy (CHB-74): a Cloud Logging entry and a GitHub
+  # deployment status. scripts/deploy_event.py builds and writes it. Every step and the job
+  # tolerate failure, so a failed event write never turns the deploy red.
+  record:
+    needs: [deploy, smoke]
+    if: ${{ always() && needs.deploy.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
+      deployments: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        continue-on-error: true
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+        continue-on-error: true
+      - name: Record the deployment event
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT_SHA: ${{ github.event.workflow_run.head_sha }}
+          DEPLOY_START: ${{ needs.deploy.outputs.started }}
+          DEPLOY_END: ${{ needs.deploy.outputs.finished }}
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
+          SMOKE_RESULT: ${{ needs.smoke.result }}
+          GCP_PROJECT: ${{ vars.GCP_PROJECT }}
+        run: python3 -I scripts/deploy_event.py
