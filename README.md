@@ -80,10 +80,14 @@ The schema cannot drift from the code because the code is its source.
 | Path | Content |
 |---|---|
 | `/api/docs` | Swagger UI: browse and call the endpoints |
-| `/api/redoc` | ReDoc: read-only reference |
 | `/api/openapi.json` | The raw schema, for clients and contract checks |
 
-Locally the same paths work on <http://localhost:8000> (`make dev`) and <http://localhost:8080> (`make up`).
+Locally the same paths work on <http://localhost:5173> (`make dev`) and <http://localhost:8080> (`make up`).
+On <http://localhost:8000> (the `make dev` backend alone) the Swagger UI page has no assets: the dev server on port 5173 provides them.
+
+The backend sends a strict `Content-Security-Policy` and other security headers on every response (`backend/src/chb/security_headers.py`).
+Swagger UI comes from the `swagger-ui-dist` npm package, copied into the frontend build and served from `/api/docs-assets`, so the policy names no CDN.
+ReDoc is off: it has no self-hosted copy.
 
 ## Observability
 
@@ -111,7 +115,7 @@ Open <http://localhost:3000>, then **Explore**, and pick a data source:
 - **Loki** (logs): query `{service_name="chb"}`.
 
 Health checks (`/api/health`) produce metrics, but no traces and no access log lines.
-To create traces and logs, open <http://localhost:8000/api/docs> and reload it a few times.
+To create traces and logs, open <http://localhost:5173/api/docs> and reload it a few times.
 
 ### Production: Google Cloud console
 
