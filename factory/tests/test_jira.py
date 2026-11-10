@@ -499,7 +499,7 @@ class WipLimitTest(unittest.TestCase):
 class WaitCommandTest(unittest.TestCase):
     """CHB-162: the loop the exit 5 message names stops after an hour and retries only a WIP-limit refusal."""
 
-    def _run(self, exit_codes: list[int], limit: int = 3600) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    def _run(self, exit_codes: list[int]) -> tuple[subprocess.CompletedProcess[str], list[str]]:
         """Run the real command in bash with a fake `factory/bin/jira`, `sleep` and `date`; return the result and the calls."""
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -512,7 +512,7 @@ class WaitCommandTest(unittest.TestCase):
             fake = (
                 "#!/bin/bash\n"
                 f'echo "$@" >> {calls}\n'
-                f"code=$(head -n 1 {codes}); sed -i 1d {codes}\n"
+                f"code=$(head -n 1 {codes}); tail -n +2 {codes} > {codes}.tmp && mv {codes}.tmp {codes}\n"
                 '[ "$code" = 5 ] && echo "jira: blocked: WIP limit" >&2\n'
                 '[ "$code" = 4 ] && echo "jira: blocked: not the top ticket" >&2\n'
                 'exit "${code:-5}"\n'
@@ -523,7 +523,7 @@ class WaitCommandTest(unittest.TestCase):
             (root / "date").write_text(f"#!/bin/bash\ncat {clock}\n")
             for name in ("sleep", "date"):
                 (root / name).chmod(0o755)
-            command = jira.wait_command("CHB-12", "In Progress").replace("3600", str(limit))
+            command = jira.wait_command("CHB-12", "In Progress")
             result = subprocess.run(
                 ["bash", "-c", command], cwd=root, env={"PATH": f"{root}:/usr/bin:/bin"}, capture_output=True, text=True, timeout=30
             )
