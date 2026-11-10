@@ -235,6 +235,9 @@ Meaning: the change is merged and deployed, but nobody has yet confirmed that it
 - Leave to In Progress: the check fails. A new or reopened PR fixes it.
 - Some checks need time (for example a background cleanup that runs within a day). The ticket stays in Validating until then.
 - At session start, the SessionStart hook lists each "When:" line as due, check, or unmarked while its date is ahead, and the agent sweeps the due and check items first (CHB-140, `factory/hooks/validating_sweep.py`).
+- At the end of a turn, the Stop hook `factory/hooks/check_wip_minimums.py` refuses to end it once while a Validating ticket has a due item and the agent account
+  has no comment on it from the current day (Europe/Madrid) (CHB-163). The reason names the ticket and each due item. The agent checks the item and comments the evidence.
+  Items not yet due never block. The hook fails open when Jira is unreachable and allows the second stop for the same state.
 - WIP limit: a max on the board. A full Validating blocks starting work, never recording a merge.
   The agent then checks live results or tells the owner how to speed them up before it starts another ticket.
 
