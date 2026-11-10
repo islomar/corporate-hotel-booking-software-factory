@@ -7,6 +7,7 @@
   - [Decision](#decision)
     - [Dependabot (`.github/dependabot.yml`)](#dependabot-githubdependabotyml)
     - [Release age enforced outside Dependabot](#release-age-enforced-outside-dependabot)
+    - [Security fixes skip the 7-day wait (CHB-95, CHB-145)](#security-fixes-skip-the-7-day-wait-chb-95-chb-145)
     - [Supply chain checks in CI](#supply-chain-checks-in-ci)
     - [Lockfile-only installs](#lockfile-only-installs)
     - [Auto-merge (`.github/workflows/dependabot-auto-merge.yml`)](#auto-merge-githubworkflowsdependabot-auto-mergeyml)
@@ -67,6 +68,27 @@ Node 24 ships npm 11.19.1, in CI and in the `node:24-alpine` image. `make setup`
 To let a fresh security fix in, add the package to `min-release-age-exclude[]` in `.npmrc` or to `exclude-newer-package` in `pyproject.toml`.
 Add a comment that says when to remove it.
 The CI script reads the same exemptions.
+
+### Security fixes skip the 7-day wait (CHB-95, CHB-145)
+
+Owner decisions: npm on 2026-11-06 (CHB-95 slice 2), uv on 2026-11-10 (CHB-95 AC3, CHB-145).
+
+- `scripts/check_release_age.py` lets a lockfile entry younger than the window pass when all of these hold:
+  - the PR author is `dependabot[bot]`;
+  - the package has an open Dependabot alert on a manifest in the lockfile's folder: ecosystem `npm` for `package-lock.json`, `pip` for `uv.lock`;
+  - the locked version is exactly the alert's first patched version.
+    uv compares plain release numbers (`2.0` equals `2.0.0`) and PEP 503 names. Pre-, post- and dev releases never match.
+- It prints `::notice ... is a security fix: Dependabot alert #<n>`.
+  A new transitive entry still fails, and the PR waits for the owner.
+- The alerts come from the GitHub API, read only when an entry is too new.
+  The `backend`, `frontend` and `e2e` jobs have `vulnerability-alerts: read`, and only Dependabot PRs get the token.
+  Without a token there is no exemption. An API error prints a `::warning` and gives no exemption: the check fails closed.
+- The release-age step runs before `npm ci` and `uv sync`: install scripts and sdist builds run untrusted code.
+- The supply-chain check still decides the merge: patch, or minor at 1.0 or above, unattended.
+- uv limit, found 2026-11-10: Dependabot runs `uv lock --upgrade-package <name>==<version>` and uv applies `exclude-newer` from `pyproject.toml`.
+  uv 0.13.7 refuses a version younger than 7 days.
+  Dependabot therefore opens no uv security PR for a fix younger than 7 days until dependabot-core#13816 ships, and the exemption has nothing to act on.
+  An `exclude-newer-package` exemption would let it lock, but the supply-chain check sends that change to the owner.
 
 ### Supply chain checks in CI
 
@@ -165,8 +187,9 @@ Consequences:
 - Fewer PRs: one per group and week, plus majors and 0.x updates.
 - Most backend updates need a human, because fastapi, uvicorn and ruff are 0.x.
 - Adding `exclude-newer` re-locked the backend to versions at least 7 days old. Nine packages moved back one release, and the ruff floor moved from 0.17.4 to 0.17.3.
-- A security fix younger than 7 days fails the release-age check until a person adds an exemption.
-  Dependabot cooldown does not delay security updates.
+- A Dependabot security fix younger than 7 days passes the release-age check when it is exactly the first patched version of an open alert.
+  Any other entry younger than 7 days fails until a person adds an exemption.
+  Dependabot cooldown does not delay security updates. For uv, `exclude-newer` still does (see above).
 - Unattended merge starts only when these exist:
   the GitHub App with its Dependabot secrets, the `main` ruleset requiring `backend`, `frontend`, `e2e` and `supply-chain`, and the `allow auto-merge` setting.
   The ruleset requires 1 approval. The App approval must count (CHB-88).

@@ -21,6 +21,10 @@ still fails. Only for pull requests opened by Dependabot (PR_AUTHOR=dependabot[b
 alerts come from the GitHub API (GH_TOKEN with Dependabot alerts read, GITHUB_REPOSITORY),
 read only when an entry is too new. Without them there is no exemption, never an error.
 
+uv security fixes (CHB-145): the same rule for uv.lock, with the alerts of the `pip` ecosystem
+for the lockfile's folder. Names compare normalized (PEP 503). Versions compare as plain
+release numbers, so 2.0 and 2.0.0 are the same release; pre-, post- and dev releases never match.
+
 Usage: check_release_age.py [--base GIT_REF] LOCKFILE...
 Exit codes: 0 pass, 1 violations, 2 configuration or network error.
 """
@@ -48,6 +52,8 @@ DEPENDABOT = "dependabot[bot]"
 NEXT_LINK = re.compile(r'<([^>]+)>;\s*rel="next"')
 MAX_ALERT_PAGES = 20
 RELEASE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+PYTHON_RELEASE = re.compile(r"^\d+(?:\.\d+)*$")
+NPM, PIP = "npm", "pip"
 
 
 class ConfigError(Exception):
@@ -186,8 +192,23 @@ def _release(version: str) -> tuple[int, int, int] | None:
     return tuple(int(part) for part in match.groups()) if match else None  # type: ignore[return-value]
 
 
-def alert_fixes(alerts: list[dict], manifest_dir: str) -> dict[str, list[tuple[str, int]]]:
-    """npm package name -> [(first patched version, alert number)] for one manifest folder."""
+def _python_release(version: str) -> tuple[int, ...] | None:
+    """A plain Python release without trailing zeros (2.0 == 2.0.0). Other forms are None."""
+    version = version.removeprefix("v")
+    if not PYTHON_RELEASE.fullmatch(version):
+        return None
+    parts = [int(part) for part in version.split(".")]
+    while len(parts) > 1 and parts[-1] == 0:
+        parts.pop()
+    return tuple(parts)
+
+
+def _package_key(name: str, ecosystem: str) -> str:
+    return normalize_python_name(name) if ecosystem == PIP else name
+
+
+def alert_fixes(alerts: list[dict], manifest_dir: str, ecosystem: str = NPM) -> dict[str, list[tuple[str, int]]]:
+    """Package name -> [(first patched version, alert number)] for one ecosystem and manifest folder."""
     fixes: dict[str, list[tuple[str, int]]] = {}
     for alert in alerts:
         if not isinstance(alert, dict):
@@ -197,23 +218,24 @@ def alert_fixes(alerts: list[dict], manifest_dir: str) -> dict[str, list[tuple[s
         patched = (alert.get("security_vulnerability") or {}).get("first_patched_version") or {}
         folder = PurePosixPath(dependency.get("manifest_path", "")).parent.as_posix()
         name = package.get("name")
-        if package.get("ecosystem") != "npm" or folder != manifest_dir or not name or not patched.get("identifier"):
+        if package.get("ecosystem") != ecosystem or folder != manifest_dir or not name or not patched.get("identifier"):
             continue
-        fixes.setdefault(name, []).append((patched["identifier"], alert.get("number", 0)))
+        fixes.setdefault(_package_key(name, ecosystem), []).append((patched["identifier"], alert.get("number", 0)))
     return fixes
 
 
 def security_fix_exemptions(
-    violations: list[Violation], fixes: dict[str, list[tuple[str, int]]]
+    violations: list[Violation], fixes: dict[str, list[tuple[str, int]]], ecosystem: str = NPM
 ) -> tuple[list[Violation], list[str]]:
     """Split too-new entries into the ones that still fail and notes for the exempted fixes."""
+    release = _python_release if ecosystem == PIP else _release
     kept: list[Violation] = []
     notes: list[str] = []
     for violation in violations:
-        version = _release(violation.version)
+        version = release(violation.version)
         match = None
-        for patched, number in fixes.get(violation.name, []):
-            floor = _release(patched)
+        for patched, number in fixes.get(_package_key(violation.name, ecosystem), []):
+            floor = release(patched)
             # Exactly the first patched version: Dependabot security updates move to the
             # minimum fixed version, and anything newer is a fresh release like any other.
             if version and floor and version == floor:
@@ -226,10 +248,12 @@ def security_fix_exemptions(
     return kept, notes
 
 
-def fetch_open_alerts(repository: str, token: str) -> list[dict]:
-    """Open npm alerts, following the Link header (the endpoint uses cursor pagination)."""
+def fetch_open_alerts(repository: str, token: str, ecosystem: str = NPM) -> list[dict]:
+    """Open alerts of one ecosystem, following the Link header (the endpoint uses cursor pagination)."""
     alerts: list[dict] = []
-    url: str | None = f"{GITHUB_API}/repos/{repository}/dependabot/alerts?state=open&ecosystem=npm&per_page=100"
+    url: str | None = (
+        f"{GITHUB_API}/repos/{repository}/dependabot/alerts?state=open&ecosystem={ecosystem}&per_page=100"
+    )
     pages = 0
     while url is not None:
         if pages == MAX_ALERT_PAGES:
@@ -263,7 +287,7 @@ def repository_folder(path: Path) -> str:
 
 
 def load_fixes(
-    path: Path, fetch: Callable[[str, str], list[dict]] | None = None
+    path: Path, fetch: Callable[[str, str, str], list[dict]] | None = None, ecosystem: str = NPM
 ) -> dict[str, list[tuple[str, int]]]:
     # The default is looked up at call time, so tests can replace fetch_open_alerts.
     fetch = fetch or fetch_open_alerts
@@ -274,7 +298,7 @@ def load_fixes(
         print(f"{path}: no GH_TOKEN or GITHUB_REPOSITORY, so no security-fix exemption")
         return {}
     try:
-        return alert_fixes(fetch(repository, token), repository_folder(path))
+        return alert_fixes(fetch(repository, token, ecosystem), repository_folder(path), ecosystem)
     except (OSError, ValueError) as error:
         print(f"::warning file={path}::cannot read Dependabot alerts ({error}), so no security-fix exemption")
         return {}
@@ -294,10 +318,21 @@ def git_show(ref: str, path: Path) -> str | None:
 # main
 
 
+def exempt_security_fixes(path: Path, violations: list[Violation], ecosystem: str) -> list[Violation]:
+    """Let through the too-new entries that fix an open Dependabot alert, with a notice each."""
+    if not violations:
+        return violations
+    violations, notes = security_fix_exemptions(violations, load_fixes(path, ecosystem=ecosystem), ecosystem)
+    for note in notes:
+        print(f"::notice file={path}::{note}")
+    return violations
+
+
 def check_lockfile(path: Path, base: str | None, now: datetime) -> list[Violation]:
     text = path.read_text()
     if path.name == "uv.lock":
-        return check_uv_lock(text, uv_exempt_packages(path.parent / "pyproject.toml"), now)
+        violations = check_uv_lock(text, uv_exempt_packages(path.parent / "pyproject.toml"), now)
+        return exempt_security_fixes(path, violations, PIP)
     if path.name == "package-lock.json":
         window, exclude = read_npmrc(path.parent / ".npmrc")
         entries = npm_registry_entries(text)
@@ -306,11 +341,7 @@ def check_lockfile(path: Path, base: str | None, now: datetime) -> list[Violatio
             entries -= npm_registry_entries(base_text)
         print(f"{path}: checking {len(entries)} new registry entries")
         violations = check_npm_entries(entries, window, exclude, now, publish_time=fetch_publish_time)
-        if violations:
-            violations, notes = security_fix_exemptions(violations, load_fixes(path))
-            for note in notes:
-                print(f"::notice file={path}::{note}")
-        return violations
+        return exempt_security_fixes(path, violations, NPM)
     raise ConfigError(f"unsupported lockfile: {path}")
 
 
