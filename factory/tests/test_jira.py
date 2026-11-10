@@ -298,7 +298,7 @@ class WipLimitTest(unittest.TestCase):
         code, out, _ = _run(["transition", "CHB-12", "In Progress"], fake)
 
         self.assertEqual(code, 0)
-        self.assertEqual(out.splitlines(), ["CHB-12 -> In Progress", "In Progress 2/3: 1 slot free; next: no ready ticket in To Do"])
+        self.assertEqual(out.splitlines(), ["CHB-12 -> In Progress", "In Progress 2/3: 1 slot free; next: nothing to start in To Do"])
         self.assertEqual(len(fake.writes()), 1)
 
     def test_limit_comes_from_the_board_config(self) -> None:
@@ -391,7 +391,7 @@ class MinimumSignalTest(unittest.TestCase):
             [
                 "CHB-12 -> In Review",
                 "In Progress is below its minimum (0/1)",
-                "In Progress 0/3: 3 slots free; next: no ready ticket in To Do",
+                "In Progress 0/3: 3 slots free; next: nothing to start in To Do",
             ],
         )
         self.assertIn("project = CHB AND (status in (3) AND key != CHB-12) ORDER BY key ASC", fake.searches())
@@ -418,11 +418,11 @@ class MinimumSignalTest(unittest.TestCase):
         code, out, _ = _run(["transition", "CHB-12", "In Progress"], fake)
 
         self.assertEqual(code, 0)
-        self.assertEqual(out.splitlines(), ["CHB-12 -> In Progress", "In Progress 1/3: 2 slots free; next: no ready ticket in To Do"])
+        self.assertEqual(out.splitlines(), ["CHB-12 -> In Progress", "In Progress 1/3: 2 slots free; next: nothing to start in To Do"])
 
 
 class ReadinessTest(unittest.TestCase):
-    """CHB-125: a ticket is ready when it has acceptance criteria and no open dependency."""
+    """CHB-125: acceptance criteria and dependencies, read from the description."""
 
     def test_acceptance_criteria_as_a_heading_or_a_line_with_text_under_it(self) -> None:
         ready = {
@@ -430,6 +430,7 @@ class ReadinessTest(unittest.TestCase):
             "heading, other case": "### acceptance criteria\n\nAC1. It works.",
             "line with a colon": "Intro.\n\nAcceptance criteria:\n\n- A test.",
             "bold line": "**Acceptance criteria:**\n\n1. A test.",
+            "both sections": "## Acceptance criteria\n\n- A test.\n\n## Acceptance criteria (Validating)\n\n- Live.",
         }
         for name, markdown in ready.items():
             with self.subTest(name):
@@ -440,6 +441,7 @@ class ReadinessTest(unittest.TestCase):
             "none": "Do the thing.",
             "empty section": "## Acceptance criteria\n\n## Notes\n\nText.",
             "mid-line mention": "Rejects tickets without testable acceptance criteria.",
+            "only the Validating section": "## Acceptance criteria (Validating)\n\n- Live check.",
             "no description": None,
         }
         for name, markdown in not_ready.items():
@@ -459,22 +461,22 @@ class ReadinessTest(unittest.TestCase):
                 "- Depends on:\n  - CHB-4: a check.\n  - CHB-5: a test.\n- Mentions CHB-6.",
                 ["CHB-4", "CHB-5"],
             ),
+            "colon form": ("Depends on: CHB-141 (agreement tally).", ["CHB-141"]),
             "mentions only": ("See CHB-3 and CHB-4.", []),
         }
         for name, (markdown, keys) in cases.items():
             with self.subTest(name):
                 self.assertEqual(jira.dependencies(doc(markdown)), keys)
 
-    def test_reason_names_what_is_missing(self) -> None:
-        dependent = doc("Depends on CHB-91 and CHB-88.\n\n## Acceptance criteria\n\n- A test.")
-        self.assertIsNone(jira.not_ready_reason(READY, open_keys=set()))
-        self.assertIn("no acceptance criteria", jira.not_ready_reason(NOT_READY, open_keys=set()) or "")
-        self.assertEqual(jira.not_ready_reason(dependent, open_keys={"CHB-91"}), "it depends on open tickets: CHB-91")
-        self.assertIsNone(jira.not_ready_reason(dependent, open_keys={"CHB-7"}))
+    def test_open_dependencies(self) -> None:
+        dependent = doc("Depends on CHB-91 and CHB-88.")
+        self.assertEqual(jira.open_dependencies(dependent, open_keys={"CHB-91", "CHB-7"}), ["CHB-91"])
+        self.assertEqual(jira.open_dependencies(dependent, open_keys={"CHB-7"}), [])
 
 
 class TopTicketTest(unittest.TestCase):
-    """CHB-125: starting from To Do takes the top-ranked ready non-epic ticket only (exit 4 otherwise)."""
+    """CHB-125: a start from To Do takes the top ticket only: the highest-ranked non-epic ticket
+    without an open dependency. Missing acceptance criteria do not skip it: the agent writes them."""
 
     def test_a_ticket_below_the_top_is_refused_and_jira_is_unchanged(self) -> None:
         fake = transition_fake("To Do", {"To Do": ["CHB-5", "CHB-12"]})
@@ -495,33 +497,56 @@ class TopTicketTest(unittest.TestCase):
         self.assertEqual(len(fake.writes()), 1)
         self.assertIn(OPEN_JQL, fake.searches())
 
-    def test_epics_and_tickets_that_are_not_ready_are_skipped_when_finding_the_top(self) -> None:
+    def test_a_top_ticket_without_acceptance_criteria_is_not_skipped(self) -> None:
+        """CHB-50 has no criteria but is top: starting CHB-12 below it is refused and names CHB-50."""
+        fake = transition_fake("To Do", {"To Do": ["CHB-50", "CHB-12"]}, descriptions={"CHB-50": NOT_READY})
+        code, _, err = _run(["transition", "CHB-12", "In Progress"], fake)
+
+        self.assertEqual(code, 4)
+        self.assertIn("CHB-12 is not the top ticket of To Do: CHB-50 is", err)
+        self.assertEqual(fake.writes(), [])
+
+    def test_the_top_ticket_without_acceptance_criteria_waits_for_them(self) -> None:
+        for name, description in {"none": NOT_READY, "only Validating": doc("## Acceptance criteria (Validating)\n\n- Live.")}.items():
+            with self.subTest(name):
+                fake = transition_fake("To Do", {"To Do": ["CHB-12", "CHB-5"]}, description=description)
+                code, out, err = _run(["transition", "CHB-12", "In Progress"], fake)
+
+                self.assertEqual(code, 4)
+                self.assertEqual(out, "")
+                self.assertIn("CHB-12 has no acceptance criteria. Write them first:", err)
+                self.assertIn('factory/bin/jira section CHB-12 --heading "Acceptance criteria" --body-file FILE', err)
+                self.assertIn("ask the owner only for decisions that are the owner's", err)
+                self.assertEqual(fake.writes(), [])
+
+    def test_epics_and_tickets_with_open_dependencies_are_skipped_when_finding_the_top(self) -> None:
         fake = transition_fake(
             "To Do",
-            {"To Do": ["CHB-9", "CHB-49", "CHB-50", "CHB-12", "CHB-5"], "In Progress": ["CHB-91"]},
-            descriptions={
-                "CHB-49": doc("Depends on CHB-91.\n\n## Acceptance criteria\n\n- A test."),
-                "CHB-50": NOT_READY,
-            },
+            {"To Do": ["CHB-9", "CHB-49", "CHB-12", "CHB-5"], "In Progress": ["CHB-91"]},
+            descriptions={"CHB-49": doc("Depends on CHB-91.\n\n## Acceptance criteria\n\n- A test.")},
             epics=("CHB-9",),
         )
         code, _, _ = _run(["transition", "CHB-12", "In Progress"], fake)
-
         self.assertEqual(code, 0)
 
-    def test_a_ticket_that_is_not_ready_is_refused_with_the_reason(self) -> None:
-        cases = {
-            "no acceptance criteria": (NOT_READY, "no acceptance criteria"),
-            "open dependency": (doc("Depends on CHB-91.\n\nAcceptance criteria:\n\n- A test."), "it depends on open tickets: CHB-91"),
-        }
-        for name, (description, reason) in cases.items():
-            with self.subTest(name):
-                fake = transition_fake("To Do", {"In Review": ["CHB-91"]}, description=description)
-                code, _, err = _run(["transition", "CHB-12", "In Progress"], fake)
+        refused = transition_fake("To Do", {"To Do": ["CHB-9", "CHB-49", "CHB-5", "CHB-12"], "In Progress": ["CHB-91"]}, epics=("CHB-9",))
+        refused.routes[("POST", SEARCH)] = keys_answer(
+            {"To Do": ["CHB-9", "CHB-49", "CHB-5", "CHB-12"], "In Progress": ["CHB-91"]},
+            {"CHB-49": doc("Depends on CHB-91.")},
+            ("CHB-9",),
+        )
+        code, _, err = _run(["transition", "CHB-12", "In Progress"], refused)
+        self.assertEqual(code, 4)
+        self.assertIn("CHB-12 is not the top ticket of To Do: CHB-5 is", err)
 
-                self.assertEqual(code, 4)
-                self.assertIn(f"CHB-12 is not ready: {reason}", err)
-                self.assertEqual(fake.writes(), [])
+    def test_a_ticket_with_an_open_dependency_is_refused_with_the_reason(self) -> None:
+        description = doc("Depends on CHB-91.\n\nAcceptance criteria:\n\n- A test.")
+        fake = transition_fake("To Do", {"In Review": ["CHB-91"]}, description=description)
+        code, _, err = _run(["transition", "CHB-12", "In Progress"], fake)
+
+        self.assertEqual(code, 4)
+        self.assertIn("CHB-12 cannot start: it depends on open tickets: CHB-91", err)
+        self.assertEqual(fake.writes(), [])
 
     def test_a_dependency_missing_from_the_open_search_does_not_count(self) -> None:
         """Done and Discarded are both in the Done category, so the open search leaves them out."""
@@ -540,17 +565,19 @@ class TopTicketTest(unittest.TestCase):
                 self.assertEqual(code, 0)
                 self.assertNotIn(OPEN_JQL, searches_before_the_move(fake))
 
-    def test_an_epic_is_refused_as_not_ready(self) -> None:
+    def test_an_epic_is_refused(self) -> None:
         fake = transition_fake("To Do", epics=("CHB-12",))
         code, _, err = _run(["transition", "CHB-12", "In Progress"], fake)
 
         self.assertEqual(code, 4)
-        self.assertIn("CHB-12 is not ready: it is an epic", err)
+        self.assertIn("CHB-12 cannot start: it is an epic", err)
         self.assertEqual(fake.writes(), [])
 
-    def test_a_stale_search_answer_does_not_hide_a_ready_top_ticket(self) -> None:
-        """The fresh read says ready; the search still holds the old description."""
-        fake = transition_fake("To Do", {"To Do": ["CHB-12", "CHB-5"]}, descriptions={"CHB-12": NOT_READY})
+    def test_the_fresh_read_wins_over_a_stale_search_answer(self) -> None:
+        """The search still holds an old description with an open dependency; the fresh read has none."""
+        fake = transition_fake(
+            "To Do", {"To Do": ["CHB-12", "CHB-5"], "In Review": ["CHB-91"]}, descriptions={"CHB-12": doc("Depends on CHB-91.")}
+        )
         fake.routes[("GET", "/rest/api/3/issue/CHB-12?fields=status,description")] = issue_in("To Do", READY)
         code, _, _ = _run(["transition", "CHB-12", "In Progress"], fake)
 
@@ -577,19 +604,27 @@ class TopTicketTest(unittest.TestCase):
 
 
 class FreeSlotTest(unittest.TestCase):
-    """CHB-125: after a move, print the free In Progress slots and the next ready tickets."""
+    """CHB-125: after a move, print the free In Progress slots and the next top tickets."""
 
-    def test_a_move_that_leaves_a_free_slot_names_the_top_ready_non_epic_ticket(self) -> None:
+    def test_a_move_that_leaves_a_free_slot_names_the_top_non_epic_ticket(self) -> None:
         fake = transition_fake(
             "In Progress",
-            {"In Progress": ["CHB-1", "CHB-2"], "To Do": ["CHB-9", "CHB-50", "CHB-123", "CHB-7"]},
-            descriptions={"CHB-50": NOT_READY},
+            {"In Progress": ["CHB-1", "CHB-2", "CHB-91"], "To Do": ["CHB-9", "CHB-50", "CHB-123", "CHB-7"]},
+            descriptions={"CHB-50": doc("Depends on CHB-91.")},
             epics=("CHB-9",),
+            board=board_config(**{**BOARD_LIMITS, "In Progress": {"min": 1, "max": 4}}),
         )
         code, out, _ = _run(["transition", "CHB-12", "In Review"], fake)
 
         self.assertEqual(code, 0)
-        self.assertEqual(out.splitlines(), ["CHB-12 -> In Review", "In Progress 2/3: 1 slot free; next: CHB-123"])
+        self.assertEqual(out.splitlines(), ["CHB-12 -> In Review", "In Progress 3/4: 1 slot free; next: CHB-123"])
+
+    def test_a_ticket_without_acceptance_criteria_is_next_and_marked(self) -> None:
+        fake = transition_fake("In Progress", {"In Progress": ["CHB-1"], "To Do": ["CHB-122", "CHB-7"]}, descriptions={"CHB-122": NOT_READY})
+        code, out, _ = _run(["transition", "CHB-12", "In Review"], fake)
+
+        self.assertEqual(code, 0)
+        self.assertIn("In Progress 1/3: 2 slots free; next: CHB-122 (needs acceptance criteria), CHB-7", out.splitlines())
 
     def test_one_next_ticket_per_free_slot(self) -> None:
         fake = transition_fake("In Progress", {"In Progress": ["CHB-1"], "To Do": ["CHB-123", "CHB-7", "CHB-8"]})
@@ -598,12 +633,14 @@ class FreeSlotTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("In Progress 1/3: 2 slots free; next: CHB-123, CHB-7", out.splitlines())
 
-    def test_no_ready_ticket_says_so(self) -> None:
-        fake = transition_fake("In Progress", {"In Progress": ["CHB-1"], "To Do": ["CHB-50"]}, descriptions={"CHB-50": NOT_READY})
+    def test_no_startable_ticket_says_so(self) -> None:
+        fake = transition_fake(
+            "In Progress", {"In Progress": ["CHB-1"], "In Review": ["CHB-91"], "To Do": ["CHB-50"]}, descriptions={"CHB-50": doc("Depends on CHB-91.")}
+        )
         code, out, _ = _run(["transition", "CHB-12", "In Review"], fake)
 
         self.assertEqual(code, 0)
-        self.assertIn("In Progress 1/3: 2 slots free; next: no ready ticket in To Do", out.splitlines())
+        self.assertIn("In Progress 1/3: 2 slots free; next: nothing to start in To Do", out.splitlines())
 
     def test_the_started_ticket_counts_and_is_not_next(self) -> None:
         fake = transition_fake("To Do", {"In Progress": ["CHB-1"], "To Do": ["CHB-12", "CHB-123"]})

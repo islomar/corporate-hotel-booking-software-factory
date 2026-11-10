@@ -42,11 +42,12 @@ A WIP limit stops pulling new work. It never stops the board from recording what
 - Moves within one column, out of a column, or into a column without a max are never blocked.
 - The max values live on the board only. This document does not repeat them.
 - Min: a signal only. When a move leaves a column below its min, the wrapper prints "In Progress is below its minimum (0/1)".
-- Free slots: after every move, the wrapper prints the free In Progress slots and the next ready tickets of To Do, one per free slot,
+- Free slots: after every move between columns, the wrapper prints the free In Progress slots and the next top tickets of To Do, one per free slot,
   for example `In Progress 2/3: 1 slot free; next: CHB-123` (CHB-125).
+  A ticket without acceptance criteria is marked: `next: CHB-122 (needs acceptance criteria)`.
   It prints no such line while In Progress, In Review or Validating is at its max: starting is blocked then.
 - Pulling work: the agent fills In Progress up to its max, one agent per ticket, in parallel where it can (owner rule, 2026-11-10).
-  It pulls the top ready tickets of To Do in rank order and needs no go per ticket. The owner can say stop at any time.
+  It pulls the top tickets of To Do in rank order and needs no go per ticket. The owner can say stop at any time.
   Finishing comes first: before it pulls a ticket, the agent drives what it can in Validating, In Review and In Progress (live checks, review fixes, owner steps).
 - Owner override: the owner moves the ticket in the Jira UI and writes why in a comment on the ticket.
 
@@ -70,15 +71,19 @@ Meaning: accepted work that nobody has started.
 
 - Enter: the ticket has a summary, a description and a parent epic.
 - Leave to In Progress: someone starts working on it. Before that, the ticket has acceptance criteria that can be checked, and nothing it depends on is open.
-- Ready: the description has a line that starts with "Acceptance criteria" (a heading or a paragraph, any case, bold allowed) with text under it,
-  and no ticket on a "Depends on" line is open. A "Depends on" line counts the CHB keys in its first sentence,
-  and the list under it when the line ends with ":". Open means a status outside the Done category; Done and Discarded are closed.
-  Write dependencies on such a line, so the check sees them.
-  A dependency in prose ("the owner's go on ...") is not checked: rank that ticket lower until the dependency holds.
-- Top ticket: an agent picks the top ticket of To Do: the highest-ranked ticket that is ready and is not an epic.
+- Top ticket: an agent picks the top ticket of To Do: the highest-ranked ticket that is not an epic and has no open ticket on a "Depends on" line.
   To start another ticket, rank it to the top first, with the owner's go.
-  `factory/bin/jira transition <key> "In Progress"` from To Do exits 4 when `<key>` is not ready or is not that top ticket (CHB-125).
-  The message names the top ticket and the rank command. A move back into In Progress from another status is not checked.
+- Dependencies: a "Depends on" line counts the CHB keys in its first sentence,
+  and the list under it when the line ends with ":". Open means a status outside the Done category; Done and Discarded are closed.
+  Write every dependency on such a line, also an owner decision: make it a ticket and name it (for example `Depends on: CHB-141`).
+  A dependency in prose is not checked.
+- Acceptance criteria: a line that starts with "Acceptance criteria" (a heading or a paragraph, any case, bold allowed) with text under it.
+  "Acceptance criteria (Validating)" does not count. A top ticket without them is not skipped: the agent writes them
+  (`factory/bin/jira section CHB-<n> --heading "Acceptance criteria" --body-file FILE`), derived from the ticket, its epic and the ADRs.
+  It asks the owner only for decisions that are the owner's (owner rule, 2026-11-10).
+- `factory/bin/jira transition <key> "In Progress"` from To Do exits 4 when `<key>` is not that top ticket, has an open dependency,
+  or is the top ticket without acceptance criteria (CHB-125). The message names the top ticket and the next step.
+  A move back into In Progress from another status is not checked.
 - WIP limit: none.
 
 ### In Progress
