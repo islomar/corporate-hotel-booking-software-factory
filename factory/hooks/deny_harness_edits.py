@@ -140,23 +140,25 @@ def _git(folder: str, *args: str) -> str | None:
 
 
 def worktree_of(path: str) -> tuple[str, str, str] | None:
-    """(real path, worktree top, branch) for the path's own git worktree, or None outside git."""
-    existing, rest = path, ""
-    while not posixpath.isdir(existing):
-        existing, tail = posixpath.split(existing)
-        rest = posixpath.join(tail, rest) if rest else tail
-    real = posixpath.realpath(existing)
-    toplevel = _git(real, "rev-parse", "--show-toplevel")
+    """(real path, worktree top, branch) for the path's own git worktree, or None outside git.
+
+    The real path resolves every symlink, also the file's own, so a link into a harness folder counts.
+    """
+    real = posixpath.realpath(path)
+    folder = real
+    while not posixpath.isdir(folder):
+        folder = posixpath.dirname(folder)
+    toplevel = _git(folder, "rev-parse", "--show-toplevel")
     if not toplevel:
         return None
-    branch = _git(real, "branch", "--show-current") or ""
-    return posixpath.join(real, rest) if rest else real, posixpath.realpath(toplevel), branch
+    branch = _git(folder, "branch", "--show-current") or ""
+    return real, posixpath.realpath(toplevel), branch
 
 
 def reason(path: str, *, cwd: str) -> str | None:
     """Why the edit is denied, or None when it may go ahead."""
     path = posixpath.normpath(posixpath.join(cwd, path))
-    if not may_be_harness(path):
+    if not may_be_harness(path) and not may_be_harness(posixpath.realpath(path)):
         return None
     found = worktree_of(path)
     if not found:

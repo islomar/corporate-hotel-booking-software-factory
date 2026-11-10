@@ -306,13 +306,15 @@ The hook denies the edit when all of these hold:
 
 These pass: tickets of other epics, tickets without a parent, `main`, `worktree-agent-...` and any other branch (the branch name hook guards names), and paths outside a git repository.
 A file under `<repo>/.claude/worktrees/agent-x/` belongs to that worktree, so `backend/` files there pass.
+The hook resolves symlinks first, also the file's own, so a link into a harness folder counts as the harness path.
 
 The hook calls `factory/bin/jira view CHB-<n>` only for a harness path, with a 20-second timeout.
 It caches the parent per branch in `<temp dir>/chb-harness-epics-<uid>/<branch>.json`. The env var `CHB_HARNESS_EPIC_CACHE_DIR` overrides the folder.
 A folder that is a symlink, belongs to another user or is open to others is not used. Cache files open without following symlinks.
 The cache never expires. If a ticket moves to another epic, delete its branch file.
 If the Jira read fails (no token, timeout, HTTP error), the hook denies the edit and names `factory/bin/jira view CHB-<n>`. A failure is not cached.
-Writes through Bash are not covered.
+Writes through Bash are not covered. The agent's user can write the cache folder, so a planted cache file also gets past the hook.
+The hook stops accidents, not a deliberate bypass.
 
 ## Hook: no secrets in the agent's context
 
@@ -320,7 +322,9 @@ Writes through Bash are not covered.
 `factory/bin/as-agent` and `factory/bin/jira` read their token inside their own process, so the agent never needs a secret. `.env.example` lists the variable names.
 
 Secret paths: a path with a `.ssh` folder (`~/.ssh/**`), `*.pem`, `*.key`, `.env` and `.env.*` except `.env.example`, and a path with `.config/op` (`~/.config/op/**`).
-`~`, `$HOME` and `${HOME}` expand. A glob such as `*.pem` or `.env*` counts. `.envrc` and a bare `.key` (a `jq` filter) do not.
+`~`, `$HOME` and `${HOME}` expand. A glob that can match one counts: `*.pem`, `x.k*`, `.env*`, `.e*`, `~/.ss*/id_rsa`.
+A glob that does not start with `.` never matches `.ssh` or `.env`, so `grep -rn TODO *` passes. `*.*` passes too.
+`.envrc`, a bare `.key` and a hidden `.x.key` do not count: they read like `jq` filters such as `.foo.key`.
 
 The hook exits 2 for:
 
@@ -337,7 +341,8 @@ These pass even with a secret path: `ls`, `stat`, `test`, `[`, `chmod`, `chown`,
 
 Known false denials: `grep .env docs/` (the pattern reads as a path) and a single-quoted `'$(cat .env)'`.
 A heredoc line that names a secret path, such as a line of a commit message, is denied too. Write such a message to a file with the Write tool.
-Known gaps: a path built at run time, `cd ~/.ssh` followed by a relative name, a script that reads the file, the Grep tool, and `op` subcommands other than `read`.
+Known gaps: a path built at run time, `cd ~/.ssh` followed by a relative name, a symlink to a secret file, a script that reads the file,
+a hidden key file such as `.tls.key`, the Grep tool, and `op` subcommands other than `read`.
 Like the other Bash hooks, it reads the command text only, denies on unreadable input or an internal error, and lets the call run if `python3` cannot start.
 
 ## Automated PR review (shadow mode)

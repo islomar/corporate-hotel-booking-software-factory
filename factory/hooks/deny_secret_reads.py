@@ -34,6 +34,7 @@ import os
 import posixpath
 import re
 import sys
+from fnmatch import fnmatchcase
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -49,6 +50,7 @@ METADATA = {"ls", "stat", "test", "[", "chmod", "chown", "mkdir", "touch", "rm",
 SHELLS = {"bash", "sh", "zsh", "dash", "eval"}  # their arguments are commands
 KEY_FILE_PROGRAMS = {"ssh", "scp"}
 KEY_FILE_OPTIONS = {"-i", "-F"}
+SSH_VALUE_OPTIONS = {"-o", "-p", "-P", "-l", "-J", "-L", "-R", "-D", "-E", "-c", "-b", "-m", "-O", "-Q", "-S", "-W", "-w", "-e", "-B"}
 SUBSTITUTION = re.compile(r"\$\(([^()]*)\)|`([^`]*)`")
 MAX_DEPTH = 4
 OP_VALUE_OPTIONS = {"--account", "--config", "--session", "--encoding", "--format", "--cache"}
@@ -66,19 +68,34 @@ def _expand(word: str, home: str) -> str:
     return word
 
 
+def _dot_name(part: str, name_: str) -> bool:
+    """The part is the hidden name, or a glob that starts with `.` and matches it (`.ss*`, `.e*`)."""
+    return part == name_ or (part.startswith(".") and any(c in part for c in GLOB) and fnmatchcase(name_, part))
+
+
+def _key_file(base: str) -> bool:
+    """`x.pem`, `x.key`, or a glob whose extension matches one (`*.pe?`, `x.k*`); not `*.*` or a hidden `.x.key`."""
+    stem, dot, ext = base.rpartition(".")
+    if not dot or not stem or stem.startswith(".") or ext == "*":
+        return False
+    return any(ext == s[1:] or (any(c in ext for c in GLOB) and fnmatchcase(s[1:], ext)) for s in KEY_SUFFIXES)
+
+
 def secret_path(word: str, *, home: str) -> bool:
     """True when the word names a secret file or folder, or a glob over them."""
     parts = [p for p in _expand(word, home).split("/") if p]
     if not parts:
         return False
-    if ".ssh" in parts or any(a == ".config" and b == "op" for a, b in zip(parts, parts[1:])):
+    if any(_dot_name(p, ".ssh") for p in parts):
+        return True
+    if any(_dot_name(a, ".config") and (b == "op" or fnmatchcase("op", b)) for a, b in zip(parts, parts[1:])):
         return True
     base = parts[-1]
-    if any(base.endswith(s) and len(base) > len(s) and not base.startswith(".") for s in KEY_SUFFIXES):
+    if _key_file(base):
         return True
     if base == ENV_EXAMPLE:
         return False
-    return base == ".env" or base.startswith(".env.") or (base.startswith(".env") and len(base) > 4 and base[4] in GLOB)
+    return _dot_name(base, ".env") or base.startswith(".env.")
 
 
 def _candidates(word: str) -> list[str]:
@@ -110,18 +127,25 @@ def _vault_lookup(words: list[str]) -> bool:
 
 
 def _without_key_files(args: list[str]) -> list[str]:
-    """ssh and scp arguments without `-i <key>`, `-F <config>` and `-o IdentityFile=<key>`."""
+    """ssh and scp arguments without `-i <key>`, `-F <config>` and `-o IdentityFile=<key>` before the first operand.
+
+    Words from the first operand on (the host and the remote command) stay, options or not.
+    """
     out: list[str] = []
     i = 0
     while i < len(args):
         arg = args[i]
+        if not arg.startswith("-"):
+            return out + args[i:]
         if arg in KEY_FILE_OPTIONS or (arg == "-o" and args[i + 1 : i + 2] and args[i + 1].lower().startswith("identityfile")):
             i += 2
             continue
-        if arg[:2] in KEY_FILE_OPTIONS or arg.lower().startswith("-oidentityfile"):
-            i += 1
+        if arg in SSH_VALUE_OPTIONS:
+            out.extend(args[i : i + 2])
+            i += 2
             continue
-        out.append(arg)
+        if arg[:2] not in KEY_FILE_OPTIONS and not arg.lower().startswith("-oidentityfile"):
+            out.append(arg)
         i += 1
     return out
 
@@ -178,7 +202,7 @@ def _decide(raw: str) -> int:
     if isinstance(tool_input.get("command"), str):
         why = bash_reason(tool_input["command"], home=home)
     elif isinstance(tool_input.get("file_path"), str):
-        cwd = event.get("cwd") if isinstance(event.get("cwd"), str) else os.getcwd()
+        cwd = event.get("cwd") if isinstance(event.get("cwd"), str) and event.get("cwd") else os.getcwd()
         why = read_reason(tool_input["file_path"], home=home, cwd=cwd)
     if why:
         print(why, file=sys.stderr)

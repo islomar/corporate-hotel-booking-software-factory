@@ -56,8 +56,6 @@ class TicketTest(unittest.TestCase):
             with self.subTest(branch):
                 self.assertIsNone(hook.ticket_of(branch))
 
-    def test_the_product_epics_are_the_owner_list(self) -> None:
-        self.assertEqual(hook.PRODUCT_EPICS, frozenset({"CHB-4", "CHB-14", "CHB-19", "CHB-50"}))
 
 
 class JiraParentTest(unittest.TestCase):
@@ -205,6 +203,26 @@ class RepositoryTest(unittest.TestCase):
     def test_the_worktree_branch_decides_for_its_own_harness_files(self) -> None:
         self.assertIsNotNone(hook.reason(str(self.worktree / ".claude" / "settings.json"), cwd=str(self.main)))
         self.lookup.assert_called_once_with("CHB-21-other", "CHB-21")
+
+    def test_every_product_epic_denies(self) -> None:
+        for epic in ["CHB-4", "CHB-14", "CHB-19", "CHB-50"]:
+            with self.subTest(epic):
+                self.lookup.return_value = epic
+                self.assertIsNotNone(hook.reason(str(self.main / "factory" / "x.py"), cwd=str(self.main)))
+
+    def test_a_symlinked_folder_into_the_harness_is_denied(self) -> None:
+        (self.main / "factory").mkdir()
+        (self.main / "docs").mkdir()
+        (self.main / "docs" / "link").symlink_to(self.main / "factory")
+
+        self.assertIsNotNone(hook.reason(str(self.main / "docs" / "link" / "x.py"), cwd=str(self.main)))
+
+    def test_a_symlinked_file_into_the_harness_is_denied(self) -> None:
+        (self.main / ".github").mkdir()
+        (self.main / ".github" / "ci.yml").write_text("on: push\n")
+        (self.main / "ci.yml").symlink_to(self.main / ".github" / "ci.yml")
+
+        self.assertIsNotNone(hook.reason("ci.yml", cwd=str(self.main)))
 
     def test_a_factory_ticket_passes(self) -> None:
         self.lookup.return_value = "CHB-27"

@@ -37,6 +37,7 @@ OTHER_PATHS = [
     "/repo/.config/opt/x",
     "/repo/sshd.md",
     "/repo/.key",
+    "/repo/.tls.key",  # known gap: a hidden key file reads like a jq filter such as `.foo.key`
 ]
 
 DENIED = [
@@ -74,6 +75,13 @@ DENIED = [
     "op --account my read op://vault/item/field",
     "TOKEN=$(op read op://v/i/f) && echo ok",
     "rtk proxy op read op://v/i/f",
+    "cat .e*",
+    "cat .en?",
+    "cat ~/.ss*/id_rsa",
+    "cat ~/.config/o?/config",
+    "cat certs/*.pe?",
+    "cat tls/x.k*",
+    "ssh -i ~/.ssh/k host grep -F ~/.ssh/config",
     'echo "$(cat .env)"',
     'X="$(cat ~/.ssh/id_rsa)"; echo $X',
     "echo `cat ~/.ssh/id_rsa`",
@@ -98,8 +106,14 @@ ALLOWED = [
     "ssh -i ~/.ssh/id_ed25519 host",
     "ssh -i~/.ssh/id_ed25519 -F ~/.ssh/config host uptime",
     "ssh -o IdentityFile=~/.ssh/id_ed25519 host",
+    "ssh -o StrictHostKeyChecking=no -p 2222 -i ~/.ssh/id_ed25519 host uptime",
     "scp -i ~/.ssh/id_ed25519 build.tar host:/srv/",
     'echo "$(date)"',
+    "grep -rn TODO *",
+    "cat *.md",
+    "cat *.*",
+    "wc -l src/*",
+    "cat .github/*.yml",
     "bash -c 'make check'",
     "ssh-add ~/.ssh/id_ed25519",
     "echo .env >> .gitignore",
@@ -150,6 +164,12 @@ class ReadTest(unittest.TestCase):
     def test_a_relative_path_resolves_against_the_working_directory(self) -> None:
         self.assertIsNotNone(hook.read_reason("id_rsa", home=HOME, cwd=f"{HOME}/.ssh"))
         self.assertIsNone(hook.read_reason("id_rsa", home=HOME, cwd="/repo"))
+
+    def test_an_empty_working_directory_falls_back_to_the_process_folder(self) -> None:
+        with mock.patch.object(hook.os, "getcwd", return_value=f"{HOME}/.ssh"):
+            code, _, _ = _main(json.dumps({"cwd": "", "tool_input": {"file_path": "id_rsa"}}))
+
+        self.assertEqual(code, 2)
 
     def test_other_reads_are_allowed(self) -> None:
         for path in [".env.example", "README.md", "/repo/factory/hooks/x.py"]:
