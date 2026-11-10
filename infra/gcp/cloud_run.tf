@@ -40,6 +40,20 @@ resource "google_cloud_run_v2_service" "chb" {
         name  = "GOOGLE_CLOUD_REGION"
         value = var.region
       }
+      # Sign-in (ADR-50e4, CHB-20). The backend checks ID tokens against this project and
+      # serves the public web config of the Firebase JS SDK at /auth-config.json.
+      env {
+        name  = "FIREBASE_PROJECT_ID"
+        value = var.project_id
+      }
+      env {
+        name  = "FIREBASE_API_KEY"
+        value = google_apikeys_key.browser.key_string
+      }
+      env {
+        name  = "FIREBASE_AUTH_DOMAIN"
+        value = local.firebase_auth_domain
+      }
 
       ports {
         name           = "http1"

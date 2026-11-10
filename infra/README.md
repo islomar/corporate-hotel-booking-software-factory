@@ -5,6 +5,7 @@
 - [Infrastructure](#infrastructure)
   - [Use](#use)
     - [Destroy and replace](#destroy-and-replace)
+  - [Sign-in](#sign-in)
   - [Rules](#rules)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -15,7 +16,7 @@ Terraform manages the infrastructure. See ADR-aae8.
 
 | Folder | Scope | Credentials | State |
 |---|---|---|---|
-| `gcp/` | Google Cloud: APIs, registry, service accounts, Workload Identity, budget, Cloud Run | your gcloud login (configuration `chb`) | `gs://chb-factory-a92932-tfstate/gcp` |
+| `gcp/` | Google Cloud: APIs, registry, service accounts, Workload Identity, budget, Cloud Run, Identity Platform (email and password sign-in, browser API key) | your gcloud login (configuration `chb`) | `gs://chb-factory-a92932-tfstate/gcp` |
 | `github/` | Repository settings, Actions variables and permissions (allow list, SHA pinning), the `main` ruleset, deployment environments, the Dependabot labels, the Jira autolink, and guards for what it cannot manage (`guards.tf`) | your `gh auth token` (admin) | `gs://chb-factory-a92932-tfstate/github` |
 
 The state bucket was created by hand (CHB-10) and is imported into `gcp/`.
@@ -58,6 +59,28 @@ make infra-apply ALLOW_DESTROY='github_repository_environment.env["staging"],goo
 ```
 
 The list must match exactly. A missing or an extra address fails.
+
+## Sign-in
+
+`gcp/identity_platform.tf` turns on Identity Platform with email and password sign-in (ADR-50e4, CHB-20).
+Phone sign-in and SMS MFA stay off: Google charges per SMS.
+It creates a browser API key, restricted to the sign-in APIs and to the app's pages.
+Cloud Run gets the key and the auth domain as environment variables; the backend serves them at `/auth-config.json`.
+The key is public by design: it names the project, it grants nothing.
+
+The Google provider is not in Terraform: its resource needs the OAuth client secret, and Terraform would store it in the state.
+The owner creates the OAuth client and adds the provider in the console. The steps are in CHB-20.
+
+Until `make infra-apply` has run, the app runs signed out and every closed `/api` route answers 401.
+
+To sign in from `make dev` against the production project:
+
+```sh
+export FIREBASE_PROJECT_ID=chb-factory-a92932
+export FIREBASE_AUTH_DOMAIN=chb-factory-a92932.firebaseapp.com
+export FIREBASE_API_KEY="$(terraform -chdir="$HOME/workspace/corporate-hotel-booking-software-factory/infra/gcp" output -json firebase_web_config | jq -r .apiKey)"
+make -C ~/workspace/corporate-hotel-booking-software-factory dev
+```
 
 ## Rules
 

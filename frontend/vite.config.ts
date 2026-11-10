@@ -9,7 +9,8 @@ export default defineConfig({
   server: {
     host: true,
     port: 5173,
-    proxy: { "/api": backendUrl },
+    // /auth-config.json: the Firebase web config, served by the backend (CHB-20).
+    proxy: { "/api": backendUrl, "/auth-config.json": backendUrl },
   },
   test: {
     environment: "jsdom",

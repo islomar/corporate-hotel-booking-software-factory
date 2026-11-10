@@ -23,8 +23,16 @@ from opentelemetry.sdk.trace.export import SpanExportResult
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from chb.app import app_from_env, create_app
+from chb.auth import User
 from chb.logs import JsonFormatter, configure_logging
 from chb.telemetry import FlushTelemetry, Telemetry, telemetry_from_env, uses_google_auth
+
+
+class AcceptAny:
+    """A verifier for tests that are about something else than sign-in."""
+
+    def verify(self, token: str) -> User:
+        return User(uid="test-user", email=None)
 
 
 @pytest.fixture
@@ -72,13 +80,15 @@ def test_request_produces_a_span_with_the_route(
 def test_log_line_during_a_request_carries_the_trace_id(
     telemetry: Telemetry, spans: InMemorySpanExporter, log_lines: io.StringIO
 ) -> None:
-    app = create_app(telemetry=telemetry)
+    app = create_app(telemetry=telemetry, verifier=AcceptAny())
 
     @app.get("/api/log-something")
     def log_something() -> None:  # pyright: ignore[reportUnusedFunction]
         logging.getLogger("chb.test").warning("hello")
 
-    TestClient(telemetry.wrap(app)).get("/api/log-something")
+    TestClient(telemetry.wrap(app)).get(
+        "/api/log-something", headers={"Authorization": "Bearer any"}
+    )
 
     server_span = next(s for s in spans.get_finished_spans() if s.parent is None)
     assert server_span.context is not None

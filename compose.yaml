@@ -13,6 +13,11 @@ services:
       OTEL_LOGS_EXPORTER: otlp
       # Local only: export metrics after at most 5 s instead of 60 s.
       OTEL_METRIC_EXPORT_INTERVAL: "5000"
+      # Sign-in (CHB-20). Unset: the app runs signed out and closed routes answer 401.
+      # To sign in locally, export them first; see infra/README.md.
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-}
+      FIREBASE_API_KEY: ${FIREBASE_API_KEY:-}
+      FIREBASE_AUTH_DOMAIN: ${FIREBASE_AUTH_DOMAIN:-}
     volumes:
       - ./backend:/app/backend
       - backend-venv:/venv
@@ -52,6 +57,10 @@ services:
       context: .
       args:
         APP_VERSION: local
+    environment:
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-}
+      FIREBASE_API_KEY: ${FIREBASE_API_KEY:-}
+      FIREBASE_AUTH_DOMAIN: ${FIREBASE_AUTH_DOMAIN:-}
     ports: ["8080:8080"]
 
 volumes:
