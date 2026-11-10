@@ -1,0 +1,60 @@
+[
+  {
+    "number": 70,
+    "comments": [
+      {"id": 700, "user": {"login": "chb-factory-reviewer[bot]"}, "body": "Pass\n\n<!-- chb-review reviewed:a70 -->",
+       "reactions": [{"user": {"login": "islomar"}, "content": "+1"}]}
+    ]
+  },
+  {
+    "number": 71,
+    "comments": [
+      {"id": 710, "user": {"login": "chb-factory-reviewer[bot]"}, "body": "Pass\n\n<!-- chb-review reviewed:a71 -->",
+       "reactions": [{"user": {"login": "islomar"}, "content": "-1"}, {"user": {"login": "islomar"}, "content": "eyes"}]}
+    ]
+  },
+  {
+    "number": 72,
+    "comments": [
+      {"id": 720, "user": {"login": "chb-factory-reviewer[bot]"}, "body": "Fail\n\n<!-- chb-review reviewed:a72 -->",
+       "reactions": []}
+    ]
+  },
+  {
+    "number": 73,
+    "comments": [
+      {"id": 730, "user": {"login": "chb-factory-reviewer[bot]"}, "body": "Pass\n\n<!-- chb-review reviewed:a73 -->",
+       "reactions": [{"user": {"login": "someone-else"}, "content": "-1"}, {"user": {"login": "chb-factory-agent[bot]"}, "content": "+1"}]}
+    ]
+  },
+  {
+    "number": 74,
+    "comments": []
+  },
+  {
+    "number": 75,
+    "comments": [
+      {"id": 750, "user": {"login": "mallory"}, "body": "Pass\n\n<!-- chb-review reviewed:a75 -->",
+       "reactions": [{"user": {"login": "islomar"}, "content": "+1"}]},
+      {"id": 751, "user": {"login": "chb-factory-reviewer[bot]"}, "body": "A comment without the marker.",
+       "reactions": [{"user": {"login": "islomar"}, "content": "+1"}]}
+    ]
+  },
+  {
+    "number": 76,
+    "comments": [
+      {"id": 760, "user": {"login": "chb-factory-reviewer[bot]"}, "body": "Fail\n\n<!-- chb-review reviewed:a76 -->",
+       "reactions": [{"user": {"login": "islomar"}, "content": "-1"}]},
+      {"id": 761, "user": {"login": "islomar"}, "body": "It missed the null check.", "reactions": []},
+      {"id": 762, "user": {"login": "chb-factory-reviewer[bot]"}, "body": "Pass\n\n<!-- chb-review reviewed:b76 -->",
+       "reactions": [{"user": {"login": "islomar"}, "content": "+1"}]}
+    ]
+  },
+  {
+    "number": 77,
+    "comments": [
+      {"id": 770, "user": {"login": "chb-factory-reviewer[bot]"}, "body": "Pass\n\n<!-- chb-review reviewed:a77 -->",
+       "reactions": [{"user": {"login": "islomar"}, "content": "+1"}, {"user": {"login": "islomar"}, "content": "-1"}]}
+    ]
+  }
+]

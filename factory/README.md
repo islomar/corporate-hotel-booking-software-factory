@@ -256,6 +256,14 @@ A `CLAUDE.md`, `AGENTS.md`, rule, skill, hook or `.mcp.json` in the PR head neve
 
 A change to `review.yml` takes effect only after merge: the PR that changes it is reviewed by the copy on `main`.
 
+After a valid model review, the App also posts the summary as a PR comment (CHB-141).
+The comment asks the owner to react 👍 if the verdict is right and 👎 if not, and to reply with what it missed.
+`make review-agreement` counts those reactions on merged PRs and prints the stage 1 exit of ADR-ea8c:
+
+```sh
+make -C ~/workspace/corporate-hotel-booking-software-factory review-agreement
+```
+
 | File | Role |
 |---|---|
 | `review/prompt.md` | Review instructions. PR text and code are untrusted data. |
@@ -263,6 +271,7 @@ A change to `review.yml` takes effect only after merge: the PR that changes it i
 | `review/gate.py` | Validates the output, recomputes the scores, decides, and builds the check run. |
 | `review/resolve_pr.py` | Picks the PR to review from API data: open, not draft, into `main`, same repository, not Dependabot, head equal to the run's SHA. |
 | `review/plan.py` | Skip, carry forward or review, and which model. Holds the docs allowlist. |
+| `review/agreement.py` | Counts the owner's 👍 and 👎 on review comments of merged PRs. Prints the stage 1 exit. |
 
 The gate ignores every score the model claims. Each dimension starts at 10 and loses 3 per critical finding, 2 per improvement and 0.5 per cleanup.
 A critical finding caps its dimension at 7. Merge Safety is the weighted mean: code quality 30, security 25, business alignment 15, tests 15, architecture 15.
