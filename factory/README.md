@@ -334,6 +334,10 @@ The hook reads the column minimums from the board and the open tickets as the ag
 - In Progress is below its minimum and Ready has a ticket that can start. The reason names the top ticket and the `transition` command.
   It stays quiet while In Progress, In Review or Validating is at its max.
 - Ready is below its minimum (CHB-164). No reply text passes this; the reason lists the refill candidates, as `transition` does.
+- A Validating ticket has a due item and the agent account has no comment on it from the current day (CHB-163). "Due" is as `validating_sweep.py` defines it
+  (CHB-140): the earliest absolute date of a "When:" line has passed. The day is the Europe/Madrid day. The reason names each ticket and each due item.
+  Items not yet due, "When:" lines without a date and tickets without the section never block. Comments are read only for tickets with a due item, through the same Jira client.
+  A failed comment read prints one line and skips this check; the WIP checks still run. To pass: check the item in the live system and comment the evidence with `factory/bin/jira comment`.
 
 It fails open with one line on stderr when Jira or 1Password cannot be reached. It refuses once per session for the same findings: the second stop with the same findings passes
 (state in `<temp dir>/chb-wip-minimums-<uid>/`, folder override `CHB_WIP_MINIMUMS_STATE_DIR`). Like the other hooks it is a guardrail: it reads the board, not the reply text (CHB-164).
@@ -397,7 +401,7 @@ The temp folder follows `TMPDIR`, so a session with another `TMPDIR` keeps its s
 
 ## Hook: no harness edits in feature tickets
 
-`.claude/settings.json` runs `factory/hooks/deny_harness_edits.py` before every Write, Edit, MultiEdit and NotebookEdit call (CHB-30).
+`.claude/settings.json` runs `factory/hooks/deny_harness_edits.py` before every Write, Edit, MultiEdit, NotebookEdit and Bash call (CHB-30, Bash in CHB-165).
 CLAUDE.md: do not edit `.claude/`, `factory/` or `.github/` as part of a feature ticket.
 
 The hook denies the edit when all of these hold:
@@ -416,7 +420,26 @@ A folder that is a symlink, belongs to another user or is open to others is not 
 The cache never expires. If a ticket moves to another epic, delete its branch file.
 If the Jira read fails (no token, timeout, HTTP error), the hook denies the edit and names `factory/bin/jira view CHB-<n>`. A failure is not cached.
 If `git` times out (10 seconds) or does not start, the hook denies an edit of a harness path and says so (CHB-152). Other paths never call `git`.
-Writes through Bash are not covered. The agent's user can write the cache folder, so a planted cache file also gets past the hook.
+A Bash command is parsed by `factory/hooks/harness_bash_writes.py` for the paths it may write, and each path gets the verdict of an Edit of that path (same reason text).
+Read:
+
+- output redirections (`>`, `>>`, `>|`, `&>`, `2>`), `tee`, `sed -i` and `perl -i`;
+- the destination of `cp`, `install`, `ln` and `rsync`, and every operand of `mv`, `rm`, `rmdir`, `touch`, `mkdir`, `truncate` and `dd of=`;
+- `cd` before any of them, `bash -c '...'` and shell here-documents;
+- python, node, ruby, perl or php code that calls a write function and names a harness path.
+
+A command that only reads a harness path passes: `cat`, `grep`, `git diff`, `git show`, `cp` from it. The body of a here-document read by another program (`cat > f <<EOF`) is data.
+A shell whose working directory is inside a harness folder is checked for every relative write.
+The hook cannot catch:
+
+- paths built from variables or command substitution;
+- scripts and tools that write on their own (`python3 script.py`, `make`, `curl -o`);
+- `git checkout`, `git apply` and `git restore`;
+- `eval`, `xargs` and `find -exec`;
+- interpreter code that builds a path from pieces.
+
+`docs/knowledge/harness-guard-bash-limits.md` lists them. Code-owner review of the harness folders is the backstop.
+The agent's user can write the cache folder, so a planted cache file also gets past the hook.
 The hook stops accidents, not a deliberate bypass.
 
 ## Hook: no secrets in the agent's context
