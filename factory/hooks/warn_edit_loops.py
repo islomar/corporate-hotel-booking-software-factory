@@ -15,6 +15,9 @@ Contract (https://code.claude.com/docs/en/hooks): the event arrives as JSON on s
 prints `{"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": ...}}` and
 exits 0. It never blocks: the edit has already happened. Bad input or an error inside the hook
 exits 0 with no output, unlike the PreToolUse hooks, which deny.
+
+Cleanup (CHB-138): `warn_edit_loops.py --prune` removes state files older than 7 days.
+`make clean-dev` runs it.
 """
 
 from __future__ import annotations
@@ -24,8 +27,10 @@ import json
 import os
 import posixpath
 import re
+import stat
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -33,6 +38,7 @@ from private_folder import private_folder  # noqa: E402
 
 STATE_DIR_ENV = "CHB_EDIT_LOOP_STATE_DIR"
 WARN_AT = {5: "5th", 8: "8th"}
+MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 MESSAGE = "{nth} edit of {file} this session: step back, re-read the failing test and the plan before editing again."
 
 
@@ -62,6 +68,23 @@ def record_edit(folder: str, session_id: str, path: str) -> int:
     return count
 
 
+def remove_stale(folder: str, now: float, max_age: float = MAX_AGE_SECONDS) -> list[str]:
+    """Remove the state files (regular *.json files) last changed more than max_age seconds ago.
+
+    A missing folder is not created. Symlinks are never followed or removed. Returns the removed paths."""
+    if not os.path.lexists(folder):
+        return []
+    private_folder(folder)  # the folder exists: this only checks it
+    removed = []
+    for name in sorted(os.listdir(folder)):
+        path = posixpath.join(folder, name)
+        info = os.lstat(path)
+        if name.endswith(".json") and stat.S_ISREG(info.st_mode) and now - info.st_mtime > max_age:
+            os.unlink(path)
+            removed.append(path)
+    return removed
+
+
 def shown(path: str, cwd: str) -> str:
     """The path relative to cwd when it lies under it, else the absolute path."""
     if cwd and (path == cwd or path.startswith(cwd.rstrip("/") + "/")):
@@ -69,7 +92,11 @@ def shown(path: str, cwd: str) -> str:
     return path
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    if argv == ["--prune"]:
+        removed = remove_stale(state_dir(), time.time())
+        print(f"removed {len(removed)} loop-detector state file(s) older than 7 days from {state_dir()}")
+        return 0
     try:
         context = _context(sys.stdin.read())
     except Exception:  # never block or disturb the session: the edit already happened
@@ -98,4 +125,4 @@ def _context(raw: str) -> str | None:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))

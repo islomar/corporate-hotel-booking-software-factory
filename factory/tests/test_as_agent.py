@@ -245,5 +245,35 @@ class NoreplyEmailTest(unittest.TestCase):
         self.assertEqual(noreply_email("bot[bot]", 7), "7+bot[bot]@users.noreply.github.com")
 
 
+
+class ScratchFolderTest(unittest.TestCase):
+    """CHB-138: parallel agents overwrote each other's pr.md in one shared scratch folder."""
+
+    SHARED = "/tmp/claude-1000/project/session/scratchpad/pr.md"
+    OWN = "/tmp/claude-1000/project/session/scratchpad/CHB-138/pr.md"
+
+    def _err(self, argv: list[str]) -> tuple[int, str]:
+        fake = _runner(returncode=0)
+        err = io.StringIO()
+        code = run(argv, {}, runner=fake, out=io.StringIO(), err=err)
+        self.assertEqual(fake.calls[0]["command"], argv, "the warning never blocks the command")
+        return code, err.getvalue()
+
+    def test_a_file_in_a_shared_scratch_folder_gets_a_warning(self) -> None:
+        for argv in (
+            ["git", "commit", "-F", self.SHARED],
+            ["gh", "pr", "comment", "61", "--body-file", self.SHARED],
+            ["gh", "pr", "edit", "61", f"--body-file={self.SHARED}"],
+        ):
+            code, err = self._err(argv)
+            self.assertEqual(code, 0)
+            self.assertIn(f"as-agent: warning: {self.SHARED} is in a shared scratch folder", err, argv)
+            self.assertIn("<scratchpad>/CHB-<n>/", err)
+
+    def test_a_file_in_a_ticket_subfolder_or_outside_the_scratchpad_gets_none(self) -> None:
+        for path in (self.OWN, "/home/me/repo/pr.md", "-"):
+            self.assertEqual(self._err(["git", "commit", "-F", path])[1], "", path)
+
+
 if __name__ == "__main__":
     unittest.main()

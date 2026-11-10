@@ -22,6 +22,10 @@ for a base branch other than main (a stacked PR), and when AGENT_NO_AUTO_MERGE=1
 prompt: pass --title and --body (or --fill). If the PR opens but auto-merge fails, the
 script exits 5 (EXIT_NO_AUTO_MERGE) and prints the command to retry. Do not open the PR again.
 
+Scratch folders (CHB-138): when an input file (`-F`, `--file`, `--body-file`) sits in a Claude
+Code scratchpad without a `CHB-<n>` folder, the script warns on stderr and runs the command anyway.
+Parallel agents that share one scratch folder overwrite each other's files.
+
 Environment overrides:
 - AGENT_APP_CLIENT_ID: the App's client ID (public).
 - AGENT_NO_AUTO_MERGE=1: open a PR without auto-merge.
@@ -195,6 +199,26 @@ def _option(args: list[str], *names: str) -> str | None:
     return value
 
 
+FILE_OPTIONS = ("-F", "--file", "--body-file")
+TICKET_FOLDER = re.compile(r"CHB-\d+")
+
+
+def scratch_warning(argv: list[str]) -> str | None:
+    """A warning when an input file sits in a scratchpad folder without a CHB-<n> folder, else None."""
+    for i, arg in enumerate(argv):
+        path = argv[i + 1] if arg in FILE_OPTIONS and i + 1 < len(argv) else None
+        for name in FILE_OPTIONS[1:]:
+            if arg.startswith(name + "="):
+                path = arg[len(name) + 1 :]
+        parts = path.split("/") if path else []
+        if "scratchpad" in parts and not any(TICKET_FOLDER.fullmatch(part) for part in parts):
+            return (
+                f"as-agent: warning: {path} is in a shared scratch folder. "
+                "Parallel agents overwrite each other's files there: use <scratchpad>/CHB-<n>/ (CLAUDE.md)."
+            )
+    return None
+
+
 def auto_merge_skip_reason(argv: list[str], env: Mapping[str, str]) -> str | None:
     """Why this `gh pr create` gets no auto-merge, or None when it gets it."""
     if env.get(OPT_OUT_VARIABLE) == "1":
@@ -220,6 +244,9 @@ def run(
     """Run argv with env. After `gh pr create`, enable auto-merge (squash) on the new PR."""
     out = out or sys.stdout
     err = err or sys.stderr
+    warning = scratch_warning(argv)
+    if warning:
+        print(warning, file=err)
     if not _is_pr_create(argv):
         return runner(argv, env=env, check=False).returncode
     skip = auto_merge_skip_reason(argv, env)
