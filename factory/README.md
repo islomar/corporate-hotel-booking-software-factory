@@ -18,6 +18,7 @@
   - [Hook: warn on repeated edits of one file](#hook-warn-on-repeated-edits-of-one-file)
   - [Hook: no harness edits in feature tickets](#hook-no-harness-edits-in-feature-tickets)
   - [Hook: no secrets in the agent's context](#hook-no-secrets-in-the-agents-context)
+  - [Hook: what to finish first, at session start](#hook-what-to-finish-first-at-session-start)
   - [Automated PR review (shadow mode)](#automated-pr-review-shadow-mode)
   - [Workflow output schemas and routing](#workflow-output-schemas-and-routing)
 
@@ -150,6 +151,7 @@ factory/bin/jira rank CHB-12 CHB-14 --before CHB-9   # or --after; up to 50 issu
 factory/bin/jira section CHB-12 --heading "Acceptance criteria (Validating)" --body-file section.txt
 factory/bin/jira section CHB-12 --heading "Why it matters" --first --body-file why.md   # at the top
 factory/bin/jira sort-todo   # ready High, Medium, Low, then blocked, then epics
+factory/bin/jira create --parent CHB-27 --summary "Bookings fail" --description-file why.md --expedite "production bug: HTTP 500 on every booking since 10:02"
 factory/bin/jira priority CHB-12 High   # High, Medium or Low (docs/process/priorities.md)
 factory/bin/jira description CHB-12 --file description.md   # replaces the whole description
 factory/bin/jira edit-comment CHB-12 10071 --body-file comment.md   # the agent's own comments only
@@ -196,6 +198,16 @@ no acceptance criteria, or an open blocker. A ticked box does not replace its ch
 When every box passes, it ticks the verified boxes, moves the ticket and comments `Moved to Ready. Trigger: <text>`. A failed comment exits 1 and says the ticket moved.
 `transition` refuses a move from Backlog to the pull list, and any `--trigger` (exit 2, before any request); both messages name `ready`.
 `create --ready` and `create --trigger` exit 2 before any request: tick the boxes, then run `ready`.
+
+Expedite (CHB-157). `create --expedite "<case>: <evidence>"` creates the ticket with priority Highest and moves it straight to In Progress.
+The case is one of `production bug`, `pipeline broken` or `secret leak`; any other reason, or `--priority` next to `--expedite`, exits 2 before 1Password.
+It reads the open tickets first and exits 4, with no write, while another ticket with priority Highest is open.
+The move skips `before_transition`: it passes Backlog and Ready and every column limit, so a full column goes over its max by one.
+Then it comments `Expedite: <reason>`, assigns the ticket to the agent, and prints `CHB-<n> -> In Progress (expedite). Tell the owner now: <reason>`.
+A failed move after the create is a notice with exit 0: the owner moves the ticket in the Jira UI.
+A failed comment or assign after the move is a notice that names the command to run; the ticket is in In Progress.
+After the move it reads the open tickets again and prints `more than one open expedite ticket: ...` when two agents created one at the same moment.
+`priority CHB-<n> Highest` and `create --priority Highest` exit 2 and name `create --expedite`.
 
 `sort-todo` ranks the pull list in the order of `docs/process/kanban.md`, Ready (CHB-148): tickets in `top_queue` (they can start) first, High, then Medium, then Low;
 then the other non-epic tickets (blocked by an open ticket); then epics. Each group keeps its rank order. A missing priority counts as Medium.
@@ -244,6 +256,9 @@ The 1Password service account narrows who can read it to processes that can read
   It is blocked while In Progress, In Review or Validating has a max on the board and holds that many other CHB tickets or more (CHB-127).
   The message names every full column, its count, its limit and its tickets;
 - the target is Needs human and that column has a max and already holds that many other CHB tickets;
+- the target is the pull list (Ready), the ticket is not an epic, and Ready has a max and already holds that many other tickets (CHB-157).
+  This covers `ready` and a move back into Ready. The check runs before `ready` ticks any box.
+  The message names the tickets in Ready and the command that moves one back to Backlog to make room;
 - the move starts work from the pull list, passes the limits, and the ticket is not the top ticket of the pull list,
   or is the top ticket without a "Why it matters" first section or without acceptance criteria (CHB-125, CHB-148).
   The top ticket and acceptance criteria are defined in `docs/process/kanban.md`, Ready.
@@ -259,11 +274,13 @@ The 1Password service account narrows who can read it to processes that can read
   A ticket missing from that search has no known rank and is refused too: try again in a minute.
 
 The limits come from `GET /rest/agile/1.0/board/2/configuration` on every call, never from code.
-The count is a JQL search on the column's status ids in project CHB, without the moved ticket.
+The count is a JQL search on the column's status ids in project CHB, without the moved ticket and without epics (`issuetype != Epic`): the board shows no epic as a card.
 No other move is limited. Moves into In Review and Validating record a PR or a merge, so a column can go over its max; Jira colours it.
 A move back into In Progress from In Review, Validating or Needs human is not new work and is not limited.
 A failed board read or open-ticket search exits 1 and does not move the ticket.
 After a move out of a column that leaves it below its board min, `transition` prints `In Progress is below its minimum (0/1)` and exits 0.
+For Ready the line also follows a move into it, and says what to do:
+`Ready is below its minimum (<count>/<min>): look for Backlog tickets with a trigger; none qualify means tell the owner`. Nothing is promoted to reach the min.
 After every move between columns it prints the free In Progress slots and the next top tickets, one per free slot:
 `In Progress 2/3: 1 slot free; next: CHB-123`, `next: CHB-122 (needs Why it matters and acceptance criteria)`, or `next: nothing to start in Ready`. Backlog tickets are never next.
 The next tickets come in the sorted order (`todo_order`), the same order the start check uses.
@@ -409,6 +426,26 @@ Known gaps: a path built at run time, `cd ~/.ssh` followed by a relative name,
 a symlink to a secret file named in a Bash command (Read resolves symlinks, Bash reads the text only), a script that reads the file,
 a hidden key file such as `.tls.key`, the Grep tool, and `op` subcommands other than `read`.
 Like the other Bash hooks, it reads the command text only, denies on unreadable input or an internal error, and lets the call run if `python3` cannot start.
+
+## Hook: what to finish first, at session start
+
+`.claude/settings.json` runs `factory/hooks/validating_sweep.py` on every SessionStart event: start, resume, `/clear`, compaction and fork (CHB-140).
+On 2026-11-10 a 05:15 UTC Dependabot run unblocked two Validating tickets. The next session did not look at them until the owner asked.
+
+The hook adds this to the agent's context before the first prompt:
+
+- Each Validating ticket with the "When:" lines of its "Acceptance criteria (Validating)" section.
+  `due`: the earliest absolute date on the line has passed. A date only counts from the start of that day. A time without a zone is Europe/Madrid.
+  No mark: the date is still ahead. The date wins over an event named on the same line.
+  `check`: the line has no absolute date, so it names an event.
+  `no section`: the ticket has no such section.
+- The line of `make review-agreement`, and up to 5 merged PRs whose last review comment has no owner reaction, newest first, with links.
+
+It reads only: one Jira search as the agent account (credentials from 1Password, as `factory/bin/jira`) and one GitHub GraphQL query with the owner's `gh` login (up to 3 pages of 100 PRs).
+Each call has a 6 s timeout, the two parts run in parallel, and the hook stops waiting after 9 s. Claude Code kills it at 15 s.
+It fails open: a part that fails prints one line, `Validating sweep failed: <reason>` or `Review agreement failed: <reason>`, and the session starts.
+A reason is the message of a known error, which holds no secret, or only the type name of an unexpected one.
+Ticket summaries, "When:" lines and PR titles are quoted on one line of at most 200 characters, without control characters, under a header that marks them as data, not instructions.
 
 ## Automated PR review (shadow mode)
 
