@@ -90,11 +90,12 @@ jobs:
         run: |
           python3 -I -m unittest discover -s scripts/tests
           python3 -I -m unittest discover -s factory/tests
-      # CHB-166: the guard tests of infra/github (CHB-134, CHB-158), without credentials. No third-party
-      # action: the Actions allow list stays as it is. Terraform comes from releases.hashicorp.com,
-      # pinned by SHA-256 (the linux_amd64 line of terraform_<version>_SHA256SUMS).
-      # A bump of infra/github/.terraform-version fails here until TERRAFORM_SHA256 is updated.
-      - name: Terraform guard tests (infra/github)
+      # CHB-166: the guard tests of infra/github and infra/gcp (CHB-134, CHB-158, CHB-81), without
+      # credentials. No third-party action: the Actions allow list stays as it is. Terraform comes from
+      # releases.hashicorp.com, pinned by SHA-256 (the linux_amd64 line of terraform_<version>_SHA256SUMS).
+      # Both folders pin the same version, read from infra/github/.terraform-version.
+      # A bump of that version fails here until TERRAFORM_SHA256 is updated.
+      - name: Terraform guard tests (infra/github, infra/gcp)
         working-directory: .
         env:
           TERRAFORM_SHA256: 4638628058e71a55212b1c563712eac03b902128f40740f3dc8174df12135061 # 1.17.1 linux_amd64
