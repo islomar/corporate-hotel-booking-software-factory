@@ -375,6 +375,7 @@ It caches the parent per branch in `<temp dir>/chb-harness-epics-<uid>/<branch>.
 A folder that is a symlink, belongs to another user or is open to others is not used. Cache files open without following symlinks.
 The cache never expires. If a ticket moves to another epic, delete its branch file.
 If the Jira read fails (no token, timeout, HTTP error), the hook denies the edit and names `factory/bin/jira view CHB-<n>`. A failure is not cached.
+If `git` times out (10 seconds) or does not start, the hook denies an edit of a harness path and says so (CHB-152). Other paths never call `git`.
 Writes through Bash are not covered. The agent's user can write the cache folder, so a planted cache file also gets past the hook.
 The hook stops accidents, not a deliberate bypass.
 
@@ -390,12 +391,13 @@ A glob that does not start with `.` never matches `.ssh` or `.env`, so `grep -rn
 
 The hook exits 2 for:
 
-- Read of a secret path; a relative path resolves against the session folder;
+- Read of a secret path, or of a symlink whose real path is one; a relative path resolves against the session folder;
 - a Bash command with a secret path as an argument, as an `--option=<path>` value, or after a `:` (`git show HEAD:.env`, `scp host:~/.ssh/id`);
 - input redirected from a secret path (`< .env`), whatever the program;
 - `secret-tool lookup` and `op read` run directly.
 
-The hook also checks the body of every `$(...)` and backtick substitution, quoted or not, the arguments of `bash -c`, `sh -c` and `eval`, and the remote command of `ssh`.
+The hook also checks the body of every `$(...)` and backtick substitution, quoted or not and with nested parentheses (`"$( (cat .env) )"`).
+It checks the arguments of `bash -c`, `sh -c` and `eval`, and the remote command of `ssh`.
 
 These pass even with a secret path: `ls`, `stat`, `test`, `[`, `chmod`, `chown`, `mkdir`, `touch`, `rm`, `echo`, `printf` and `ssh-add`. They do not print the file.
 `ssh` and `scp` may name a key or config file with `-i`, `-F` or `-o IdentityFile=`.
@@ -403,7 +405,8 @@ These pass even with a secret path: `ls`, `stat`, `test`, `[`, `chmod`, `chown`,
 
 Known false denials: `grep .env docs/` (the pattern reads as a path) and a single-quoted `'$(cat .env)'`.
 A heredoc line that names a secret path, such as a line of a commit message, is denied too. Write such a message to a file with the Write tool.
-Known gaps: a path built at run time, `cd ~/.ssh` followed by a relative name, a symlink to a secret file, a script that reads the file,
+Known gaps: a path built at run time, `cd ~/.ssh` followed by a relative name,
+a symlink to a secret file named in a Bash command (Read resolves symlinks, Bash reads the text only), a script that reads the file,
 a hidden key file such as `.tls.key`, the Grep tool, and `op` subcommands other than `read`.
 Like the other Bash hooks, it reads the command text only, denies on unreadable input or an internal error, and lets the call run if `python3` cannot start.
 

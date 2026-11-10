@@ -264,6 +264,50 @@ class RepositoryTest(unittest.TestCase):
         self.assertIn("factory/bin/jira view CHB-20", why)
 
 
+class GitFailureTest(unittest.TestCase):
+    """git that hangs or is missing denies a harness path with its own message, not a generic crash."""
+
+    def test_a_git_timeout_denies_with_a_message(self) -> None:
+        timeout = subprocess.TimeoutExpired(["git"], hook.GIT_TIMEOUT)
+        with mock.patch.object(hook.subprocess, "run", side_effect=timeout):
+            why = hook.reason("/repo/factory/x.py", cwd="/repo") or ""
+
+        self.assertIn("Blocked", why)
+        self.assertIn(f"timed out after {hook.GIT_TIMEOUT}s", why)
+        self.assertIn("factory/", why)
+
+    def test_a_missing_git_denies_with_a_message(self) -> None:
+        with mock.patch.object(hook.subprocess, "run", side_effect=FileNotFoundError("git")):
+            why = hook.reason("/repo/.claude/settings.json", cwd="/repo") or ""
+
+        self.assertIn("Blocked", why)
+        self.assertIn("did not start (FileNotFoundError)", why)
+
+    def test_a_symlink_into_the_harness_names_the_real_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "factory").mkdir()
+            (Path(tmp) / "link").symlink_to(Path(tmp) / "factory")
+            with mock.patch.object(hook.subprocess, "run", side_effect=FileNotFoundError("git")):
+                why = hook.reason("link/x.py", cwd=tmp) or ""
+
+        self.assertIn("`factory/`", why)
+
+    def test_the_hook_exits_2_with_the_git_message(self) -> None:
+        timeout = subprocess.TimeoutExpired(["git"], hook.GIT_TIMEOUT)
+        with mock.patch.object(hook.subprocess, "run", side_effect=timeout):
+            code, out, err = _main(_event(file_path="/repo/factory/x.py"))
+
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("timed out", err)
+        self.assertNotIn("hook failed", err)
+
+    def test_git_is_not_called_for_other_paths(self) -> None:
+        with mock.patch.object(hook.subprocess, "run", side_effect=FileNotFoundError("git")) as run:
+            self.assertIsNone(hook.reason("/repo/backend/x.py", cwd="/repo"))
+
+        run.assert_not_called()
+
+
 def _main(stdin: str) -> tuple[int, str, str]:
     out, err = io.StringIO(), io.StringIO()
     with mock.patch.object(sys, "stdin", io.StringIO(stdin)), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):

@@ -2,6 +2,7 @@ import contextlib
 import io
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -86,6 +87,13 @@ DENIED = [
     'X="$(cat ~/.ssh/id_rsa)"; echo $X',
     "echo `cat ~/.ssh/id_rsa`",
     'echo "token: `op read op://v/i/f`"',
+    'echo "$( (cat .env) )"',
+    'X="$( (cat .env) )"; echo $X',
+    "echo $(echo $(cat .env))",
+    'echo "$(cd /repo && (head -1 .env))"',
+    "echo $( (cat .env)",
+    'X="$($($($($($($(cat .env)))))))"',
+    "echo $( ( ( ( ( ( (cat .env) ) ) ) ) ) )",
     "bash -c 'cat .env'",
     'sh -c "head ~/.ssh/config"',
     "ssh localhost cat ~/.ssh/id_rsa",
@@ -109,6 +117,10 @@ ALLOWED = [
     "ssh -o StrictHostKeyChecking=no -p 2222 -i ~/.ssh/id_ed25519 host uptime",
     "scp -i ~/.ssh/id_ed25519 build.tar host:/srv/",
     'echo "$(date)"',
+    'echo "$( (date) )"',
+    "echo $((1 + 2))",
+    'echo "$(git log -1 --format=%s) ($(date))"',
+    "echo ) $(",
     "grep -rn TODO *",
     "cat *.md",
     "cat *.*",
@@ -171,6 +183,38 @@ class ReadTest(unittest.TestCase):
 
         self.assertEqual(code, 2)
 
+    def test_a_symlink_to_a_secret_is_denied(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home, repo = Path(tmp) / "home", Path(tmp) / "repo"
+            (home / ".ssh").mkdir(parents=True)
+            repo.mkdir()
+            (repo / "notes.txt").symlink_to(home / ".ssh" / "id_x")  # dangling: no key file is made
+
+            self.assertIsNotNone(hook.read_reason("notes.txt", home=str(home), cwd=str(repo)))
+            self.assertIsNotNone(hook.read_reason(str(repo / "notes.txt"), home=str(home), cwd="/"))
+
+    def test_a_symlinked_folder_into_a_secret_folder_is_denied(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "home" / ".ssh").mkdir(parents=True)
+            (Path(tmp) / "keys").symlink_to(Path(tmp) / "home" / ".ssh")
+
+            self.assertIsNotNone(hook.read_reason("keys/id_x", home=str(Path(tmp) / "home"), cwd=tmp))
+
+    def test_a_symlink_to_another_file_is_allowed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "README.md").write_text("x\n")
+            (Path(tmp) / "link.md").symlink_to(Path(tmp) / "README.md")
+
+            self.assertIsNone(hook.read_reason("link.md", home=HOME, cwd=tmp))
+
+    def test_a_read_event_through_a_symlink_exits_2(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "app.cfg").symlink_to(Path(tmp) / ".env")  # dangling: no secret file is made
+            code, out, err = _main(json.dumps({"cwd": tmp, "tool_input": {"file_path": "app.cfg"}}))
+
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("Blocked", err)
+
     def test_other_reads_are_allowed(self) -> None:
         for path in [".env.example", "README.md", "/repo/factory/hooks/x.py"]:
             with self.subTest(path):
@@ -187,6 +231,13 @@ class BashTest(unittest.TestCase):
         for command in ALLOWED:
             with self.subTest(command):
                 self.assertIsNone(hook.bash_reason(command, home=HOME))
+
+    def test_substitutions_give_the_outermost_and_the_innermost_bodies(self) -> None:
+        bodies = hook.substitutions('X="$(a "$(b "$(c "$(d "$(e "$(cat x)")")")")")" `f`')
+
+        self.assertEqual(bodies[0], 'a "$(b "$(c "$(d "$(e "$(cat x)")")")")"')
+        self.assertIn("cat x", bodies)  # checked one level down, so nesting never runs past MAX_DEPTH
+        self.assertIn("f", bodies)
 
     def test_the_reason_names_the_secret_and_the_wrappers(self) -> None:
         why = hook.bash_reason("cat .env", home=HOME) or ""
