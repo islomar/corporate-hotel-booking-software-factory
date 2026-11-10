@@ -13,6 +13,7 @@ Usage:
   factory/bin/jira priority CHB-12 High|Medium|Low
   factory/bin/jira description CHB-12 --file FILE        (replaces the whole description)
   factory/bin/jira edit-comment CHB-12 10071 --body-file FILE
+  factory/bin/jira link CHB-88 --blocked-by CHB-146         (a "Blocks" link: CHB-146 blocks CHB-88)
 
 The account email and API token are read from the 1Password item chb-jira-claude.api-token
 (fields username and credential, vault chb-factory) on every call, with one `op` call that
@@ -28,6 +29,7 @@ issues. `section` writes only the description field, and changes only one sectio
 In "Acceptance criteria (Validating)", `section` refuses a "When:" line without a "Speed up:" line.
 `priority` writes only the priority field, and only High, Medium or Low (docs/process/priorities.md).
 `description` writes only the description field. `edit-comment` changes one comment body.
+`link` creates only "Blocks" links between two different CHB issues, and never removes one.
 
 Descriptions, comments and section bodies are Markdown: headings, bullet and numbered lists,
 `code`, **bold** and links render in Jira (text_to_adf). CHB-<n> links to the ticket, and
@@ -38,7 +40,8 @@ Exit codes:
   1  Jira refused or failed (HTTP error, unknown status, parent is not an epic,
      an issue that could not be ranked, a search answer with an issue outside CHB)
   2  usage error (also a bad section heading, an empty body or summary, a file that is not
-     UTF-8, a duplicate rank key, JQL whose parentheses or quotes do not balance)
+     UTF-8, a duplicate rank key, JQL whose parentheses or quotes do not balance, a ticket
+     linked to itself)
   3  no credential: no service account token in the keyring (keyring locked, item absent)
      or `op` failed. The agent stops and reports.
   4  a board rule blocks the transition: the target column is at its WIP limit, the
@@ -111,7 +114,7 @@ REQUIRED_SECTIONS = {
     "needs human": "Needs human: owner steps",
 }
 # The top ticket of To Do (CHB-125, docs/process/kanban.md, To Do) is the highest-ranked non-epic
-# ticket with no open ticket on a "Depends on" line. It starts once it has acceptance criteria: a
+# ticket that no open ticket blocks (open_blockers). It starts once it has acceptance criteria: a
 # heading that starts with "Acceptance criteria" (not "Acceptance criteria (Validating)"), or a line
 # that is only that label, with text under it.
 # A heading that starts with the label (not the Validating section), or a line that is only the label.
@@ -125,7 +128,10 @@ KEY_IN_TEXT = re.compile(rf"(?<![\w-]){PROJECT}-[1-9][0-9]*(?![\w-])")
 # Open tickets in rank order, for the top of To Do and for the dependencies. Discarded is in the
 # Done status category, so it is not open.
 OPEN_JQL = "statusCategory != Done ORDER BY Rank ASC"
-OPEN_FIELDS = ("status", "issuetype", "description")
+OPEN_FIELDS = ("status", "issuetype", "description", "issuelinks")
+# Dependencies are Jira "Blocks" links (CHB-151): inward "is blocked by", outward "blocks". In an issue's
+# issuelinks, an entry of this type with an inwardIssue means "this issue is blocked by inwardIssue".
+BLOCKS = "Blocks"
 OPEN_LIMIT = 1000  # a search answer this long may be cut off; the rank and dependency checks refuse it
 
 EXIT_JIRA = 1
@@ -532,6 +538,15 @@ def check_speed_up(heading: str, body: str) -> None:
             part.append(line)
 
 
+def check_link_input(blocked: str, blocker: str) -> None:
+    """Both keys are CHB keys and differ. A wrong key is a usage error (exit 2), checked before any request."""
+    for key in (blocked, blocker):
+        if not KEY_PATTERN.fullmatch(key):
+            raise UsageError(f"{key!r} is not a {PROJECT} issue key ({PROJECT}-<n>); only CHB tickets are linked")
+    if blocked == blocker:
+        raise UsageError(f"{blocked} cannot be blocked by itself")
+
+
 def check_rank_input(keys: list[str], anchor: str) -> None:
     """Refuse a rank request that makes no sense (UsageError, exit 2). Keys are checked apart."""
     if not keys or len(keys) > RANK_LIMIT:
@@ -588,7 +603,7 @@ class Jira:
         return self.request("GET", "/rest/api/3/myself")
 
     def view(self, key: str) -> dict[str, Any]:
-        fields = "summary,status,priority,assignee,issuetype,parent,description,comment"
+        fields = "summary,status,priority,assignee,issuetype,parent,description,comment,issuelinks"
         return self.request("GET", f"/rest/api/3/issue/{check_key(key)}?fields={fields}")
 
     def search(self, jql: str, limit: int = 500, fields: Sequence[str] | None = None) -> list[dict[str, Any]]:
@@ -738,6 +753,30 @@ class Jira:
         body = {"fields": {"description": new}}
         self.request("PUT", f"/rest/api/3/issue/{check_key(key)}", body, empty_ok=True)
 
+    def blocked_by(self, key: str) -> list[str]:
+        """Keys of the issues that block this one, from a fresh read of its links."""
+        fields = self.request("GET", f"/rest/api/3/issue/{check_key(key)}?fields=issuelinks")["fields"]
+        return blockers(fields)
+
+    def link(self, blocked: str, blocker: str) -> bool:
+        """Make `blocker` block `blocked` with a "Blocks" link. Return False when that link exists already.
+
+        Jira stores the blocking issue as outwardIssue ("blocks") and the blocked one as inwardIssue
+        ("is blocked by"). The links are read again after the POST: a link stored the other way round
+        would block the wrong ticket, so it raises JiraError.
+        """
+        check_link_input(blocked, blocker)
+        if blocker in self.blocked_by(blocked):
+            return False
+        body = {"type": {"name": BLOCKS}, "inwardIssue": {"key": blocked}, "outwardIssue": {"key": blocker}}
+        self.request("POST", "/rest/api/3/issueLink", body, empty_ok=True)
+        if blocker not in self.blocked_by(blocked):
+            raise JiraError(
+                f"{blocked} does not show {blocker} as a blocker after the link. "
+                "Check both tickets in Jira; the owner removes a wrong link in the Jira UI."
+            )
+        return True
+
     def set_section(self, key: str, heading: str, body: str) -> bool:
         """Set one section of the description. Return False when it already had that content."""
         check_key(key)
@@ -779,7 +818,7 @@ def before_transition(jira: Jira, key: str, status: str, *, status_id: str) -> M
     A start from To Do must also be the top ticket of To Do, with acceptance criteria (CHB-125, check_top_of_to_do).
     A failed read of the board or of the open tickets raises JiraError and blocks too.
     """
-    issue = jira.request("GET", f"/rest/api/3/issue/{key}?fields=status,description")["fields"]
+    issue = jira.request("GET", f"/rest/api/3/issue/{key}?fields=status,description,issuelinks")["fields"]
     current_id = str(issue["status"]["id"])
     if current_id == status_id:
         return Move(None, None)
@@ -817,21 +856,22 @@ def before_transition(jira: Jira, key: str, status: str, *, status_id: str) -> M
             "Only the owner overrides a limit, in the Jira UI, with a comment on the ticket (docs/process/kanban.md)."
         )
     if target.name == IN_PROGRESS and source is not None and source.name == TO_DO:
-        check_top_of_to_do(jira, key, issue.get("description"), columns)
+        check_top_of_to_do(jira, key, issue, columns)
     return move
 
 
-def check_top_of_to_do(jira: Jira, key: str, description: Any, columns: list[Column]) -> None:
+def check_top_of_to_do(jira: Jira, key: str, fields: dict[str, Any], columns: list[Column]) -> None:
     """Refuse (BlockedError) a start from To Do of a ticket that is not the top ticket of To Do,
     or of the top ticket while it has no acceptance criteria (docs/process/kanban.md, To Do).
 
-    The ticket's own description comes from the read just made, so a stale search answer cannot
-    change its dependencies or criteria. Its rank comes from the search.
+    The ticket's own description and links (`fields`) come from the read just made, so a stale
+    search answer cannot change its blockers or criteria. Its rank comes from the search.
     """
+    description = fields.get("description")
     issues = jira.open_issues()
-    blocking = open_dependencies(description, {str(issue["key"]) for issue in issues})
+    blocking = open_blockers(fields, {str(issue["key"]) for issue in issues})
     mine = next((issue for issue in issues if issue["key"] == key), None)
-    reason = f"it depends on open tickets: {', '.join(blocking)}" if blocking else None
+    reason = f"it is blocked by open tickets: {', '.join(blocking)}" if blocking else None
     if reason is None and mine is not None and mine["fields"]["issuetype"]["name"] == "Epic":
         reason = "it is an epic; start one of its tickets instead"
     if reason:
@@ -840,7 +880,7 @@ def check_top_of_to_do(jira: Jira, key: str, description: Any, columns: list[Col
         )
     if mine is None:
         raise BlockedError(f"{key} is missing from the search of open tickets, so its rank is unknown. Try again in a minute.")
-    queue = top_queue(issues, columns, descriptions={key: description})
+    queue = top_queue(issues, columns, fresh={key: fields})
     if key not in queue:  # the search still shows it outside To Do
         raise BlockedError(f"{key} is not in To Do in the search of open tickets yet, so its rank is unknown. Try again in a minute.")
     if queue[0] != key:
@@ -860,16 +900,16 @@ def check_top_of_to_do(jira: Jira, key: str, description: Any, columns: list[Col
 def top_queue(
     issues: list[dict[str, Any]],
     columns: Sequence[Column],
-    descriptions: dict[str, Any] | None = None,
+    fresh: dict[str, dict[str, Any]] | None = None,
     *,
     moved: tuple[str, Column] | None = None,
 ) -> list[str]:
     """Keys of the To Do tickets that can be pulled, in rank order. `issues` is the whole of open_issues().
 
     The start check and the free-slot notice both take the top tickets from here, so they cannot disagree (CHB-143).
-    A ticket is left out when it is an epic or a ticket on its "Depends on" line is open.
+    A ticket is left out when it is an epic or an open ticket blocks it (open_blockers).
     Missing acceptance criteria do not leave it out: the agent writes them (CHB-125).
-    `descriptions` maps keys to descriptions from a read newer than the search; those win.
+    `fresh` maps keys to issue fields (description, issuelinks) from a read newer than the search; those win.
     `moved` is a ticket that just moved and its new column. The search can still show its old status,
     so the new column wins: the ticket is open unless that column is in CLOSED, and it is never in the queue.
     """
@@ -890,15 +930,32 @@ def top_queue(
             continue
         if moved is not None and issue["key"] == moved[0]:
             continue
-        description = (descriptions or {}).get(issue["key"], fields.get("description"))
-        if not open_dependencies(description, open_keys):
+        if not open_blockers((fresh or {}).get(issue["key"], fields), open_keys):
             queue.append(str(issue["key"]))
     return queue
 
 
-def open_dependencies(description: Any, open_keys: set[str]) -> list[str]:
-    """The keys on the description's "Depends on" lines that are still open."""
-    return [key for key in dependencies(description) if key in open_keys]
+def open_blockers(fields: dict[str, Any], open_keys: set[str]) -> list[str]:
+    """The issues that block this one (blockers) and are still open. The one readiness rule (CHB-151).
+
+    `fields` are the issue's fields with issuelinks. `open_keys` decides what is open: the keys of the
+    open-tickets search, corrected for a ticket that just moved (top_queue). The status a link carries is
+    as old as the search, so it is not used. A blocker outside CHB is never in `open_keys`.
+    """
+    return [key for key in blockers(fields) if key in open_keys]
+
+
+def blockers(fields: dict[str, Any]) -> list[str]:
+    """Keys of the issues this one "is blocked by": its "Blocks" links with the other issue as inwardIssue.
+
+    Until the text dependencies are migrated (CHB-151), the keys on its "Depends on" lines count too.
+    """
+    keys = [
+        str(link["inwardIssue"].get("key"))
+        for link in fields.get("issuelinks") or []
+        if isinstance(link, dict) and (link.get("type") or {}).get("name") == BLOCKS and isinstance(link.get("inwardIssue"), dict)
+    ]
+    return list(dict.fromkeys([*keys, *dependencies(fields.get("description"))]))
 
 
 def has_acceptance_criteria(description: Any) -> bool:
@@ -1065,10 +1122,26 @@ def _print_issue(issue: dict[str, Any]) -> None:
     if parent:
         print(f"Parent: {parent['key']}")
     print()
+    for line in _link_lines(fields.get("issuelinks") or []):
+        print(line)
+    print()
     print(adf_to_text(fields.get("description")) or "(no description)")
     for item in fields.get("comment", {}).get("comments", []):
         print(f"\n--- {_name(item.get('author'))}, {item.get('created', '')}")
         print(adf_to_text(item.get("body")))
+
+
+def _link_lines(links: list[dict[str, Any]]) -> list[str]:
+    """`Is blocked by: CHB-146 (To Do)` for each link, labelled as Jira labels it on this issue."""
+    lines = []
+    for link in links:
+        kind = link.get("type") or {}
+        side = "inward" if "inwardIssue" in link else "outward"
+        other = link.get(f"{side}Issue") or {}
+        status = ((other.get("fields") or {}).get("status") or {}).get("name", "?")
+        label = str(kind.get(side) or kind.get("name") or "linked to")
+        lines.append(f"{label[:1].upper()}{label[1:]}: {other.get('key', '?')} ({status})")
+    return lines
 
 
 def _read_text(path: str) -> str:
@@ -1138,6 +1211,10 @@ def _parser() -> argparse.ArgumentParser:
     description.add_argument("key")
     description.add_argument("--file", required=True)
 
+    link = commands.add_parser("link", help='make another ticket block this one (a "Blocks" link)')
+    link.add_argument("key")
+    link.add_argument("--blocked-by", required=True)
+
     priority = commands.add_parser("priority", help="set the priority: High, Medium or Low")
     priority.add_argument("key")
     priority.add_argument("priority", choices=PRIORITIES)
@@ -1185,6 +1262,9 @@ def run(args: argparse.Namespace, jira: Jira) -> None:
     elif args.command == "description":
         jira.set_description(args.key, args.text)
         print(f"{args.key} description set")
+    elif args.command == "link":
+        created = jira.link(args.key, args.blocked_by)
+        print(f"{args.key} is blocked by {args.blocked_by}: link {'created' if created else 'unchanged'}")
     elif args.command == "priority":
         jira.set_priority(args.key, args.priority)
         print(f"{args.key} priority {args.priority}")
@@ -1200,7 +1280,9 @@ def main(
     except SystemExit as exit_:
         return EXIT_USAGE if exit_.code else 0
     try:
-        keys = [getattr(args, name, None) for name in ("key", "parent", "before", "after")] + getattr(args, "keys", [])
+        if args.command == "link":
+            check_link_input(args.key, args.blocked_by)
+        keys = [getattr(args, name, None) for name in ("key", "parent", "before", "after", "blocked_by")] + getattr(args, "keys", [])
         for key in keys:
             if key is not None:
                 check_key(key)  # before 1Password and before reading any file
