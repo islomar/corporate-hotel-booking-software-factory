@@ -892,12 +892,15 @@ class Jira:
         )
         return str(created["key"])
 
-    def transition(self, key: str, status: str, trigger: str | None = None) -> tuple[str, list[str]]:
+    def transition(
+        self, key: str, status: str, trigger: str | None = None, *, prepare: Callable[[], None] | None = None
+    ) -> tuple[str, list[str]]:
         """Move the issue. Return the status name and notices to print (a minimum, the free slots).
 
         `status` is a status name or, when no status has that name, a board column name (CHB-153).
         A move from Backlog into the pull list needs `trigger`, posted as a comment after the move
-        (check_trigger). A trigger on any other move is a usage error. Both are refused before the move.
+        (check_trigger). Only `ready` passes a trigger (CHB-154): the CLI `transition` refuses --trigger,
+        so it refuses that move too. `prepare` runs once every check has passed, just before the move.
         """
         check_key(key)
         transitions = self.request("GET", f"/rest/api/3/issue/{key}/transitions")["transitions"]
@@ -911,6 +914,8 @@ class Jira:
         target = matches[0]["to"]["name"]
         move = before_transition(self, key, target, status_id=str(matches[0]["to"]["id"]), trigger=trigger)
         comment = move.comment
+        if prepare is not None:
+            prepare()
         self.request("POST", f"/rest/api/3/issue/{key}/transitions", {"transition": {"id": matches[0]["id"]}}, empty_ok=True)
         if comment:
             try:
@@ -948,7 +953,8 @@ class Jira:
         """Move a Backlog ticket to the pull list once its Definition of Ready holds (CHB-154). The only way into Ready.
 
         Refuses (UsageError) a ticket outside Backlog. Refuses (BlockedError) while readiness_problems names a
-        box. Then ticks the verified boxes, moves the ticket and posts "Moved to Ready. Trigger: <text>" (transition).
+        box. Then moves the ticket (transition), ticking the verified boxes just before the move, and posts
+        "Moved to Ready. Trigger: <text>". A move that transition refuses writes nothing.
         """
         fields = self.request("GET", f"/rest/api/3/issue/{check_key(key)}?fields=status,description,issuelinks")["fields"]
         columns = self.board_columns()
@@ -963,10 +969,13 @@ class Jira:
                 f"{key} is not ready: {'; '.join(problems)}. It stays in {BACKLOG} (docs/process/kanban.md, Backlog, {DOR_HEADING})."
             )
         states = box_states(description) or {}
-        if any(states.get(name) != "DONE" for name in VERIFIED_BOXES):
-            ticked = tick_boxes(description, VERIFIED_BOXES)
-            self.request("PUT", f"/rest/api/3/issue/{key}", {"fields": {"description": ticked}}, empty_ok=True)
-        return self.transition(key, pull.name, trigger)
+
+        def tick_verified() -> None:  # only once the move is about to be sent, so a refused move writes nothing
+            if any(states.get(name) != "DONE" for name in VERIFIED_BOXES):
+                ticked = tick_boxes(description, VERIFIED_BOXES)
+                self.request("PUT", f"/rest/api/3/issue/{key}", {"fields": {"description": ticked}}, empty_ok=True)
+
+        return self.transition(key, pull.name, trigger, prepare=tick_verified)
 
     def tick(self, key: str, box: str) -> bool:
         """Tick one judgment box of the Definition of Ready. Return False when it was ticked already."""
@@ -1200,7 +1209,7 @@ def check_trigger(key: str, move: Move, trigger: str | None) -> str | None:
             "3. it unblocks work in progress; 4. the same pain appeared twice (docs/process/kanban.md, Backlog)."
         )
     if trigger and not promotes:
-        raise UsageError(f"--trigger applies only to a move from {BACKLOG} to {pull.name if pull else READY}; {key} makes another move")
+        raise UsageError(f"a trigger applies only to a move from {BACKLOG} to {pull.name if pull else READY} (factory/bin/jira ready); {key} makes another move")
     if not promotes or move.target is None:
         return None
     return f"Moved to {move.target.name}. Trigger: {trigger}"

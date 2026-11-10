@@ -2763,6 +2763,13 @@ class TaskListTest(unittest.TestCase):
         text = "- [ ] first\n- [x] second"
         self.assertEqual(adf_to_text(text_to_adf(text)), text)
 
+    def test_a_nested_task_list_reads_back_as_lines(self) -> None:
+        inner = text_to_adf("- [x] inner")["content"][0]
+        outer = text_to_adf("- [ ] outer")["content"][0]
+        outer["content"].append(inner)
+
+        self.assertEqual(adf_to_text({"type": "doc", "content": [outer]}), "- [ ] outer\n- [x] inner")
+
     def test_a_bullet_list_and_a_task_list_stay_apart(self) -> None:
         nodes = text_to_adf("- plain\n- [ ] task\n- plain again")["content"]
 
@@ -2997,6 +3004,18 @@ class ReadyCommandTest(unittest.TestCase):
         (ticked,) = _put_descriptions(fake)
         self.assertEqual(jira.box_states(ticked), dict.fromkeys(ALL_BOXES, "DONE"))
         self.assertEqual(_comments(fake), ["Moved to Ready. Trigger: 2. the owner asked for it on 2026-11-10"])
+
+    def test_a_move_jira_does_not_offer_writes_nothing(self) -> None:
+        """The verified boxes are ticked only once the move is about to be sent."""
+        fake = ready_fake()
+        transitions = transitions_of("after")
+        transitions["transitions"] = [t for t in transitions["transitions"] if t["to"]["name"] != "Ready"]
+        fake.routes[("GET", "/rest/api/3/issue/CHB-12/transitions")] = transitions
+        code, _, err = _run(["ready", "CHB-12", *self.TRIGGER], fake)
+
+        self.assertEqual(code, 1)
+        self.assertIn("cannot move to 'Ready'", err)
+        self.assertEqual(fake.writes(), [])
 
     def test_all_boxes_ticked_already_it_writes_no_description(self) -> None:
         fake = ready_fake(dor_description(ALL_BOXES))
