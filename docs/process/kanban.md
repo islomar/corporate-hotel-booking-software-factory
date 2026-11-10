@@ -6,7 +6,8 @@
   - [WIP limits](#wip-limits)
   - [Flow](#flow)
   - [Statuses](#statuses)
-    - [To Do](#to-do)
+    - [Backlog](#backlog)
+    - [Ready](#ready)
     - [In Progress](#in-progress)
     - [In Review](#in-review)
     - [Validating](#validating)
@@ -24,7 +25,12 @@ Each status below has a meaning, rules to enter and rules to leave.
 A ticket moves only when the rules to leave are true. Agents follow this document; the owner can override it, and the override is written as a comment on the ticket.
 
 ADR-ad3e defines "done". This document makes it operational.
-Priorities are defined in `priorities.md`. The rank in To Do decides the order of work, and `factory/bin/jira sort-todo` keeps that rank in the order of [To Do](#to-do).
+Priorities are defined in `priorities.md`. The rank in Ready decides the order of work, and `factory/bin/jira sort-todo` keeps that rank in the order of [Ready](#ready).
+
+Columns, left to right (owner decision, 2026-11-10, CHB-153): Backlog, Ready, In Progress, In Review, Validating, Needs human, Done, Discarded.
+Backlog holds work not needed yet. Ready holds work needed now. Agents pull only from Ready.
+The owner added Backlog and renamed the column To Do to Ready on 2026-11-10. Ready (named To Do until that rename) still holds the status "To Do".
+`factory/bin/jira` uses the column "Ready" when it exists, else "To Do". It never pulls from Backlog.
 
 ## WIP limits
 
@@ -33,9 +39,9 @@ The CHB board (board 2) holds the WIP limits: a min and a max per column, set by
 
 A WIP limit stops pulling new work. It never stops the board from recording what already happened (CHB-127).
 
-- Max, starting work: a move from To Do into In Progress exits 4 while In Progress, In Review or Validating holds its max or more.
+- Max, starting work: a move from Ready into In Progress exits 4 while In Progress, In Review or Validating holds its max or more.
   The message names every full column, the limit and the tickets in it.
-  The ticket stays in To Do. The agent comments on it, tells the owner and starts nothing else.
+  The ticket stays in Ready. The agent comments on it, tells the owner and starts nothing else.
 - Max, Needs human: a move into Needs human exits 4 while that column is full. The ticket stays where it is; the agent comments and tells the owner.
 - Moves into In Review and Validating are never blocked: they record a PR opened or a PR merged. A column can go over its max, and Jira colours it.
 - A move back into In Progress (review asked for changes, a live check failed, the owner answered) is not new work and is never blocked.
@@ -43,14 +49,14 @@ A WIP limit stops pulling new work. It never stops the board from recording what
 - The max values live on the board only. This document does not repeat them.
 - Min: a signal only. When a move leaves a column below its min, the wrapper prints `<column> is below its minimum (count/min)`,
   for example `In Progress is below its minimum (0/1)`.
-- Free slots: after every move between columns, the wrapper prints the free In Progress slots and the next top tickets of To Do, one per free slot,
+- Free slots: after every move between columns, the wrapper prints the free In Progress slots and the next top tickets of Ready, one per free slot,
   for example `In Progress 2/3: 1 slot free; next: CHB-123` (CHB-125).
-  The next tickets follow the sorted order of [To Do](#to-do). A ticket that a start would refuse for a missing section is marked:
+  The next tickets follow the sorted order of [Ready](#ready). A Backlog ticket is never next. A ticket that a start would refuse for a missing section is marked:
   `next: CHB-122 (needs acceptance criteria)` or `next: CHB-122 (needs Why it matters and acceptance criteria)`.
   It prints no such line while In Progress, In Review or Validating is at its max: starting is blocked then.
   The moved ticket is never next, and it blocks its dependents unless it moved to Done or Discarded (CHB-143).
 - Pulling work: the agent fills In Progress up to its max, one agent per ticket, in parallel where it can (owner rule, 2026-11-10).
-  It pulls the top tickets of To Do in rank order and needs no go per ticket. The owner can say stop at any time.
+  It pulls the top tickets of Ready in rank order and needs no go per ticket. The owner can say stop at any time.
   Finishing comes first: before it pulls a ticket, the agent drives what it can in Validating, In Review and In Progress (live checks, review fixes, owner steps).
 - Owner override: the owner moves the ticket in the Jira UI and writes why in a comment on the ticket.
 
@@ -60,39 +66,74 @@ A Claude Code hook in `.claude/settings.json` denies raw `acli` writes and direc
 ## Flow
 
 ```text
-To Do → In Progress → In Review → Validating → Done
-              │             │            │
-              └─────────────┴────────────┴──→ Needs human → (back to where it was)
+Backlog → Ready → In Progress → In Review → Validating → Done
+  (trigger)             │             │            │
+                        └─────────────┴────────────┴──→ Needs human → (back to where it was)
 any status ──→ Discarded
 ```
 
 ## Statuses
 
-### To Do
+### Backlog
 
-Meaning: accepted work that nobody has started.
+Meaning: work that is not needed yet (owner decision, 2026-11-10, CHB-153). It stays visible on the board.
 
-- Enter: the ticket has a summary, a description and a parent epic.
+- Enter: a new ticket. `factory/bin/jira create` puts it here, unless a trigger applies at creation (see Leave to Ready).
+  On a board without a Backlog column, a new ticket stays in the pull list.
+- Enter: an improvement the agent finds valuable. The ticket opens with its "Why it matters" section,
+  and the agent tells the owner in one line. The owner's yes is trigger 2.
+- Enter: any ticket that is not needed now, from any open status. `factory/bin/jira transition CHB-<n> Backlog` needs no trigger.
+- Not sorted, no WIP limit. A Backlog ticket is never the top ticket, never "next", and never starts:
+  a move from Backlog into any column other than Ready, Done or Discarded exits 4.
+- Leave to Ready: only with a comment that names the trigger and its evidence. The four triggers:
+  1. something is broken;
+  2. the owner asked for it, directly or because it is in the product slice the owner agreed;
+  3. it unblocks work in progress;
+  4. the same pain appeared twice.
+
+  The ticket's "Why it matters" section states the need and when the need becomes real, never the solution.
+  The owner reads it to decide what can move to Ready.
+
+  `factory/bin/jira transition CHB-<n> Ready --trigger "<which trigger and its evidence>"` moves the ticket
+  and comments `Moved to Ready. Trigger: <text>`. Without `--trigger` it exits 2 and moves nothing.
+  `--trigger` on any other move exits 2 too.
+  To create a ticket straight in Ready: `factory/bin/jira create ... --ready --trigger "<text>"`. It comments `Created in Ready. Trigger: <text>`.
+- Owner go: agents pick work on their own. The owner's explicit go is needed only for:
+  - spending money;
+  - choosing between options with lock-in (vendor, provider, framework);
+  - making something public;
+  - deleting data.
+
+  Such a go is a decision ticket that blocks the work (a "Blocks" link, see [Ready](#ready), Dependencies).
+- Leave to Discarded: the work will not be done. Leave to Done: it is done already. Neither needs a trigger.
+
+### Ready
+
+Meaning: work needed now that nobody has started. Agents pull from it freely, top first.
+Ready was named To Do until 2026-11-10 (CHB-153). The rules below apply to it under either name.
+
+- Enter: the ticket has a summary, a description and a parent epic. From Backlog, a trigger comment as well (see [Backlog](#backlog)).
 - Why it matters (owner rule, 2026-11-10, CHB-148): every description opens with a section headed exactly "Why it matters", with text under it.
   It states the pain, who feels it (the owner, users of the hotel booking app, or agents) and the value of solving it,
   in 2 to 5 plain sentences without technical detail. Nothing comes before it. The technical sections follow.
+  It states the need and when the need becomes real, never the solution. The owner reads it to decide what can move to Ready ([Backlog](#backlog), CHB-153).
   `factory/bin/jira create` refuses a description without it (exit 2, before any request).
   Add it to an existing ticket with `factory/bin/jira section CHB-<n> --heading "Why it matters" --first --body-file FILE`:
   the section goes at the top and the rest of the description stays as it is.
-- Order (owner rule, 2026-11-10, CHB-148): To Do is sorted in this order.
+- Order (owner rule, 2026-11-10, CHB-148): Ready is sorted in this order. Backlog is not sorted.
   1. Tickets that can start: not an epic, and no open ticket blocks them. High, then Medium, then Low.
      A ticket without a priority counts as Medium.
   2. Tickets blocked by an open ticket.
   3. Epics.
 
   Each group keeps its rank order, so the owner's order within a priority stays.
-  `factory/bin/jira sort-todo` applies the order and changes nothing when To Do is already sorted.
-  `create` runs it after creating a ticket, and a start from To Do runs it before the top-ticket check.
+  `factory/bin/jira sort-todo` applies the order and changes nothing when Ready is already sorted.
+  `create` runs it after creating a ticket in Ready, and a start from Ready runs it before the top-ticket check.
   The rule decides the order: the sort undoes a hand rank across priorities or above a blocked ticket.
   To move a ticket up, the owner changes its priority, or ranks it within its priority.
 - Leave to In Progress: someone starts working on it. Before that, the ticket has acceptance criteria that can be checked, and no open ticket blocks it.
-- Top ticket: an agent picks the top ticket of To Do: the highest-ranked ticket that is not an epic and that no open ticket blocks.
-  After the sort, it is the first ticket of To Do. To start another ticket, with the owner's go, raise its priority or rank it first within its priority.
+- Top ticket: an agent picks the top ticket of Ready: the highest-ranked ticket that is not an epic and that no open ticket blocks.
+  After the sort, it is the first ticket of Ready. To start another ticket, with the owner's go, raise its priority or rank it first within its priority.
 - Dependencies: a dependency is a Jira "Blocks" link, never text (CHB-151).
   Add one with `factory/bin/jira link CHB-<a> --blocked-by CHB-<b>`: `CHB-<b>` blocks `CHB-<a>`.
   Both tickets show the link in Jira and in `factory/bin/jira view`. Running the command again changes nothing.
@@ -105,7 +146,7 @@ Meaning: accepted work that nobody has started.
   "Acceptance criteria (Validating)" does not count. A top ticket without them is not skipped: the agent writes them
   (`factory/bin/jira section CHB-<n> --heading "Acceptance criteria" --body-file FILE`), derived from the ticket, its epic and the ADRs.
   It asks the owner only for decisions that are the owner's (owner rule, 2026-11-10).
-- `factory/bin/jira transition <key> "In Progress"` from To Do exits 4 when `<key>` is not that top ticket, is blocked by an open ticket,
+- `factory/bin/jira transition <key> "In Progress"` from Ready exits 4 when `<key>` is not that top ticket, is blocked by an open ticket,
   or is the top ticket without a "Why it matters" first section or without acceptance criteria (CHB-125, CHB-148).
   The message names the top ticket and the next step, or the `section` command that adds the missing section.
   A move back into In Progress from another status is not checked.
@@ -115,7 +156,7 @@ Meaning: accepted work that nobody has started.
 
 Meaning: someone (the agent or the owner) is changing code, infrastructure or documents for this ticket.
 
-- Enter: the worker assigns the ticket to themselves (an agent runs `factory/bin/jira assign CHB-<n> --me`) and creates the branch `CHB-<n>-<slug>` from `main`.
+- Enter: from Ready only. The worker assigns the ticket to themselves (an agent runs `factory/bin/jira assign CHB-<n> --me`) and creates the branch `CHB-<n>-<slug>` from `main`.
 - Leave to In Review: a pull request is open, `make check` passed locally, and the PR body states what merging changes in plain words.
 - Leave to Needs human: the worker is blocked by a question or a decision only the owner can make.
 - WIP limit: a min and a max on the board. The max is the most agents that run in parallel. See [WIP limits](#wip-limits).

@@ -174,13 +174,25 @@ In a section headed "Acceptance criteria (Validating)", each "When:" line needs 
 `create` refuses a description that does not open with a non-empty "Why it matters" section (exit 2, before 1Password and any request, CHB-148).
 The first node must be a heading with exactly that text, and text must follow before the next heading of the same or a higher level.
 
-`sort-todo` ranks To Do in the order of `docs/process/kanban.md`, To Do (CHB-148): tickets in `top_queue` (they can start) first, High, then Medium, then Low;
+The pull list is the board column "Ready", or "To Do" on a board without that column (`pull_list`, CHB-153). The board was renamed on 2026-11-10.
+The "Ready" column holds two statuses, "To Do" (10003) and "Ready" (10010); "Backlog" holds status 10009.
+Backlog is never sorted, never "next" and never the top ticket. A ticket leaves Backlog only for the pull list, Done or Discarded: any other move exits 4.
+`transition` takes a status name or, when no status has that name, a column name.
+A move from Backlog to the pull list needs `--trigger "<which trigger and its evidence>"`: without it the command exits 2 and moves nothing.
+With it, the ticket moves and gets the comment `Moved to Ready. Trigger: <text>`. A failed comment exits 1 and says the ticket moved.
+`--trigger` on any other move, or an empty trigger, exits 2 before any write, the sort of a start included.
+`create` puts a new ticket in Backlog when the board has that column: it reads the new ticket's status and moves it only when Jira put it elsewhere.
+`create --ready --trigger "<text>"` puts it in the pull list and comments `Created in Ready. Trigger: <text>`. One flag without the other exits 2 before any request.
+Every failure after the ticket exists is a notice with exit 0, so nobody creates it twice.
+
+`sort-todo` ranks the pull list in the order of `docs/process/kanban.md`, Ready (CHB-148): tickets in `top_queue` (they can start) first, High, then Medium, then Low;
 then the other non-epic tickets (blocked by an open ticket); then epics. Each group keeps its rank order. A missing priority counts as Medium.
 Readiness comes from `top_queue` only, so a change to the dependency rule changes the sort too.
-It sends no request when To Do is already sorted. Otherwise it ranks the new top ticket before the old one,
+It sends no request when the pull list is already sorted. Otherwise it ranks the new top ticket before the old one,
 then the tickets from the first misplaced one, each chunk of up to 50 after the last key ranked.
-`create` runs it after creating the ticket. The search can miss a ticket created a moment ago, so the new ticket is then sorted as the last ticket of To Do.
-A failed sort after `create` prints `could not sort To Do: ...` and exits 0: the ticket exists, so do not create it again; run `sort-todo`.
+`create` runs it after creating a ticket in the pull list, never for a ticket in Backlog.
+The search can miss a ticket created a moment ago, so the new ticket is then sorted as the last ticket of the pull list.
+A failed sort after `create` prints `could not sort Ready: ...` and exits 0: the ticket exists, so do not create it again; run `sort-todo`.
 The rule decides the order, with no owner exception. The owner moves a ticket by changing its priority, or by ranking it within its priority.
 A bad heading, an empty body, a "When:" line without "Speed up:", a duplicate key or more than 50 issues exit 2 before the wrapper reads 1Password.
 
@@ -216,19 +228,19 @@ The 1Password service account narrows who can read it to processes that can read
 
 - the target status is Validating and the description has no section headed "Acceptance criteria (Validating)" with text under it;
 - the target status is Needs human and the description has no section headed "Needs human: owner steps" with text under it;
-- the move starts work: the target is In Progress and the ticket comes from a column outside started work (To Do, Done, Discarded).
+- the move starts work: the target is In Progress and the ticket comes from a column outside started work (Ready, Done, Discarded). A start from Backlog is refused.
   It is blocked while In Progress, In Review or Validating has a max on the board and holds that many other CHB tickets or more (CHB-127).
   The message names every full column, its count, its limit and its tickets;
 - the target is Needs human and that column has a max and already holds that many other CHB tickets;
-- the move starts work from To Do, passes the limits, and the ticket is not the top ticket of To Do,
+- the move starts work from the pull list, passes the limits, and the ticket is not the top ticket of the pull list,
   or is the top ticket without a "Why it matters" first section or without acceptance criteria (CHB-125, CHB-148).
-  The top ticket and acceptance criteria are defined in `docs/process/kanban.md`, To Do.
+  The top ticket and acceptance criteria are defined in `docs/process/kanban.md`, Ready.
   One search, `statusCategory != Done ORDER BY Rank ASC`, gives the rank order and the open tickets.
   The search also returns each ticket's `issuelinks`. A ticket is blocked by every ticket on an "is blocked by" link of type "Blocks" that is still open (`open_blockers`, CHB-151).
   "Depends on" text is not read.
   A blocked ticket, an epic or a ticket missing from the search is refused first, with no write.
-  Then the check sorts To Do (`sort-todo`, a rank write before the move) and takes the top ticket from the sorted order, without a second search.
-  The top ticket is the first non-epic ticket in To Do that no open ticket blocks. Missing "Why it matters" or acceptance criteria do not skip it.
+  Then the check sorts the pull list (`sort-todo`, a rank write before the move) and takes the top ticket from the sorted order, without a second search.
+  The top ticket is the first non-epic ticket in the pull list that no open ticket blocks. Missing "Why it matters" or acceptance criteria do not skip it.
   The ticket's own links and criteria come from the read just made.
   The message names the open blockers (or says the ticket is an epic), names the top ticket and the `priority` and `rank` commands that put the ticket first,
   or gives the `section` command that writes the missing "Why it matters" or "Acceptance criteria".
@@ -241,11 +253,11 @@ A move back into In Progress from In Review, Validating or Needs human is not ne
 A failed board read or open-ticket search exits 1 and does not move the ticket.
 After a move out of a column that leaves it below its board min, `transition` prints `In Progress is below its minimum (0/1)` and exits 0.
 After every move between columns it prints the free In Progress slots and the next top tickets, one per free slot:
-`In Progress 2/3: 1 slot free; next: CHB-123`, `next: CHB-122 (needs Why it matters and acceptance criteria)`, or `next: nothing to start in To Do`.
+`In Progress 2/3: 1 slot free; next: CHB-123`, `next: CHB-122 (needs Why it matters and acceptance criteria)`, or `next: nothing to start in Ready`. Backlog tickets are never next.
 The next tickets come in the sorted order (`todo_order`), the same order the start check uses.
 It prints no such line when In Progress has no max, or when In Progress, In Review or Validating is at its max.
 The moved ticket is counted in its new column, never in its old one, and is never "next".
-It blocks the To Do tickets it has "Blocks" links to unless it moved to Done or Discarded, whatever the search still shows (CHB-143).
+It blocks the pull-list tickets it has "Blocks" links to unless it moved to Done or Discarded, whatever the search still shows (CHB-143).
 The start check and this line take the top tickets from one function, `top_queue`, through `todo_order`.
 If a count fails, `transition` prints a notice instead and still exits 0: the ticket has moved.
 Two agents that move tickets at the same moment can both pass the check. The owner overrides a limit in the Jira UI, with a comment.
