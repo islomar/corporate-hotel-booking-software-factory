@@ -355,10 +355,11 @@ class WipLimitTest(unittest.TestCase):
         board["columnConfig"]["columns"][4]["statuses"].append({"id": "3"})  # In Progress and Needs human together
         del board["columnConfig"]["columns"][1]
         fake = transition_fake("In Progress", {"Needs human": ["CHB-1", "CHB-2"]}, board=board, description=description_with(SECTIONS["Needs human"]))
-        code, _, _ = _run(["transition", "CHB-12", "Needs human"], fake)
+        code, out, _ = _run(["transition", "CHB-12", "Needs human"], fake)
 
         self.assertEqual(code, 0)
-        self.assertEqual(searches_before_the_move(fake), [])
+        self.assertEqual(fake.searches(), [])
+        self.assertEqual(out.splitlines(), ["CHB-12 -> Needs human"])  # no free-slot line within one column
 
     def test_a_status_on_no_column_is_never_blocked(self) -> None:
         board = board_config(**BOARD_LIMITS)
@@ -417,7 +418,7 @@ class MinimumSignalTest(unittest.TestCase):
         code, out, _ = _run(["transition", "CHB-12", "In Progress"], fake)
 
         self.assertEqual(code, 0)
-        self.assertNotIn("minimum", out)
+        self.assertEqual(out.splitlines(), ["CHB-12 -> In Progress", "In Progress 1/3: 2 slots free; next: no ready ticket in To Do"])
 
 
 class ReadinessTest(unittest.TestCase):
@@ -454,6 +455,10 @@ class ReadinessTest(unittest.TestCase):
             ),
             "list after a line without a colon": ("Depends on CHB-1.\n\n- CHB-2 is unrelated.", ["CHB-1"]),
             "bullet": ("- Depends on CHB-4.\n- Mentions CHB-6.", ["CHB-4"]),
+            "nested list under a bullet": (
+                "- Depends on:\n  - CHB-4: a check.\n  - CHB-5: a test.\n- Mentions CHB-6.",
+                ["CHB-4", "CHB-5"],
+            ),
             "mentions only": ("See CHB-3 and CHB-4.", []),
         }
         for name, (markdown, keys) in cases.items():
@@ -518,7 +523,8 @@ class TopTicketTest(unittest.TestCase):
                 self.assertIn(f"CHB-12 is not ready: {reason}", err)
                 self.assertEqual(fake.writes(), [])
 
-    def test_a_dependency_that_is_done_or_discarded_does_not_count(self) -> None:
+    def test_a_dependency_missing_from_the_open_search_does_not_count(self) -> None:
+        """Done and Discarded are both in the Done category, so the open search leaves them out."""
         description = doc("Depends on CHB-91.\n\n## Acceptance criteria\n\n- A test.")
         fake = transition_fake("To Do", {"Done": ["CHB-91"]}, description=description)
         code, _, _ = _run(["transition", "CHB-12", "In Progress"], fake)
@@ -533,6 +539,32 @@ class TopTicketTest(unittest.TestCase):
 
                 self.assertEqual(code, 0)
                 self.assertNotIn(OPEN_JQL, searches_before_the_move(fake))
+
+    def test_an_epic_is_refused_as_not_ready(self) -> None:
+        fake = transition_fake("To Do", epics=("CHB-12",))
+        code, _, err = _run(["transition", "CHB-12", "In Progress"], fake)
+
+        self.assertEqual(code, 4)
+        self.assertIn("CHB-12 is not ready: it is an epic", err)
+        self.assertEqual(fake.writes(), [])
+
+    def test_a_stale_search_answer_does_not_hide_a_ready_top_ticket(self) -> None:
+        """The fresh read says ready; the search still holds the old description."""
+        fake = transition_fake("To Do", {"To Do": ["CHB-12", "CHB-5"]}, descriptions={"CHB-12": NOT_READY})
+        fake.routes[("GET", "/rest/api/3/issue/CHB-12?fields=status,description")] = issue_in("To Do", READY)
+        code, _, _ = _run(["transition", "CHB-12", "In Progress"], fake)
+
+        self.assertEqual(code, 0)
+
+    def test_a_ticket_missing_from_the_search_is_refused(self) -> None:
+        fake = transition_fake("To Do")
+        answer = fake.routes[("POST", SEARCH)]
+        fake.routes[("POST", SEARCH)] = lambda body: {"issues": [], "isLast": True} if "statusCategory" in body["jql"] else answer(body)
+        code, _, err = _run(["transition", "CHB-12", "In Progress"], fake)
+
+        self.assertEqual(code, 4)
+        self.assertIn("CHB-12 is missing from the search of open tickets", err)
+        self.assertEqual(fake.writes(), [])
 
     def test_a_failed_search_blocks_with_exit_1(self) -> None:
         fake = transition_fake("To Do")

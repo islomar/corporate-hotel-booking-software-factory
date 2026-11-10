@@ -72,7 +72,7 @@ Meaning: accepted work that nobody has started.
 - Leave to In Progress: someone starts working on it. Before that, the ticket has acceptance criteria that can be checked, and nothing it depends on is open.
 - Ready: the description has a line that starts with "Acceptance criteria" (a heading or a paragraph, any case, bold allowed) with text under it,
   and no ticket on a "Depends on" line is open. A "Depends on" line counts the CHB keys in its first sentence,
-  and the list right after it when the line ends with ":". Open means a status outside the Done category; Done and Discarded are closed.
+  and the list under it when the line ends with ":". Open means a status outside the Done category; Done and Discarded are closed.
   Write dependencies on such a line, so the check sees them.
   A dependency in prose ("the owner's go on ...") is not checked: rank that ticket lower until the dependency holds.
 - Top ticket: an agent picks the top ticket of To Do: the highest-ranked ticket that is ready and is not an epic.

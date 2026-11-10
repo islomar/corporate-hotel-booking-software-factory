@@ -61,7 +61,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -116,7 +116,7 @@ KEY_IN_TEXT = re.compile(rf"(?<![\w-]){PROJECT}-[1-9][0-9]*(?![\w-])")
 # Open tickets in rank order, for the top of To Do and for the dependencies. Discarded is in the
 # Done status category, so it is not open.
 OPEN_JQL = "statusCategory != Done ORDER BY Rank ASC"
-OPEN_FIELDS = ["status", "issuetype", "description"]
+OPEN_FIELDS = ("status", "issuetype", "description")
 
 EXIT_JIRA = 1
 EXIT_USAGE = 2
@@ -581,13 +581,14 @@ class Jira:
         fields = "summary,status,priority,assignee,issuetype,parent,description,comment"
         return self.request("GET", f"/rest/api/3/issue/{check_key(key)}?fields={fields}")
 
-    def search(self, jql: str, limit: int = 500, fields: list[str] = SEARCH_FIELDS) -> list[dict[str, Any]]:
+    def search(self, jql: str, limit: int = 500, fields: Sequence[str] | None = None) -> list[dict[str, Any]]:
         """Issues of the CHB project that match the JQL (scope_jql). An issue outside CHB raises JiraError."""
         jql = scope_jql(jql)
+        names = list(SEARCH_FIELDS if fields is None else fields)
         issues: list[dict[str, Any]] = []
         page_token = None
         while len(issues) < limit:
-            body: dict[str, Any] = {"jql": jql, "fields": fields, "maxResults": min(100, limit - len(issues))}
+            body: dict[str, Any] = {"jql": jql, "fields": names, "maxResults": min(100, limit - len(issues))}
             if page_token:
                 body["nextPageToken"] = page_token
             page = self.request("POST", "/rest/api/3/search/jql", body)
@@ -808,16 +809,21 @@ def check_top_of_to_do(jira: Jira, key: str, description: Any, columns: list[Col
     """Refuse (BlockedError) a start from To Do of a ticket that is not the top ready ticket of To Do.
 
     The ticket's own readiness comes from its description as just read, so a stale search answer
-    cannot make it ready.
+    cannot make it ready or not ready. Its rank comes from the search.
     """
     issues = jira.open_issues()
     reason = not_ready_reason(description, {str(issue["key"]) for issue in issues})
+    mine = next((issue for issue in issues if issue["key"] == key), None)
+    if reason is None and mine is not None and mine["fields"]["issuetype"]["name"] == "Epic":
+        reason = "it is an epic; start one of its tickets instead"
     if reason:
         raise BlockedError(
             f"{key} is not ready: {reason}. Ranking it does not help: fix the ticket first, "
             "or pull the top ready ticket of To Do (docs/process/kanban.md, To Do)."
         )
-    queue = ready_queue(issues, columns)
+    if mine is None:
+        raise BlockedError(f"{key} is missing from the search of open tickets, so its rank is unknown. Try again in a minute.")
+    queue = ready_queue(issues, columns, ready=key)
     if queue and queue[0] != key:
         raise BlockedError(
             f"{key} is not the top ticket of To Do: {queue[0]} is. Pull {queue[0]}, or, with the owner's go, "
@@ -826,8 +832,11 @@ def check_top_of_to_do(jira: Jira, key: str, description: Any, columns: list[Col
         )
 
 
-def ready_queue(issues: list[dict[str, Any]], columns: list[Column] | tuple[Column, ...]) -> list[str]:
-    """Keys of the ready non-epic tickets of To Do, in rank order. `issues` is open_issues()."""
+def ready_queue(issues: list[dict[str, Any]], columns: Sequence[Column], ready: str | None = None) -> list[str]:
+    """Keys of the ready non-epic tickets of To Do, in rank order. `issues` is open_issues().
+
+    `ready` is a key already found ready from a fresh read; the search answer may be older.
+    """
     to_do = next((column for column in columns if column.name == TO_DO), None)
     if to_do is None:
         return []
@@ -837,7 +846,7 @@ def ready_queue(issues: list[dict[str, Any]], columns: list[Column] | tuple[Colu
         for issue in issues
         if str(issue["fields"]["status"]["id"]) in to_do.status_ids
         and issue["fields"]["issuetype"]["name"] != "Epic"
-        and not_ready_reason(issue["fields"].get("description"), open_keys) is None
+        and (issue["key"] == ready or not_ready_reason(issue["fields"].get("description"), open_keys) is None)
     ]
 
 
@@ -873,8 +882,9 @@ def has_acceptance_criteria(description: Any) -> bool:
 
 
 def dependencies(description: Any) -> list[str]:
-    """CHB keys in the first sentence of a line that starts with "Depends on", and in the list right
-    after that line when it ends with ":". Other mentions of tickets are not dependencies."""
+    """CHB keys in the first sentence of a line that starts with "Depends on", and, when that line
+    ends with ":", in the list under it: the indented lines that follow it in the same list item,
+    or the list right after its paragraph. Other mentions of tickets are not dependencies."""
     content = description.get("content", []) if isinstance(description, dict) else []
     keys: list[str] = []
     for index, node in enumerate(content):
@@ -883,9 +893,17 @@ def dependencies(description: Any) -> list[str]:
             if not DEPENDS_PATTERN.match(line):
                 continue
             keys.extend(KEY_IN_TEXT.findall(re.split(r"\.(?:\s|$)", line, maxsplit=1)[0]))  # first sentence only
+            if not line.rstrip().rstrip("*").endswith(":"):
+                continue
+            nested = []
+            for other in lines[number + 1 :]:
+                if not other[:1].isspace():
+                    break
+                nested.append(other)
+            keys.extend(KEY_IN_TEXT.findall("\n".join(nested)))
             following = content[index + 1] if index + 1 < len(content) else None
-            ends_with_colon = number == len(lines) - 1 and line.rstrip().rstrip("*").endswith(":")
-            if ends_with_colon and isinstance(following, dict) and following.get("type") in ("bulletList", "orderedList"):
+            last = number == len(lines) - 1
+            if last and isinstance(following, dict) and following.get("type") in ("bulletList", "orderedList"):
                 keys.extend(KEY_IN_TEXT.findall(adf_to_text(following)))
     return list(dict.fromkeys(keys))
 
@@ -915,13 +933,16 @@ def _minimum_notice(jira: Jira, key: str, move: Move) -> list[str]:
 
 
 def _free_slot_notice(jira: Jira, key: str, move: Move) -> list[str]:
-    """`In Progress 2/3: 1 slot free; next: CHB-123` after a move (CHB-125).
+    """`In Progress 2/3: 1 slot free; next: CHB-123` after a move between columns (CHB-125).
 
-    Nothing when In Progress has no max, or when In Progress, In Review or Validating is at its
-    max (starting is blocked then). Search can still list the moved key in its old status, so it
-    is left out of the search answer and counted in its new column by hand; it is never "next".
+    Nothing after a move within one column or to a status on no column, when In Progress has no
+    max, or when In Progress, In Review or Validating is at its max (starting is blocked then).
+    Search can still list the moved key in its old status, so it is left out of the search answer
+    and counted in its new column by hand; it is never "next".
     A failed search becomes a notice: the move is done.
     """
+    if move.target is None or move.target == move.source:
+        return []
     columns = {column.name: column for column in move.columns}
     in_progress = columns.get(IN_PROGRESS)
     if in_progress is None or in_progress.max is None:

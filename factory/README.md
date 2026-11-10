@@ -189,7 +189,8 @@ The 1Password service account narrows who can read it to processes that can read
   Ready is defined in `docs/process/kanban.md`, To Do: an "Acceptance criteria" line with text under it, and no open ticket on a "Depends on" line.
   One search, `statusCategory != Done ORDER BY Rank ASC`, gives the rank order and the open tickets.
   The top ready ticket is the first non-epic ticket in To Do that is ready. The ticket's own readiness comes from its description as just read.
-  The message says why the ticket is not ready, or names the top ticket and the `rank` command that puts the ticket first.
+  The message says why the ticket is not ready (an epic is never ready), or names the top ticket and the `rank` command that puts the ticket first.
+  A ticket missing from that search has no known rank and is refused too: try again in a minute.
 
 The limits come from `GET /rest/agile/1.0/board/2/configuration` on every call, never from code.
 The count is a JQL search on the column's status ids in project CHB, without the moved ticket.
