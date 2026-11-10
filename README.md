@@ -32,6 +32,7 @@
 - Production: <https://chb-1027266991110.europe-west1.run.app>
 - API reference (OpenAPI): <https://chb-1027266991110.europe-west1.run.app/api/docs>
 - Work tracking (Jira board `CHB`, sign-in required): <https://islomar.atlassian.net/jira/software/projects/CHB/boards/2>
+- New here? Start with [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 A web app built from the Codurance kata [Corporate Hotel Booking](https://www.codurance.com/katas/corporate-hotel-booking), developed through an AI-agent software factory.
 
@@ -93,6 +94,28 @@ ReDoc is off: it has no self-hosted copy.
 
 The backend sends traces, metrics and logs with OpenTelemetry (ADR-c17d).
 The code is the same everywhere. Only the destination changes:
+
+```mermaid
+flowchart LR
+    browser(["Browser"])
+
+    subgraph container["The app: backend/src/chb/app.py"]
+        static["Built frontend<br/>served at /"]
+        api["FastAPI routes<br/>/api/..."]
+        tel["Telemetry<br/>chb/telemetry.py"]
+    end
+
+    lgtm["grafana/otel-lgtm<br/>Tempo, Prometheus, Loki"]
+    gcp["Cloud Trace, Cloud Monitoring, Cloud Logging"]
+
+    browser --> static
+    browser --> api
+    api --> tel
+    tel -- "make dev" --> lgtm
+    tel -- "Cloud Run" --> gcp
+```
+
+Under `make dev`, Vite serves the frontend on port 5173 and the backend runs on port 8000.
 
 | | Local (`make dev`) | Production (Cloud Run) |
 |---|---|---|
