@@ -23,9 +23,10 @@ PLAIN_LAUNCHERS = {"rtk", "as-agent", "env", "time", "nice", "nohup", "command",
 RUN_LAUNCHERS = {("uv", "run"), ("npm", "exec"), ("poetry", "run"), ("rtk", "proxy")}
 LAUNCHER_VALUE_OPTIONS = {
     "--project", "--directory", "--with", "--with-requirements", "--extra", "--group", "--python", "-p",
-    "--package", "--env-file", "--index", "--prefix", "-w", "--workspace", "-c", "--call",
+    "--package", "--env-file", "--index", "--prefix", "-w", "--workspace", "-c", "--call", "-n", "-u", "--adjustment", "--unset",
 }
 PYTHON_VALUE_OPTIONS = {"-X", "-W", "-Q"}
+TIMEOUT_VALUE_OPTIONS = {"-s", "--signal", "-k", "--kill-after"}
 
 
 def tokens(command: str) -> list[str]:
@@ -60,7 +61,7 @@ def simple_commands(command: str) -> list[list[str]]:
             current.append(word)
             i += 1
             continue
-        redirection = "<" in word or ">" in word
+        redirection = ("<" in word or ">" in word) and "(" not in word  # `<(` is process substitution
         if redirection:
             if current and current[-1].isdigit():
                 current.pop()
@@ -93,7 +94,7 @@ def strip_launchers(words: list[str]) -> list[str]:
         elif prog in PLAIN_LAUNCHERS:
             i = _skip_options(words, i + 1, LAUNCHER_VALUE_OPTIONS)
         elif prog == "timeout":
-            i = _skip_options(words, i + 1, set()) + 1
+            i = _skip_options(words, i + 1, TIMEOUT_VALUE_OPTIONS) + 1
         elif PYTHON.match(prog):
             j = _skip_options(words, i + 1, PYTHON_VALUE_OPTIONS, stop="-m")
             if j + 1 < len(words) and words[j] == "-m":
