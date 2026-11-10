@@ -103,6 +103,8 @@ NEEDS_HUMAN = "Needs human"
 # started work) is blocked while one of them is at or over its max (CHB-127). Moves into In Review
 # and Validating record a PR or a merge and are never blocked.
 STARTED_WORK = (IN_PROGRESS, "In Review", "Validating")
+# Board columns of closed tickets: a ticket moved into one no longer blocks its dependents (CHB-143).
+CLOSED = ("Done", "Discarded")
 # Target status (casefolded) -> description section it requires (docs/process/kanban.md).
 REQUIRED_SECTIONS = {
     "validating": "Acceptance criteria (Validating)",
@@ -855,21 +857,38 @@ def check_top_of_to_do(jira: Jira, key: str, description: Any, columns: list[Col
         )
 
 
-def top_queue(issues: list[dict[str, Any]], columns: Sequence[Column], descriptions: dict[str, Any] | None = None) -> list[str]:
-    """Keys of the To Do tickets that can be pulled, in rank order. `issues` is open_issues().
+def top_queue(
+    issues: list[dict[str, Any]],
+    columns: Sequence[Column],
+    descriptions: dict[str, Any] | None = None,
+    *,
+    moved: tuple[str, Column] | None = None,
+) -> list[str]:
+    """Keys of the To Do tickets that can be pulled, in rank order. `issues` is the whole of open_issues().
 
+    The start check and the free-slot notice both take the top tickets from here, so they cannot disagree (CHB-143).
     A ticket is left out when it is an epic or a ticket on its "Depends on" line is open.
     Missing acceptance criteria do not leave it out: the agent writes them (CHB-125).
     `descriptions` maps keys to descriptions from a read newer than the search; those win.
+    `moved` is a ticket that just moved and its new column. The search can still show its old status,
+    so the new column wins: the ticket is open unless that column is in CLOSED, and it is never in the queue.
     """
     to_do = next((column for column in columns if column.name == TO_DO), None)
     if to_do is None:
         return []
     open_keys = {str(issue["key"]) for issue in issues}
+    if moved is not None:
+        moved_key, target = moved
+        if target.name in CLOSED:
+            open_keys.discard(moved_key)
+        else:
+            open_keys.add(moved_key)
     queue = []
     for issue in issues:
         fields = issue["fields"]
         if str(fields["status"]["id"]) not in to_do.status_ids or fields["issuetype"]["name"] == "Epic":
+            continue
+        if moved is not None and issue["key"] == moved[0]:
             continue
         description = (descriptions or {}).get(issue["key"], fields.get("description"))
         if not open_dependencies(description, open_keys):
@@ -959,8 +978,9 @@ def _free_slot_notice(jira: Jira, key: str, move: Move) -> list[str]:
 
     Nothing after a move within one column or to a status on no column, when In Progress has no
     max, or when In Progress, In Review or Validating is at its max (starting is blocked then).
-    Search can still list the moved key in its old status, so it is left out of the search answer
-    and counted in its new column by hand; it is never "next".
+    Search can still list the moved key in its old status, so it is left out of the counts and
+    counted in its new column by hand. top_queue gets the whole search and the move: the moved
+    key is never "next", and it blocks its dependents unless it moved to Done or Discarded (CHB-143).
     A failed search becomes a notice: the move is done.
     """
     if move.target is None or move.target == move.source:
@@ -970,15 +990,16 @@ def _free_slot_notice(jira: Jira, key: str, move: Move) -> list[str]:
     if in_progress is None or in_progress.max is None:
         return []
     try:
-        issues = [issue for issue in jira.open_issues() if issue["key"] != key]
+        issues = jira.open_issues()
     except JiraError as error:  # the move is done: report, do not fail it
         return [f"could not check free {IN_PROGRESS} slots: {error}"]
+    others = [issue for issue in issues if issue["key"] != key]
     counts: dict[str, int] = {}
     for name in STARTED_WORK:
         column = columns.get(name)
         if column is None:
             continue
-        here = sum(1 for issue in issues if str(issue["fields"]["status"]["id"]) in column.status_ids)
+        here = sum(1 for issue in others if str(issue["fields"]["status"]["id"]) in column.status_ids)
         counts[name] = here + (1 if move.target == column else 0)
         if column.max is not None and counts[name] >= column.max:
             return []
@@ -986,7 +1007,7 @@ def _free_slot_notice(jira: Jira, key: str, move: Move) -> list[str]:
     descriptions = {issue["key"]: issue["fields"].get("description") for issue in issues}
     queue = [
         top if has_acceptance_criteria(descriptions[top]) else f"{top} (needs acceptance criteria)"
-        for top in top_queue(issues, move.columns)[:free]
+        for top in top_queue(issues, move.columns, moved=(key, move.target))[:free]
     ]
     following = ", ".join(queue) or f"nothing to start in {TO_DO}"
     return [f"{IN_PROGRESS} {counts[IN_PROGRESS]}/{in_progress.max}: {free} slot{'s' if free > 1 else ''} free; next: {following}"]
