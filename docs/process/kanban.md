@@ -96,7 +96,11 @@ Meaning: the change is merged and deployed, but nobody has yet confirmed that it
   An agent writes it with `factory/bin/jira section CHB-<n> --heading "Acceptance criteria (Validating)" --body-file FILE`.
   A reader without context must see what is still missing. For each criterion not yet checked live, the section states:
   - What must happen, in the live system.
-  - When: an absolute date and time, or the event that triggers it (for example "the next Dependabot run, Monday 2026-11-09 05:00 UTC").
+  - When: an absolute date and time, or the event that triggers it (for example "the next Dependabot run, 2026-11-11 06:00 Europe/Madrid").
+  - Speed up: a line of its own right after When. It names the exact step that lets the owner trigger it earlier, or says "cannot be sped up" and why.
+    Examples: Dependabot "Check for updates" in the repository's Insights, Dependency graph, Dependabot tab.
+    "Run workflow" on the Actions page of a workflow that declares `workflow_dispatch`. "Re-run jobs" on a failed run.
+    `factory/bin/jira section` refuses the section (exit 2) while a "When:" line has no "Speed up:" line.
   - Where to check: the exact URL or command.
   - Pass condition: what the check must show.
   - Who checks: the agent or the owner. If the owner must act, the section has numbered steps, as for Needs human.

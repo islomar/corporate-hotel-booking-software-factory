@@ -35,6 +35,8 @@ All work is tracked in Jira space `CHB` (see `TODO.md`). Move tickets only as `d
   If `factory/bin/jira` fails (for example no 1Password service account token in the keyring, exit code 3), stop and report.
 - A command for the owner to paste works from any folder: absolute paths, `git -C <repo>`, `make -C <repo>`, or a leading `cd ~/workspace/<repo> &&`.
   A Stop hook (`factory/hooks/check_owner_commands.py`) checks the shell blocks of every reply. See CHB-126.
+- When work waits on a schedule, a run, a person or a limit, tell the owner how to speed it up or unblock it, with the exact step.
+  In an "Acceptance criteria (Validating)" section this is the "Speed up:" line. `factory/bin/jira section` refuses a "When:" line without one.
 - Run `make check` before every commit. Gates read exit codes, not output text.
 - One Jira ticket per branch: `CHB-<n>-<slug>`. Every change reaches `main` through a squash-merged PR: the `main` ruleset applies to everyone (`infra/github/ruleset.tf`).
 - Kata design rules: services stay stateless, no circular dependencies between services, data in repositories, packages follow actors and areas.
