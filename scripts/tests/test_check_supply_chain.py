@@ -555,6 +555,15 @@ class GitRepoTest(unittest.TestCase):
         self.assertFalse(verdict.ok)
         self.assertIn("Release-age settings changed", verdict.message)
 
+    def test_gather_skips_the_content_of_binary_files(self):
+        # CHB-161: a PNG in a PR made the check crash with a UnicodeDecodeError.
+        (self.repo / "docs").mkdir()
+        (self.repo / "docs/avatar.png").write_bytes(b"\x89PNG\r\n\x1a\n\x00\xff\xfe")
+        head = self.commit_head({})
+        found = self.gather_dependabot_pr(head)
+        self.assertEqual(found.changed_files, ["docs/avatar.png"])
+        self.assertEqual(found.release_age_files, [])
+
     def test_a_dependabot_pr_that_touches_pnpm_yarn_or_bun_settings_needs_the_owner(self):
         for path in ["pnpm-workspace.yaml", "e2e/.yarnrc.yml", "bunfig.toml"]:
             with self.subTest(path=path):
