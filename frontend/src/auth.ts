@@ -12,11 +12,16 @@ export type AuthClient = {
   signOut(): Promise<void>;
 };
 
-/** Identity Platform through the Firebase JS SDK (ADR-50e4). Loaded only when configured. */
+/**
+ * Identity Platform through the Firebase JS SDK (ADR-50e4). Loaded only when configured.
+ * `@firebase/app` and `@firebase/auth` are what `firebase/app` and `firebase/auth` re-export.
+ * The `firebase` package would add about 110 lockfile entries (Firestore, Crashlytics, protobufjs)
+ * that this app never imports.
+ */
 export async function firebaseAuthClient(
   config: AuthConfig,
 ): Promise<AuthClient> {
-  const { initializeApp } = await import("firebase/app");
+  const { initializeApp } = await import("@firebase/app");
   const {
     GoogleAuthProvider,
     createUserWithEmailAndPassword,
@@ -25,7 +30,7 @@ export async function firebaseAuthClient(
     signInWithEmailAndPassword,
     signInWithPopup,
     signOut,
-  } = await import("firebase/auth");
+  } = await import("@firebase/auth");
   const auth = getAuth(initializeApp(config));
   return {
     onChange: (listener) =>

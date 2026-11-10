@@ -30,6 +30,8 @@ CERTS_URL = (
 
 # Google's clock and ours differ a little: a token minted right now can look issued in the future.
 CLOCK_SKEW_SECONDS = 10
+# After a failed certificate fetch, the next attempt waits this long.
+RETRY_AFTER_SECONDS = 30
 
 type CertsFetch = Callable[[], tuple[Mapping[str, str], float]]
 
@@ -80,7 +82,11 @@ def fetch_google_certs() -> tuple[Mapping[str, str], float]:
 
 
 class CachedCerts:
-    """Keeps the certificates for as long as Google's Cache-Control allows."""
+    """Keeps the certificates for as long as Google's Cache-Control allows.
+
+    When a fetch fails, it serves the last certificates it had and waits RETRY_AFTER_SECONDS
+    before it fetches again: an outage of Google's endpoint does not make every request wait.
+    """
 
     def __init__(self, fetch: CertsFetch, clock: Callable[[], float] = time.monotonic) -> None:
         self._fetch = fetch
@@ -88,13 +94,29 @@ class CachedCerts:
         self._lock = threading.Lock()
         self._certs: Mapping[str, str] = {}
         self._expires_at = float("-inf")
+        self._retry_at = float("-inf")
 
     def __call__(self) -> Mapping[str, str]:
         with self._lock:
-            if self._clock() >= self._expires_at:
+            now = self._clock()
+            if now < self._expires_at:
+                return self._certs
+            if now < self._retry_at:
+                return self._last_known()
+            try:
                 certs, max_age = self._fetch()
-                self._certs, self._expires_at = certs, self._clock() + max_age
+            except Exception:
+                self._retry_at = now + RETRY_AFTER_SECONDS
+                if self._certs:
+                    return self._certs
+                raise
+            self._certs, self._expires_at = certs, self._clock() + max_age
             return self._certs
+
+    def _last_known(self) -> Mapping[str, str]:
+        if not self._certs:
+            raise CertsUnavailableError("the last certificate fetch failed")
+        return self._certs
 
 
 class FirebaseTokenVerifier:

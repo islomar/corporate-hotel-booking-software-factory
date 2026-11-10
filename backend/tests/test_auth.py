@@ -5,6 +5,7 @@ import pytest
 from conftest import TokenIssuer
 
 from chb.auth import (
+    RETRY_AFTER_SECONDS,
     CachedCerts,
     CertsUnavailableError,
     FirebaseTokenVerifier,
@@ -141,3 +142,56 @@ def test_verify_rejects_a_token_from_the_future(issuer: TokenIssuer, claim: str)
 
     with pytest.raises(InvalidTokenError):
         verifier(issuer).verify(issuer.token(**{claim: later}))
+
+
+class FlakyFetch:
+    """Succeeds until told to fail."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.failing = False
+
+    def __call__(self) -> tuple[Mapping[str, str], float]:
+        self.calls += 1
+        if self.failing:
+            raise OSError("certificate endpoint down")
+        return {"k": f"cert-{self.calls}"}, 60
+
+
+def test_stale_certs_keep_serving_while_the_fetch_fails() -> None:
+    fetch, clock = FlakyFetch(), Clock()
+    certs = CachedCerts(fetch, clock)
+    certs()
+    fetch.failing = True
+    clock.now += 60
+
+    assert certs() == {"k": "cert-1"}
+
+
+def test_a_failed_fetch_waits_before_the_next_attempt() -> None:
+    fetch, clock = FlakyFetch(), Clock()
+    certs = CachedCerts(fetch, clock)
+    certs()
+    fetch.failing = True
+    clock.now += 60
+    certs()
+
+    clock.now += RETRY_AFTER_SECONDS - 1
+    certs()
+    assert fetch.calls == 2
+
+    fetch.failing = False
+    clock.now += 1
+    assert certs() == {"k": "cert-3"}
+
+
+def test_without_any_certs_a_failed_fetch_fails_fast_until_the_retry() -> None:
+    fetch, clock = FlakyFetch(), Clock()
+    fetch.failing = True
+    certs = CachedCerts(fetch, clock)
+
+    with pytest.raises(OSError, match="certificate endpoint down"):
+        certs()
+    with pytest.raises(CertsUnavailableError):
+        certs()
+    assert fetch.calls == 1
