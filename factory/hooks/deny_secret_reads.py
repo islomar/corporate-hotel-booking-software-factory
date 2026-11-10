@@ -93,13 +93,12 @@ def read_reason(path: str, *, home: str, cwd: str) -> str | None:
     return None
 
 
-def _direct_secret_command(words: list[str]) -> str | None:
+def _vault_lookup(words: list[str]) -> bool:
+    """True for `secret-tool lookup` and `op read`. Returns a bool so no value reaches the message."""
     prog, args = name(words[0]), words[1:]
-    if prog == "secret-tool" and positionals(args, SECRET_TOOL_VALUE_OPTIONS)[:1] == ["lookup"]:
-        return "secret-tool lookup"
-    if prog == "op" and positionals(args, OP_VALUE_OPTIONS)[:1] == ["read"]:
-        return "op read"
-    return None
+    if prog == "secret-tool":
+        return positionals(args, SECRET_TOOL_VALUE_OPTIONS)[:1] == ["lookup"]
+    return prog == "op" and positionals(args, OP_VALUE_OPTIONS)[:1] == ["read"]
 
 
 def bash_reason(command: str, *, home: str) -> str | None:
@@ -109,9 +108,8 @@ def bash_reason(command: str, *, home: str) -> str | None:
         if op and all(c in "<>&|;()\n" for c in op) and "<" in op and "(" not in op and secret_path(target, home=home):
             return f"Blocked: the command reads `{target}`, a secret file. {ADVICE}"
     for simple in simple_commands(command):
-        direct = _direct_secret_command(simple)
-        if direct:
-            return f"Blocked: `{direct}` prints a secret. {ADVICE}"
+        if _vault_lookup(simple):
+            return f"Blocked: `secret-tool lookup` and `op read` print a secret. {ADVICE}"
         if name(simple[0]) in METADATA:
             continue
         for word in simple[1:]:
