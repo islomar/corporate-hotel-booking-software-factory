@@ -954,7 +954,8 @@ class Jira:
 
         Refuses (UsageError) a ticket outside Backlog. Refuses (BlockedError) while readiness_problems names a
         box. Then moves the ticket (transition), ticking the verified boxes just before the move, and posts
-        "Moved to Ready. Trigger: <text>". A move that transition refuses writes nothing.
+        "Moved to Ready. Trigger: <text>". A move that a check refuses writes nothing. A move request that
+        fails after the tick leaves the verified boxes ticked in Backlog: harmless, `ready` checks them again.
         """
         fields = self.request("GET", f"/rest/api/3/issue/{check_key(key)}?fields=status,description,issuelinks")["fields"]
         columns = self.board_columns()
@@ -968,9 +969,12 @@ class Jira:
             raise BlockedError(
                 f"{key} is not ready: {'; '.join(problems)}. It stays in {BACKLOG} (docs/process/kanban.md, Backlog, {DOR_HEADING})."
             )
+
         def tick_verified() -> None:
-            """Runs once the move is about to be sent, so a refused move writes nothing. It ticks a fresh read
-            of the description, so an edit made during the checks is kept; one made after this read is lost."""
+            """Tick the verified boxes on a fresh read, once every check of the move has passed.
+
+            An edit made during the checks is kept; one made after this read is lost.
+            """
             current = self.request("GET", f"/rest/api/3/issue/{key}?fields=description")["fields"].get("description")
             states = box_states(current) or {}
             if isinstance(current, dict) and any(states.get(name) == "TODO" for name in VERIFIED_BOXES):
