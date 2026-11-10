@@ -1,0 +1,49 @@
+{
+  "title": "Review stage output (CHB-62, ADR-ea8c)",
+  "description": "factory/workflow/route.py: mergeSafety below 8.5 or any critical finding goes to triage. Severities and dimensions match factory/review/schema.json.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["mergeSafety", "scores", "findings"],
+  "properties": {
+    "mergeSafety": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 10
+    },
+    "scores": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["codeQuality", "security", "businessAlignment", "tests", "architecture"],
+      "properties": {
+        "codeQuality": { "$ref": "#/$defs/score" },
+        "security": { "$ref": "#/$defs/score" },
+        "businessAlignment": { "$ref": "#/$defs/score" },
+        "tests": { "$ref": "#/$defs/score" },
+        "architecture": { "$ref": "#/$defs/score" }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["severity", "suggestedFix"],
+        "properties": {
+          "severity": { "enum": ["critical", "improvement", "cleanup"] },
+          "suggestedFix": {
+            "type": "string",
+            "maxLength": 1000
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 10
+    }
+  }
+}

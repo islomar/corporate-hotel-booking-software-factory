@@ -16,7 +16,10 @@
   - [Hook: branch names follow the ticket key](#hook-branch-names-follow-the-ticket-key)
   - [Hook: related tests only while iterating](#hook-related-tests-only-while-iterating)
   - [Hook: warn on repeated edits of one file](#hook-warn-on-repeated-edits-of-one-file)
+  - [Hook: no harness edits in feature tickets](#hook-no-harness-edits-in-feature-tickets)
+  - [Hook: no secrets in the agent's context](#hook-no-secrets-in-the-agents-context)
   - [Automated PR review (shadow mode)](#automated-pr-review-shadow-mode)
+  - [Workflow output schemas and routing](#workflow-output-schemas-and-routing)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -291,6 +294,58 @@ The counts live in `<temp dir>/chb-edit-loops-<uid>/<session id>.json`. The env 
 The hook refuses a folder that is a symlink, belongs to another user or is open to others, and opens the state file without following symlinks.
 The hook never blocks. Bad input, an unreadable state file or an internal error gives no warning and exit 0.
 
+## Hook: no harness edits in feature tickets
+
+`.claude/settings.json` runs `factory/hooks/deny_harness_edits.py` before every Write, Edit, MultiEdit and NotebookEdit call (CHB-30).
+CLAUDE.md: do not edit `.claude/`, `factory/` or `.github/` as part of a feature ticket.
+
+The hook denies the edit when all of these hold:
+
+- the path's first folder, relative to the top of its own git worktree, is `.claude`, `factory` or `.github`;
+- that worktree's branch is `CHB-<n>-...`;
+- CHB-<n> is a product epic, or its Jira parent is one. The product epics are CHB-4, CHB-14, CHB-19 and CHB-50 (`PRODUCT_EPICS` in the hook, set by the owner).
+
+These pass: tickets of other epics, tickets without a parent, `main`, `worktree-agent-...` and any other branch (the branch name hook guards names), and paths outside a git repository.
+A file under `<repo>/.claude/worktrees/agent-x/` belongs to that worktree, so `backend/` files there pass.
+The hook resolves symlinks first, also the file's own, so a link into a harness folder counts as the harness path.
+
+The hook calls `factory/bin/jira view CHB-<n>` only for a harness path, with a 20-second timeout.
+It caches the parent per branch in `<temp dir>/chb-harness-epics-<uid>/<branch>.json`. The env var `CHB_HARNESS_EPIC_CACHE_DIR` overrides the folder.
+A folder that is a symlink, belongs to another user or is open to others is not used. Cache files open without following symlinks.
+The cache never expires. If a ticket moves to another epic, delete its branch file.
+If the Jira read fails (no token, timeout, HTTP error), the hook denies the edit and names `factory/bin/jira view CHB-<n>`. A failure is not cached.
+Writes through Bash are not covered. The agent's user can write the cache folder, so a planted cache file also gets past the hook.
+The hook stops accidents, not a deliberate bypass.
+
+## Hook: no secrets in the agent's context
+
+`.claude/settings.json` runs `factory/hooks/deny_secret_reads.py` before every Read and Bash call (CHB-30).
+`factory/bin/as-agent` and `factory/bin/jira` read their token inside their own process, so the agent never needs a secret. `.env.example` lists the variable names.
+
+Secret paths: a path with a `.ssh` folder (`~/.ssh/**`), `*.pem`, `*.key`, `.env` and `.env.*` except `.env.example`, and a path with `.config/op` (`~/.config/op/**`).
+`~`, `$HOME` and `${HOME}` expand. A glob that can match one counts: `*.pem`, `x.k*`, `.env*`, `.e*`, `~/.ss*/id_rsa`.
+A glob that does not start with `.` never matches `.ssh` or `.env`, so `grep -rn TODO *` passes. `*.*` passes too.
+`.envrc`, a bare `.key` and a hidden `.x.key` do not count: they read like `jq` filters such as `.foo.key`.
+
+The hook exits 2 for:
+
+- Read of a secret path; a relative path resolves against the session folder;
+- a Bash command with a secret path as an argument, as an `--option=<path>` value, or after a `:` (`git show HEAD:.env`, `scp host:~/.ssh/id`);
+- input redirected from a secret path (`< .env`), whatever the program;
+- `secret-tool lookup` and `op read` run directly.
+
+The hook also checks the body of every `$(...)` and backtick substitution, quoted or not, the arguments of `bash -c`, `sh -c` and `eval`, and the remote command of `ssh`.
+
+These pass even with a secret path: `ls`, `stat`, `test`, `[`, `chmod`, `chown`, `mkdir`, `touch`, `rm`, `echo`, `printf` and `ssh-add`. They do not print the file.
+`ssh` and `scp` may name a key or config file with `-i`, `-F` or `-o IdentityFile=`.
+`factory/bin/as-agent`, `factory/bin/jira` and `make` are not blocked.
+
+Known false denials: `grep .env docs/` (the pattern reads as a path) and a single-quoted `'$(cat .env)'`.
+A heredoc line that names a secret path, such as a line of a commit message, is denied too. Write such a message to a file with the Write tool.
+Known gaps: a path built at run time, `cd ~/.ssh` followed by a relative name, a symlink to a secret file, a script that reads the file,
+a hidden key file such as `.tls.key`, the Grep tool, and `op` subcommands other than `read`.
+Like the other Bash hooks, it reads the command text only, denies on unreadable input or an internal error, and lets the call run if `python3` cannot start.
+
 ## Automated PR review (shadow mode)
 
 `.github/workflows/review.yml` scores every same-repository PR into `main` with Claude Code and posts a check run named `review` as the App `chb-factory-reviewer` on the PR head commit.
@@ -350,3 +405,23 @@ Run the gate on a saved result:
 python3 -I factory/review/gate.py --result result.json --claude-exit-code 0 --schema factory/review/schema.json \
   --changed-files names.z --prior-runs runs.json --app-slug chb-factory-reviewer --head-sha HEAD_SHA --out check-run.json
 ```
+
+## Workflow output schemas and routing
+
+No workflow runs on this code yet. CHB-44 (ticket-to-PR workflow) will call it. Ticket: CHB-62.
+
+Each stage of the workflow returns typed JSON. `workflow/schemas/<stage>.json` defines it: it lists every field as required and rejects any other field.
+`workflow/route.py` has one function, `next_step(stage, output)`. It validates the output with the validator of `review/gate.py` and returns a `Route` with a step and its reasons.
+
+| Stage | Fields | Rule | Step |
+|---|---|---|---|
+| `analysis` | `planFile`, `acceptanceCriteria[]`, `isVerifiable`, `blockingQuestions[]` | `blockingQuestions` not empty | `stop-and-notify` |
+| `implementation` | `typesClean`, `lintClean`, `testsGreen` | any check false | `another-round` |
+| `review` | `mergeSafety`, `scores`, `findings[{severity, suggestedFix}]` | `mergeSafety` below 8.5 or a critical finding | `triage` |
+| `triage` | `decision` (`fix`, `dismiss`, `doubt`), `fixableByAgent` | `decision` is `doubt` | `pr-caveats` |
+
+Otherwise the step is `next-stage`.
+An unknown stage, invalid output or an unreadable schema returns `stop`. `next_step` never raises.
+
+No rule reads `isVerifiable` or `fixableByAgent` yet. CHB-44 decides what they route to.
+`next_step` trusts the `mergeSafety` it receives. `review/gate.py` recomputes Merge Safety from the findings, so CHB-44 should pass the gate's value.
