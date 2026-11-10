@@ -78,7 +78,7 @@ any status ──→ Discarded
 
 Meaning: work that is not needed yet (owner decision, 2026-11-10, CHB-153). It stays visible on the board.
 
-- Enter: a new ticket. `factory/bin/jira create` puts it here, unless a trigger applies at creation (see Leave to Ready).
+- Enter: a new ticket. `factory/bin/jira create` puts it here, always: `ready` moves it on (see Definition of Ready).
   On a board without a Backlog column, a new ticket stays in the pull list.
 - Enter: an improvement the agent finds valuable. The ticket opens with its "Why it matters" section,
   and the agent tells the owner in one line. The owner's yes is trigger 2.
@@ -93,11 +93,24 @@ Meaning: work that is not needed yet (owner decision, 2026-11-10, CHB-153). It s
 
   The ticket's "Why it matters" section states the need and when the need becomes real, never the solution.
   The owner reads it to decide what can move to Ready.
+- Definition of Ready (owner decision, 2026-11-10, CHB-154): every ticket has a section headed "Definition of Ready"
+  with six Jira checkboxes, right after "Why it matters". A ticket moves from Backlog to Ready only when every box holds:
+  1. Why it matters states the need and when it becomes real, never the solution. The agent ticks it; `ready` checks the section.
+  2. Trigger named with evidence: one of the four triggers above. The agent ticks it; `ready` requires the trigger text and posts it.
+  3. Acceptance criteria that can be checked (see [Ready](#ready)). `ready` verifies the section and ticks the box.
+  4. Not blocked: every "is blocked by" ticket is Done or Discarded. `ready` verifies the links and ticks the box.
+  5. No owner decision pending (money, lock-in, public exposure, deletion), or its decision ticket is Done.
+     The agent ticks it. A pending decision is a decision ticket that blocks this one, so box 4 checks it too.
+  6. Small: one PR, about a day of agent work; otherwise split it first. The agent ticks it.
 
-  `factory/bin/jira transition CHB-<n> Ready --trigger "<which trigger and its evidence>"` moves the ticket
-  and comments `Moved to Ready. Trigger: <text>`. Without `--trigger` it exits 2 and moves nothing.
-  `--trigger` on any other move exits 2 too.
-  To create a ticket straight in Ready: `factory/bin/jira create ... --ready --trigger "<text>"`. It comments `Created in Ready. Trigger: <text>`.
+  `factory/bin/jira create` adds the section. `factory/bin/jira checklist CHB-<n>` adds it to a ticket without it.
+  The agent ticks a judgment box (1, 2, 5, 6) with `factory/bin/jira tick CHB-<n> why|trigger|decision|small`.
+  A tick cannot replace a check: `ready` checks boxes 1, 3 and 4 again, ticked or not.
+  Started tickets (In Progress, In Review, Validating) may keep their boxes unticked: they passed before the checklist existed.
+- `factory/bin/jira ready CHB-<n> --trigger "<which trigger and its evidence>"` is the only way from Backlog to Ready.
+  It exits 4 and names each open box while a box is unticked or a check fails, and the ticket stays in Backlog.
+  Otherwise it ticks boxes 3 and 4, moves the ticket and comments `Moved to Ready. Trigger: <text>`.
+  `factory/bin/jira transition` refuses the move (exit 2) and names `ready`. `create` always puts a ticket in Backlog.
 - Owner go: agents pick work on their own. The owner's explicit go is needed only for:
   - spending money;
   - choosing between options with lock-in (vendor, provider, framework);
@@ -112,7 +125,7 @@ Meaning: work that is not needed yet (owner decision, 2026-11-10, CHB-153). It s
 Meaning: work needed now that nobody has started. Agents pull from it freely, top first.
 Ready was named To Do until 2026-11-10 (CHB-153). The rules below apply to it under either name.
 
-- Enter: the ticket has a summary, a description and a parent epic. From Backlog, a trigger comment as well (see [Backlog](#backlog)).
+- Enter: the ticket has a summary, a description and a parent epic. From Backlog, only through `factory/bin/jira ready`: a trigger comment and a Definition of Ready that holds (see [Backlog](#backlog)).
 - Why it matters (owner rule, 2026-11-10, CHB-148): every description opens with a section headed exactly "Why it matters", with text under it.
   It states the pain, who feels it (the owner, users of the hotel booking app, or agents) and the value of solving it,
   in 2 to 5 plain sentences without technical detail. Nothing comes before it. The technical sections follow.

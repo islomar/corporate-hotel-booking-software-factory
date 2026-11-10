@@ -37,8 +37,9 @@ All work is tracked in Jira space `CHB` (see `TODO.md`). Move tickets only as `d
   If it lacks acceptance criteria, write them (`docs/process/kanban.md`, Ready).
   Every ticket opens with a non-empty "Why it matters" section: the pain, who feels it, the value of solving it, in plain words. `create` and a start refuse a ticket without it.
   Ready stays sorted: ready tickets High, Medium, Low, then blocked tickets. `create` and a start run `factory/bin/jira sort-todo`.
-  New tickets go to Backlog (not needed yet). A ticket moves to Ready only with one of the four triggers of `docs/process/kanban.md`, Backlog:
-  `factory/bin/jira transition CHB-<n> Ready --trigger "<which and evidence>"`, or `create ... --ready --trigger "..."`. Never pull from Backlog.
+  New tickets go to Backlog (not needed yet). A ticket moves to Ready only with one of the four triggers of `docs/process/kanban.md`, Backlog,
+  and only when every box of its "Definition of Ready" holds: `factory/bin/jira tick CHB-<n> <box>`, then
+  `factory/bin/jira ready CHB-<n> --trigger "<which and evidence>"`. Never pull from Backlog.
   Leave the ticket, comment, and report. Moves into In Review and Validating are never blocked by a limit. See `docs/process/kanban.md`.
   If `factory/bin/jira` fails (for example no 1Password service account token in the keyring, exit code 3), stop and report.
 - For any step that deletes or changes something, name the exact item, the system and location (URL or menu path), and the command or clicks. Say what must not be deleted when similar items exist.
