@@ -25,7 +25,7 @@ All work is tracked in Jira space `CHB` (see `TODO.md`). Move tickets only as `d
   `as-agent gh pr create` also enables auto-merge (squash) on the new PR. Opt out for one PR with `AGENT_NO_AUTO_MERGE=1`. See `factory/README.md`.
 - Commit only through `factory/bin/as-agent` too. If it fails (for example no 1Password service account token in the keyring, exit code 3), stop and report.
   Never commit with another git identity, not even locally.
-- Do every Jira write (create, transition, comment, edit-comment, assign, rank, section, description, priority) through `factory/bin/jira`. It acts as the Atlassian account "Claude (CHB agent)".
+- Do every Jira write (create, transition, comment, edit-comment, assign, rank, section, description, priority, link) through `factory/bin/jira`. It acts as the Atlassian account "Claude (CHB agent)".
   Write Jira text in Markdown. The wrapper renders headings, lists, `code` and bold, and links CHB keys and PR numbers.
   Every ticket gets High, Medium or Low as `docs/process/priorities.md` defines.
   Never write to Jira with `acli`: its login is the owner's. Read with `factory/bin/jira view` and `factory/bin/jira search`.
