@@ -1,15 +1,17 @@
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
-**Table of Contents** *generated with [DocToc](https://github.com/thlorenz/doctoc)*
+## Contents
 
 - [Factory](#factory)
   - [Credentials: the 1Password service account](#credentials-the-1password-service-account)
     - [Renewing the token](#renewing-the-token)
   - [Acting as the agent](#acting-as-the-agent)
+  - [Subagent models](#subagent-models)
   - [Acting in Jira as the agent](#acting-in-jira-as-the-agent)
     - [Board rules on transition](#board-rules-on-transition)
     - [Hook against raw Jira writes](#hook-against-raw-jira-writes)
   - [Hook: commands for the owner work from any folder](#hook-commands-for-the-owner-work-from-any-folder)
+  - [Hook: no personal agent memory](#hook-no-personal-agent-memory)
   - [Automated PR review (shadow mode)](#automated-pr-review-shadow-mode)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -64,6 +66,12 @@ The private key is read at run time from the vault `chb-factory` with the servic
 factory/bin/as-agent git push -u origin CHB-71-agent-token
 factory/bin/as-agent gh pr create --fill
 ```
+
+## Subagent models
+
+The owner's Claude Code sets `CLAUDE_CODE_SUBAGENT_MODEL=sonnet` (2026-11-07), so subagents run on Sonnet by default.
+An agent that implements a CHB ticket, or does design or review work, runs on Opus: pass `model: "opus"` when spawning it.
+Lookups and mechanical briefs stay on the default.
 
 ## Acting in Jira as the agent
 
@@ -132,7 +140,7 @@ The count is a JQL search on the column's status ids in project CHB, without the
 No other move is limited. Moves into In Review and Validating record a PR or a merge, so a column can go over its max; Jira colours it.
 A move back into In Progress from In Review, Validating or Needs human is not new work and is not limited.
 A failed board read exits 1 and does not move the ticket.
-After a move out of In Progress that leaves it below its board min, `transition` prints `In Progress is below its minimum (0/1): idle, ask the owner for the next ticket` and exits 0.
+After a move out of In Progress that leaves it below its board min, `transition` prints `In Progress is below its minimum (0/1): idle, pull the top ticket of To Do` and exits 0.
 If that count fails, it prints a notice instead and still exits 0: the ticket has moved.
 Two agents that move tickets at the same moment can both pass the check. The owner overrides a limit in the Jira UI, with a comment.
 
@@ -164,6 +172,14 @@ These pass: a command after `cd /absolute/folder` in the same block, a line that
 Put a block that you do not want pasted in a `text` block.
 
 The hook blocks once per reply and never on bad input, so it cannot loop. Like the Jira hook, it is a guardrail that reads text only.
+
+## Hook: no personal agent memory
+
+`.claude/settings.json` runs `factory/hooks/deny_agent_memory_writes.py` before every Write, Edit, MultiEdit and NotebookEdit call (CHB-136).
+On 2026-11-07 a session saved a work-in-progress snapshot to Claude Code's per-user memory. It went stale within a day, and a later session read it.
+
+The hook denies any path under `.claude/projects/<project>/memory/`. Work state goes in Jira with `factory/bin/jira`. Learnings go in `docs/knowledge/`, a hook or a check (ADR-eedb).
+Writes through Bash (`>`, `cp`, `sed -i`) are not covered: the hook stops accidents, not a deliberate bypass.
 
 ## Automated PR review (shadow mode)
 

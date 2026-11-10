@@ -328,7 +328,7 @@ class MinimumSignalTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(
             out.splitlines(),
-            ["CHB-12 -> In Review", "In Progress is below its minimum (0/1): idle, ask the owner for the next ticket"],
+            ["CHB-12 -> In Review", "In Progress is below its minimum (0/1): idle, pull the top ticket of To Do"],
         )
         self.assertEqual(fake.searches()[-1], "project = CHB AND status in (3) AND key != CHB-12 ORDER BY key ASC")
 

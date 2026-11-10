@@ -144,7 +144,7 @@ class ContractTest(unittest.TestCase):
 
     def test_project_settings_register_the_hook_on_bash(self) -> None:
         settings = json.loads((ROOT / ".claude" / "settings.json").read_text())
-        (group,) = settings["hooks"]["PreToolUse"]
+        (group,) = [g for g in settings["hooks"]["PreToolUse"] if "deny_raw_jira_writes.py" in g["hooks"][0]["command"]]
 
         self.assertEqual(group["matcher"], "Bash")
         self.assertIn("factory/hooks/deny_raw_jira_writes.py", group["hooks"][0]["command"])

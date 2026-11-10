@@ -9,6 +9,15 @@
             "command": "python3 -I \"${CLAUDE_PROJECT_DIR}/factory/hooks/deny_raw_jira_writes.py\""
           }
         ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I \"${CLAUDE_PROJECT_DIR}/factory/hooks/deny_agent_memory_writes.py\""
+          }
+        ]
       }
     ],
     "Stop": [
