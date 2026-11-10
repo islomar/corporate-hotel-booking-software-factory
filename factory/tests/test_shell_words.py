@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
 
-from shell_words import positionals, simple_commands
+from shell_words import input_redirection, is_operator, positionals, redirection, simple_commands
 
 
 class SimpleCommandsTest(unittest.TestCase):
@@ -62,6 +62,23 @@ class SimpleCommandsTest(unittest.TestCase):
             simple_commands("git checkout -b x && cat <<'EOF' > /tmp/m\ndon't\nEOF"),
             [["git", "checkout", "-b", "x"], ["cat"], ["don't"], ["EOF"]],
         )
+
+
+class OperatorTest(unittest.TestCase):
+    def test_operators_are_runs_of_punctuation(self) -> None:
+        for word in ["&&", "|", ";", "(", ")", ">", ">&", "<<", "\n"]:
+            with self.subTest(word):
+                self.assertTrue(is_operator(word))
+        for word in ["", "a", "-x", "2", "a&&b"]:
+            with self.subTest(word):
+                self.assertFalse(is_operator(word))
+
+    def test_redirections_are_operators_with_an_angle_bracket_but_not_process_substitution(self) -> None:
+        self.assertEqual([w for w in [">", ">>", ">&", "&>", "<", "<<", "<<<", "<(", ">(", "&&", "|"] if redirection(w)],
+                         [">", ">>", ">&", "&>", "<", "<<", "<<<"])
+
+    def test_input_redirections_feed_the_command(self) -> None:
+        self.assertEqual([w for w in [">", ">>", "<", "<<", "<<<", "<(", "|"] if input_redirection(w)], ["<", "<<", "<<<"])
 
 
 class PositionalsTest(unittest.TestCase):

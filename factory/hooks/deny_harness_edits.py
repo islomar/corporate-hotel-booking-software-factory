@@ -9,6 +9,7 @@ worktree, is `.claude`, `factory` or `.github`, when that worktree's branch is `
 CHB-<n> is a product epic or its Jira parent is one (PRODUCT_EPICS).
 Allowed: other paths, paths outside a git repository, other branches (`main`, `worktree-agent-...`:
 the branch name hook guards names), tickets of other epics and tickets without a parent.
+git that times out or does not start denies a harness path with its own message.
 A file under `<repo>/.claude/worktrees/agent-x/` belongs to that worktree, not to `.claude/`.
 
 The parent comes from `factory/bin/jira view CHB-<n>`, called only for a harness path, and is cached
@@ -51,6 +52,10 @@ GIT_TIMEOUT = 10
 
 class JiraUnreadable(Exception):
     """factory/bin/jira could not give the ticket's parent."""
+
+
+class GitUnreadable(Exception):
+    """git timed out or did not start, so the worktree and branch of a harness path are unknown."""
 
 
 def may_be_harness(path: str) -> bool:
@@ -134,8 +139,14 @@ def parent_epic(branch: str, ticket: str) -> str | None:
 
 
 def _git(folder: str, *args: str) -> str | None:
+    """The command's output, or None when git exits non-zero (outside a repository). Raises GitUnreadable."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}  # a git hook's GIT_DIR must not win
-    run = subprocess.run(["git", "-C", folder, *args], capture_output=True, text=True, timeout=GIT_TIMEOUT, env=env)
+    try:
+        run = subprocess.run(["git", "-C", folder, *args], capture_output=True, text=True, timeout=GIT_TIMEOUT, env=env)
+    except subprocess.TimeoutExpired:
+        raise GitUnreadable(f"`git {args[0]}` timed out after {GIT_TIMEOUT}s") from None
+    except OSError as error:
+        raise GitUnreadable(f"`git` did not start ({type(error).__name__})") from None
     return run.stdout.strip() if run.returncode == 0 else None
 
 
@@ -160,7 +171,15 @@ def reason(path: str, *, cwd: str) -> str | None:
     path = posixpath.normpath(posixpath.join(cwd, path))
     if not may_be_harness(path) and not may_be_harness(posixpath.realpath(path)):
         return None
-    found = worktree_of(path)
+    try:
+        found = worktree_of(path)
+    except GitUnreadable as error:
+        folder = next((p for p in path.split("/") if p in HARNESS), "harness") + "/"
+        return (
+            f"Blocked: could not read the git branch of `{path}` ({error}). "
+            f"Edits under `{folder}` need it to tell a feature ticket from a factory ticket (CHB-30). "
+            "Check that `git` runs, then retry."
+        )
     if not found:
         return None
     real, toplevel, branch = found

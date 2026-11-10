@@ -8,14 +8,16 @@ Secret paths: any path with a `.ssh` folder (`~/.ssh/**`), `*.pem`, `*.key`, `.e
 except `.env.example`, and any path with `.config/op` (`~/.config/op/**`). `~`, `$HOME` and `${HOME}`
 expand to the home directory; a glob such as `*.pem` or `.env*` counts.
 Denied:
-- Read of a secret path; a relative path resolves against the event's `cwd`;
+- Read of a secret path, or of a symlink whose real path is one; a relative path resolves against
+  the event's `cwd`;
 - a Bash simple command with a secret path as a word, an `--option=<path>` value or the part
   after `:` (`git show HEAD:.env`, `scp host:~/.ssh/id`), unless the program only reads metadata
   or writes (METADATA: `ls`, `stat`, `test`, `chmod`, `ssh-add`, `echo`, ...);
 - input redirected from a secret path (`< .env`), whatever the program;
 - `secret-tool lookup` and `op read` run directly.
 Launchers (`rtk`, `env`, `uv run`, `factory/bin/as-agent`) are stripped first (shell_words).
-The body of every `$(...)` and backtick substitution, quoted or not, the arguments of `bash -c`,
+The body of every `$(...)` and backtick substitution, quoted or not and nested parentheses included
+(`"$( (cat .env) )"`), the arguments of `bash -c`,
 `sh -c` and `eval`, and the remote command of `ssh` are checked the same way. The key and config
 file options of `ssh` and `scp` (`-i`, `-F`, `-o IdentityFile=`) may name a secret path.
 
@@ -38,7 +40,7 @@ from fnmatch import fnmatchcase
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from shell_words import name, positionals, simple_commands, tokens  # noqa: E402
+from shell_words import input_redirection, name, positionals, simple_commands, tokens  # noqa: E402
 
 KEY_SUFFIXES = (".pem", ".key")
 ENV_EXAMPLE = ".env.example"
@@ -51,7 +53,7 @@ SHELLS = {"bash", "sh", "zsh", "dash", "eval"}  # their arguments are commands
 KEY_FILE_PROGRAMS = {"ssh", "scp"}
 KEY_FILE_OPTIONS = {"-i", "-F"}
 SSH_VALUE_OPTIONS = {"-o", "-p", "-P", "-l", "-J", "-L", "-R", "-D", "-E", "-c", "-b", "-m", "-O", "-Q", "-S", "-W", "-w", "-e", "-B"}
-SUBSTITUTION = re.compile(r"\$\(([^()]*)\)|`([^`]*)`")
+BACKTICK = re.compile(r"`([^`]*)`")
 MAX_DEPTH = 4
 OP_VALUE_OPTIONS = {"--account", "--config", "--session", "--encoding", "--format", "--cache"}
 
@@ -109,13 +111,35 @@ def _candidates(word: str) -> list[str]:
 
 
 def read_reason(path: str, *, home: str, cwd: str) -> str | None:
-    """Why a Read of the path is denied, or None."""
+    """Why a Read of the path is denied, or None.
+
+    Both the path as written and its real path count, so a symlink to a secret file or folder is denied.
+    """
     full = _expand(path, home)
     if not posixpath.isabs(full):
         full = posixpath.join(cwd, full)
-    if secret_path(posixpath.normpath(full), home=home):
+    if secret_path(posixpath.normpath(full), home=home) or secret_path(posixpath.realpath(full), home=home):
         return f"Blocked: `{path}` is a secret file. {ADVICE}"
     return None
+
+
+def substitutions(command: str) -> list[str]:
+    """The bodies of the outermost `$(...)` substitutions, nested parentheses included, and of backticks.
+
+    Parentheses are counted, quotes are not: a `$(` that never closes gives the rest of the command,
+    so a miscount checks more text, never less.
+    """
+    bodies: list[str] = []
+    i = command.find("$(")
+    while i != -1:
+        start, depth, j = i + 2, 1, i + 2
+        while j < len(command) and depth:
+            depth += {"(": 1, ")": -1}.get(command[j], 0)
+            j += 1
+        bodies.append(command[start : j - 1] if depth == 0 else command[start:])
+        i = command.find("$(", j)
+    bodies.extend(match.group(1) for match in BACKTICK.finditer(command))
+    return bodies
 
 
 def _vault_lookup(words: list[str]) -> bool:
@@ -154,13 +178,13 @@ def bash_reason(command: str, *, home: str, depth: int = 0) -> str | None:
     """Why the command is denied, or None when it may run."""
     if depth > MAX_DEPTH:
         return None
-    for match in SUBSTITUTION.finditer(command):
-        why = bash_reason(match.group(1) if match.group(1) is not None else match.group(2), home=home, depth=depth + 1)
+    for body in substitutions(command):
+        why = bash_reason(body, home=home, depth=depth + 1)
         if why:
             return why
     words = tokens(command)
     for op, target in zip(words, words[1:]):
-        if op and all(c in "<>&|;()\n" for c in op) and "<" in op and "(" not in op and secret_path(target, home=home):
+        if input_redirection(op) and secret_path(target, home=home):
             return f"Blocked: the command reads `{target}`, a secret file. {ADVICE}"
     for simple in simple_commands(command):
         if _vault_lookup(simple):

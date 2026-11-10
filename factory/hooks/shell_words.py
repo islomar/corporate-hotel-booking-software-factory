@@ -41,8 +41,19 @@ def tokens(command: str) -> list[str]:
         return [w.strip("'\"") or w for w in FALLBACK_TOKEN.findall(command)]
 
 
-def _operator(word: str) -> bool:
+def is_operator(word: str) -> bool:
+    """A run of operator characters as `tokens` gives it: `&&`, `>&`, `<<`, `(`."""
     return bool(word) and all(c in PUNCTUATION for c in word)
+
+
+def redirection(word: str) -> bool:
+    """An operator that redirects: `>`, `>>`, `<`, `<<`, `>&`, `&>`. `<(` is process substitution, not a redirection."""
+    return is_operator(word) and ("<" in word or ">" in word) and "(" not in word
+
+
+def input_redirection(word: str) -> bool:
+    """A redirection that feeds a file or text to the command: `<`, `<<`, `<<<`, `<>`."""
+    return redirection(word) and "<" in word
 
 
 def simple_commands(command: str) -> list[list[str]]:
@@ -57,17 +68,17 @@ def simple_commands(command: str) -> list[list[str]]:
     i = 0
     while i < len(words):
         word = words[i]
-        if not _operator(word):
+        if not is_operator(word):
             current.append(word)
             i += 1
             continue
-        redirection = ("<" in word or ">" in word) and "(" not in word  # `<(` is process substitution
-        if redirection:
+        redirects = redirection(word)
+        if redirects:
             if current and current[-1].isdigit():
                 current.pop()
-            if i + 1 < len(words) and not _operator(words[i + 1]):
+            if i + 1 < len(words) and not is_operator(words[i + 1]):
                 i += 1
-        if not redirection or any(c in word for c in SEPARATOR_CHARS) or "&&" in word:
+        if not redirects or any(c in word for c in SEPARATOR_CHARS) or "&&" in word:
             stripped = strip_launchers(current)
             if stripped:
                 found.append(stripped)
