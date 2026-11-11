@@ -151,5 +151,7 @@ Every Mermaid diagram in the repository, next to the text it explains:
 | Ticket lifecycle | [`docs/process/kanban.md`, Flow](docs/process/kanban.md#flow) |
 | GitHub workflows and triggers | [`docs/process/delivery-pipeline.md`](docs/process/delivery-pipeline.md) |
 | Runtime and telemetry | [README, Observability](README.md#observability) |
+| Identities at a glance | [`factory/README.md`, Identities at a glance](factory/README.md#identities-at-a-glance) |
+| Hooks at a glance | [`factory/README.md`, Hooks at a glance](factory/README.md#hooks-at-a-glance) |
 
 A new diagram gets a row here in the same PR.
