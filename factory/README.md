@@ -384,6 +384,7 @@ Each node names the hook file, the tool matcher of `.claude/settings.json` and w
 flowchart TD
     subgraph SS["SessionStart: adds context"]
         VS["validating_sweep.py<br/>matcher: none<br/>reports the Validating tickets that are due"]
+        RH["rules_health_due.py<br/>matcher: startup<br/>reports when the rules health check is due"]
     end
     subgraph PRE["PreToolUse: denies the tool call"]
         DJ["deny_raw_jira_writes.py<br/>matcher: Bash<br/>blocks acli writes and raw REST writes to Jira"]
