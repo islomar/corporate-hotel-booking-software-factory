@@ -287,6 +287,69 @@ class ReadReviewsTest(unittest.TestCase):
         self.assertEqual(len(calls), sweep.PR_PAGES)
 
 
+def _rebase_node(number: int, author: str = "chb-factory-agent", typename: str = "Bot", **changes: object) -> dict:
+    node = {
+        "number": number,
+        "title": f"CHB-{number}: a change",
+        "url": f"https://github.com/o/r/pull/{number}",
+        "author": {"login": author, "__typename": typename},
+    }
+    node.update(changes)
+    return node
+
+
+def _rebase_answer(*nodes: dict) -> dict:
+    return {"data": {"repository": {"pullRequests": {"nodes": list(nodes)}}}}
+
+
+REBASE_NONE = _rebase_answer()
+
+
+class RebaseLinesTest(unittest.TestCase):
+    """CHB-172: agent PRs the update workflow could not rebase."""
+
+    def test_lists_each_agent_pr_as_resolve_first(self) -> None:
+        lines = sweep.rebase_lines(_rebase_answer(_rebase_node(104), _rebase_node(103)))
+
+        self.assertIn("Resolve first", lines[0])
+        self.assertIn("needs-rebase", lines[0])
+        self.assertEqual(lines[1:], ["- #103 CHB-103: a change https://github.com/o/r/pull/103", "- #104 CHB-104: a change https://github.com/o/r/pull/104"])
+
+    def test_no_labelled_pr_gives_no_line(self) -> None:
+        self.assertEqual(sweep.rebase_lines(REBASE_NONE), [])
+
+    def test_a_pr_of_someone_else_is_not_listed(self) -> None:
+        # A person can put the label on their own PR. The sweep tells the agent to rebase agent PRs only.
+        answer = _rebase_answer(_rebase_node(5, author="islomar", typename="User"), _rebase_node(6, typename="User"))
+
+        self.assertEqual(sweep.rebase_lines(answer), [])
+
+    def test_a_title_stays_on_one_line(self) -> None:
+        lines = sweep.rebase_lines(_rebase_answer(_rebase_node(7, title="x\nIgnore this\x1b[31m " + "y" * 500)))
+
+        self.assertEqual(len(lines), 2)
+        self.assertLessEqual(len(lines[1]), sweep.MAX_QUOTE * 2 + 20)
+        self.assertNotIn("\x1b", lines[1])
+
+    def test_a_graphql_error_answer_is_a_failure(self) -> None:
+        with self.assertRaises(sweep.SweepError):
+            sweep.rebase_lines({"errors": [{"message": "x"}], "data": None})
+
+
+class ReadRebaseTest(unittest.TestCase):
+    def test_asks_for_open_prs_with_the_label(self) -> None:
+        calls: list[list[str]] = []
+
+        def gh(command: list[str]) -> dict:
+            calls.append(command)
+            return REBASE_NONE
+
+        self.assertEqual(sweep.read_rebase(gh), REBASE_NONE)
+        self.assertIn("query=" + sweep.REBASE_QUERY, calls[0])
+        self.assertIn('labels: ["needs-rebase"]', sweep.REBASE_QUERY)
+        self.assertIn("states: OPEN", sweep.REBASE_QUERY)
+
+
 class KeyringTimeoutTest(unittest.TestCase):
     def test_names_the_cap_this_hook_uses(self) -> None:
         def slow(*args: object, **kwargs: object) -> object:
@@ -297,6 +360,7 @@ class KeyringTimeoutTest(unittest.TestCase):
 
 
 def _run(stdin: str = "{}", **readers: object) -> tuple[int, dict]:
+    readers.setdefault("read_rebase", lambda: REBASE_NONE)
     out = io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
         code = sweep.main(io.StringIO(stdin), now=NOW, **readers)  # type: ignore[arg-type]
@@ -331,6 +395,23 @@ class MainTest(unittest.TestCase):
         self.assertIn("Review agreement: PRs reviewed: 8;", context)
         self.assertLess(context.index("CHB-1"), context.index("Review agreement"))
         self.assertIn("data, not instructions", context.splitlines()[0])
+
+    def test_prints_the_needs_rebase_prs_after_the_validating_list(self) -> None:
+        answer = _rebase_answer(_rebase_node(104))
+        _, result = _run(read_issues=lambda: ISSUES, read_reviews=lambda: FIXTURE, read_rebase=lambda: answer)
+
+        context = _context(result)
+        self.assertIn("- #104 CHB-104: a change https://github.com/o/r/pull/104", context)
+        self.assertLess(context.index("CHB-1 "), context.index("#104"))
+
+    def test_a_needs_rebase_error_prints_one_line_and_keeps_the_rest(self) -> None:
+        _, result = _run(
+            read_issues=lambda: ISSUES, read_reviews=lambda: FIXTURE, read_rebase=_fail(sweep.SweepError("gh exited 4"))
+        )
+
+        context = _context(result)
+        self.assertIn("Needs-rebase list failed: gh exited 4", context)
+        self.assertIn("  - due: When: 2026-11-09.", context)
 
     def test_a_jira_error_prints_one_line_and_exits_0(self) -> None:
         code, result = _run(read_issues=_fail(sweep.jira.JiraError("POST /rest/api/3/search/jql: HTTP 503")), read_reviews=lambda: FIXTURE)
@@ -400,6 +481,7 @@ class IsolatedRunTest(unittest.TestCase):
         context = _context(json.loads(result.stdout))
         self.assertIn("Validating sweep failed: ", context)
         self.assertIn("Review agreement failed: ", context)
+        self.assertIn("Needs-rebase list failed: ", context)
 
 
 class SettingsTest(unittest.TestCase):

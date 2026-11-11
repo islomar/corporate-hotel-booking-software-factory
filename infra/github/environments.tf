@@ -5,10 +5,13 @@
 # runs on refs/pull/N/merge. `workflow_run` jobs run on the default branch, so review.yml and
 # deploy.yml are admitted.
 #
+# agent-pr-updates holds the agent App key for .github/workflows/pr-updates.yml (CHB-172): the job
+# runs on `push` to main, so GITHUB_REF is main and the environment admits it.
+#
 # Secret values never go into Terraform. The owner sets environment secrets by hand.
 
 locals {
-  environments = ["production", "reviewer"]
+  environments = ["production", "reviewer", "agent-pr-updates"]
 }
 
 # Created by hand for deploy.yml (no protection rules, any branch).

@@ -24,6 +24,16 @@ resource "github_issue_label" "this" {
   description = each.value.description
 }
 
+# Set by .github/workflows/pr-updates.yml on an agent PR that conflicts with main (CHB-172).
+# GitHub runs no `pull_request` workflow on such a PR; the SessionStart sweep lists it.
+# New label: nothing to import.
+resource "github_issue_label" "needs_rebase" {
+  repository  = github_repository.this.name
+  name        = "needs-rebase"
+  color       = "e99695"
+  description = "Agent PR with a merge conflict with main; the agent resolves it in a session"
+}
+
 # CHB-<n> in commits, pull requests and comments links to the Jira ticket (CHB-110).
 # The other direction, Jira showing commits, is CHB-130.
 resource "github_repository_autolink_reference" "jira" {
