@@ -77,6 +77,9 @@ A `workflow_run` workflow always runs the copy on `main`, so a branch cannot cha
 
 - Review: `review-trigger.yml` runs on the branch with no permissions and no secrets. Its completed run starts `review.yml` from `main`, which holds the reviewer secrets ([CHB-93](https://islomar.atlassian.net/browse/CHB-93)).
 - Deploy: `deploy.yml` starts when CI completes on `main`, and runs only when that run succeeded on a push. Google Cloud trusts GitHub only for `refs/heads/main` ([ADR-d7b7](../decisions/ADR-d7b7-agent-github-identity.md)).
+  The `workflow_run` branch filter matches a ref's short name, so a pushed tag named `main` passes it too ([CHB-173](https://islomar.atlassian.net/browse/CHB-173)).
+  Its first job, `gate`, holds no credentials. It requires the run of `.github/workflows/ci.yml` and a commit on `main`, with `scripts/check_deploy_commit.py` taken from `main`.
+  Every other job needs it. The `branch-named-tags` ruleset (`infra/github/ruleset.tf`) lets only the owner create a tag named `main`.
 
 ## Required checks
 

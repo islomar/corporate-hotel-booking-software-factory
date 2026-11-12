@@ -68,3 +68,29 @@ run "repository_secret_fails_the_plan" {
 
   expect_failures = [terraform_data.guards]
 }
+
+# CHB-173: a tag named like a protected branch cannot be created, moved or deleted by anyone but the Admin role.
+run "branch_named_tags_are_locked" {
+  command = plan
+
+  assert {
+    condition     = github_repository_ruleset.branch_named_tags.target == "tag" && github_repository_ruleset.branch_named_tags.enforcement == "active"
+    error_message = "The branch-named-tags ruleset must target tags and be active (CHB-173)."
+  }
+  assert {
+    condition     = contains(github_repository_ruleset.branch_named_tags.conditions[0].ref_name[0].include, "refs/tags/main")
+    error_message = "The branch-named-tags ruleset must cover refs/tags/main (CHB-173)."
+  }
+  assert {
+    condition = alltrue([
+      github_repository_ruleset.branch_named_tags.rules[0].creation,
+      github_repository_ruleset.branch_named_tags.rules[0].update,
+      github_repository_ruleset.branch_named_tags.rules[0].deletion,
+    ])
+    error_message = "The branch-named-tags ruleset must block creation, update and deletion (CHB-173)."
+  }
+  assert {
+    condition     = [for a in github_repository_ruleset.branch_named_tags.bypass_actors : "${a.actor_type}:${a.actor_id}"] == ["RepositoryRole:5"]
+    error_message = "Only the Admin role may bypass the branch-named-tags ruleset (CHB-173)."
+  }
+}
