@@ -11,20 +11,31 @@ IFS=$'\n\t'
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 set_name="allowed-hosts"
 
+# Fail closed (CHB-31, review of PR #103): on any error, drop all traffic except loopback.
+# The rules never open. Lookups run under the rules already in place; on a restart those
+# allow DNS to the resolvers and HTTPS to the previous allow list, GitHub's ranges included.
+lockdown() {
+  iptables -P INPUT DROP
+  iptables -P OUTPUT DROP
+  iptables -F OUTPUT
+  iptables -F INPUT
+  iptables -A INPUT -i lo -j ACCEPT
+  iptables -A OUTPUT -o lo -j ACCEPT
+  echo "init-firewall: failed; all traffic but loopback is blocked. Fix the cause and restart the container." >&2
+}
+trap 'status=$?; trap - EXIT; if [ "$status" -ne 0 ]; then lockdown; fi; exit "$status"' EXIT
+
 hosts="$(python3 -I "$here/egress.py" hosts)"
 
-# Reset to an open firewall first, so the lookups below work on a restart.
-iptables -P INPUT ACCEPT
-iptables -P OUTPUT ACCEPT
-iptables -F OUTPUT
-iptables -F INPUT
-ipset destroy "$set_name" 2>/dev/null || true
-ipset create "$set_name" hash:net
+# Build the new list in a scratch set. The live set and rules stay as they are until it is complete.
+new_set="$set_name-new"
+ipset destroy "$new_set" 2>/dev/null || true
+ipset create "$new_set" hash:net
 
 # GitHub publishes its address ranges; they change too often to resolve one by one.
 meta="$(curl -fsS --max-time 20 https://api.github.com/meta)"
 for cidr in $(jq -r '(.web + .api + .git)[]' <<<"$meta" | grep -v ':' | sort -u); do
-  ipset add "$set_name" "$cidr" -exist
+  ipset add "$new_set" "$cidr" -exist
 done
 
 for host in $hosts; do
@@ -34,9 +45,19 @@ for host in $hosts; do
     exit 1
   fi
   for ip in $ips; do
-    ipset add "$set_name" "$ip" -exist
+    ipset add "$new_set" "$ip" -exist
   done
 done
+
+# Every lookup worked: swap the new list in, then rebuild the rules with the policies already closed.
+ipset create "$set_name" hash:net -exist
+ipset swap "$new_set" "$set_name"
+ipset destroy "$new_set"
+
+iptables -P INPUT DROP
+iptables -P OUTPUT DROP
+iptables -F OUTPUT
+iptables -F INPUT
 
 # Loopback, replies, and DNS to the configured resolvers only.
 iptables -A INPUT -i lo -j ACCEPT
@@ -51,9 +72,6 @@ done
 iptables -A OUTPUT -p tcp --dport 443 -m set --match-set "$set_name" dst -j ACCEPT
 iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 iptables -A OUTPUT -j REJECT --reject-with icmp-admin-prohibited
-
-iptables -P INPUT DROP
-iptables -P OUTPUT DROP
 
 # No IPv6 route out: the allow list holds IPv4 addresses only.
 ip6tables -F

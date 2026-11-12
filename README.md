@@ -163,6 +163,7 @@ The container runs `npm ci` over the host's `node_modules` when you run `make se
 
 At every start, `init-firewall.sh` resolves the hosts of `.devcontainer/allowed-hosts.txt`, adds GitHub's published address ranges, and rejects any other outbound traffic.
 Only HTTPS (port 443) to listed hosts and DNS to the container's resolvers get out. IPv6 is dropped.
+If any step fails, for example a host with no address, the script blocks all traffic except loopback and exits non-zero. The firewall never opens, not even while it resolves hosts.
 `egress.py check` then connects to one allowed host (`registry.npmjs.org`) and one blocked host (`example.com`).
 It exits non-zero if the blocked host connects, or if the allowed host does not.
 To run it again: `python3 -I /usr/local/share/devcontainer/egress.py check`.
@@ -172,7 +173,7 @@ Change the allow list:
 1. Add one bare host name per line to `.devcontainer/allowed-hosts.txt`, with a comment that names the command that needs it.
    No scheme, port, path or wildcard.
 2. Run `python3 -I -m unittest discover -s scripts/tests` to validate the file.
-3. Run **Dev Containers: Rebuild Container**. The file is copied into the image, so the agent cannot widen its own list.
+3. Run **Dev Containers: Rebuild Container**. The file is copied into the image: an edit takes effect only after a rebuild, so an agent inside the running container cannot widen its own list.
 
 Limits: the list holds IP addresses resolved at container start. A host behind a CDN can change address during a long session; restart the container to resolve again.
 A listed host that serves user content (for example `github.com`) can still be used to send data out.
