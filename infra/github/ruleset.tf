@@ -37,8 +37,9 @@ resource "github_repository_ruleset" "main" {
     # The owner can still request a Copilot review by hand from the PR's Reviewers menu.
 
     required_status_checks {
-      # false: a PR need not be rebased on the latest main before merging (CI cost guard, CHB-56).
-      strict_required_status_checks_policy = false
+      # true: a PR merges only when its head contains the latest main, so its checks ran on what
+      # main will be (CHB-177). Costs one CI run per PR for every merge to main; ADR-2ba2.
+      strict_required_status_checks_policy = true
 
       dynamic "required_check" {
         for_each = local.required_checks

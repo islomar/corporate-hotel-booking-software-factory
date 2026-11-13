@@ -37,8 +37,9 @@ A push by the agent App leaves the owner free to approve ([ADR-d7b7](../decision
 ## What the repository does
 
 - `.github/workflows/pr-updates.yml` runs on every push to `main` as the agent App.
-  It rebases an agent PR that is behind `main`, mergeable and not approved.
-  It leaves an approved PR alone: `strict_required_status_checks_policy` is false, so it can merge as it is, and a rebase would dismiss the approval.
+  It rebases an agent PR that is behind `main` and mergeable, approved or not.
+  Since CHB-177 `strict_required_status_checks_policy` is true, so an approved PR behind `main` cannot merge. The rebase dismisses the approval and the owner approves the new head.
+  It asks Dependabot to rebase its own PRs that are behind `main` with a `@dependabot rebase` comment.
   The decision logic is `factory/pr_updates.py`.
 - A conflicting agent PR gets the label `needs-rebase`.
   The SessionStart sweep (`factory/hooks/validating_sweep.py`) lists these PRs as "resolve first".

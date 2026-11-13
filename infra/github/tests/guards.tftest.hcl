@@ -94,3 +94,14 @@ run "branch_named_tags_are_locked" {
     error_message = "Only the Admin role may bypass the branch-named-tags ruleset (CHB-173)."
   }
 }
+
+# CHB-177: a PR is tested against the latest main before it can merge. Without this, two PRs
+# that are green alone can merge together and break main (#105 and #106, 2026-11-10).
+run "main_ruleset_requires_up_to_date_branches" {
+  command = plan
+
+  assert {
+    condition     = github_repository_ruleset.main.rules[0].required_status_checks[0].strict_required_status_checks_policy == true
+    error_message = "The main ruleset must require branches to be up to date before merge (CHB-177)."
+  }
+}
