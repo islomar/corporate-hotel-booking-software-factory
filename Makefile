@@ -12,6 +12,7 @@ setup: check-npm ## Install local dependencies and the repo git hooks
 	cd e2e && npm ci && npx playwright install chromium
 	ln -sf ../../scripts/git-hooks/pre-commit .git/hooks/pre-commit
 
+# Keep 11.10.0 equal to MIN_NPM in scripts/run_e2e.py.
 check-npm: ## Fail if npm is too old to honour min-release-age in .npmrc
 	@v=$$(npm --version); printf '%s\n' 11.10.0 "$$v" | sort -V -C || \
 		{ echo "npm $$v ignores min-release-age in .npmrc. Use Node 24 from .nvmrc (npm >= 11.10)."; exit 1; }
@@ -64,10 +65,9 @@ check-deps: test-scripts
 
 test: test-backend test-frontend test-scripts ## Run only the tests: backend, frontend, scripts and factory (no lint, types or repository checks)
 
-# Runs npm ci and Playwright in the Playwright image of ci.yml (the host needs Docker and Python 3),
-# and starts the production container when nothing answers on :8080.
-# With APP_URL set it tests that URL and starts nothing. See scripts/run_e2e.py.
-e2e: ## Run Playwright in its Docker image (starts the production container if needed; APP_URL=<url> tests a running app)
+# Installs what is missing and starts the production container when nothing answers on
+# :8080. With APP_URL set it tests that URL and starts nothing. See scripts/run_e2e.py.
+e2e: ## Run Playwright (starts the production container if needed; APP_URL=<url> tests a running app)
 	@python3 -I scripts/run_e2e.py
 
 format: ## Format all code

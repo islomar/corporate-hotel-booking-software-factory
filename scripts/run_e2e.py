@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """Run the Playwright tests with everything they need. `make e2e` calls this script.
 
-The host needs Docker and Python 3, nothing else: `npm ci` and Playwright run in the pinned
-Playwright image of the e2e job in .github/workflows/ci.yml (PLAYWRIGHT_IMAGE, read from there),
-as the host user, so no file in e2e/ is owned by root. Steps:
-1. Docker must answer.
-2. `npm ci` in e2e/, inside the image, when node_modules is missing or older than package-lock.json.
-3. The app:
+Steps:
+1. Node must be at least the major version in .nvmrc.
+2. `npm ci` in e2e/ when node_modules is missing or older than package-lock.json.
+   npm must be at least 11.10, the same rule as `make check-npm`.
+3. The Playwright browser is downloaded when it is missing.
+4. The app:
    - APP_URL set: test that URL. Never start a container.
    - APP_URL unset: reuse the app on http://localhost:8080 if /api/health answers.
      Otherwise build and start the production container, test it, and remove it.
-4. Playwright runs in the image, on the host network. Its exit code is the exit code of this script.
+5. Playwright runs. Its exit code is the exit code of this script.
 
-Playwright runs from e2e/node_modules, never through a bare `npx`: without node_modules,
-`npx playwright` downloads an unpinned package from the registry.
+The script runs Playwright from e2e/node_modules, never through a bare `npx`: without
+node_modules, `npx playwright` downloads an unpinned package from the registry.
 """
 
 from __future__ import annotations
@@ -34,11 +34,11 @@ from types import FrameType
 
 ROOT = Path(__file__).resolve().parents[1]
 E2E = ROOT / "e2e"
-CI_WORKFLOW = ROOT / ".github/workflows/ci.yml"
-PLAYWRIGHT = "./node_modules/.bin/playwright"  # a path inside the image
+PLAYWRIGHT = E2E / "node_modules/.bin/playwright"
 DEFAULT_APP_URL = "http://localhost:8080"
 COMPOSE = ["docker", "compose", "--profile", "prod"]
 HEALTH_TIMEOUT_SECONDS = 60
+MIN_NPM = (11, 10)  # Keep equal to the `check-npm` target in the Makefile.
 
 
 class E2eError(Exception):
@@ -56,28 +56,38 @@ class Probe(enum.Enum):
     DOWN = "down"  # nothing answers
 
 
-def playwright_image(workflow: str) -> str:
-    """The PLAYWRIGHT_IMAGE of a workflow file, which must be pinned by digest."""
-    match = re.search(r"^\s*PLAYWRIGHT_IMAGE:\s*(\S+)\s*$", workflow, re.MULTILINE)
-    if match is None:
-        raise E2eError(f"No PLAYWRIGHT_IMAGE found in {CI_WORKFLOW.relative_to(ROOT)}.")
-    if "@sha256:" not in match[1]:
-        raise E2eError(f"PLAYWRIGHT_IMAGE {match[1]} is not pinned by digest (@sha256:...).")
-    return match[1]
+def _version(text: str) -> tuple[int, ...] | None:
+    match = re.fullmatch(r"v?(\d+)(?:\.(\d+))?(?:\.\d+)?", text.strip())
+    return tuple(int(part) for part in match.groups() if part is not None) if match else None
 
 
-def ci_image() -> str:
-    return playwright_image(CI_WORKFLOW.read_text())
+def node_problem(version: str | None, nvmrc: str) -> str | None:
+    wanted = _version(nvmrc)
+    if wanted is None:
+        raise E2eError(f".nvmrc must hold a Node version such as 24, not {nvmrc.strip()!r}.")
+    required = wanted[0]
+    if version is None:
+        return f"Node is not installed. e2e needs Node {required} (.nvmrc): run `nvm install`."
+    found = version.strip()
+    parsed = _version(found)
+    if parsed is not None and parsed[0] >= required:
+        return None
+    return (
+        f"Node {found} is too old: e2e needs Node {required} (.nvmrc).\n"
+        f"Run `nvm use` in the repository root, then `make e2e` again."
+    )
 
 
-def docker_command(image: str, command: list[str], *, uid: int, gid: int) -> list[str]:
-    """`docker run` of a command in the image, with the flags of the e2e job in ci.yml."""
-    return [
-        "docker", "run", "--rm", "--network", "host", "--ipc", "host",
-        "--user", f"{uid}:{gid}", "-e", "HOME=/tmp", "-e", "CI",
-        "-e", f"APP_URL={os.environ.get('APP_URL') or DEFAULT_APP_URL}",
-        "-v", f"{E2E}:/e2e", "-w", "/e2e", image, *command,
-    ]  # fmt: skip
+def npm_problem(version: str | None) -> str | None:
+    parsed = _version(version) if version is not None else None
+    if parsed is not None and parsed[:2] >= MIN_NPM:
+        return None
+    found = version.strip() if version else "not found"
+    return (
+        f"npm {found} is too old: it ignores min-release-age in .npmrc. "
+        f"e2e needs npm {MIN_NPM[0]}.{MIN_NPM[1]} or newer.\n"
+        "Run `nvm install` in the repository root for the current Node 24 and its npm."
+    )
 
 
 def probe(url: str) -> Probe:
@@ -121,18 +131,41 @@ def deps_are_stale(e2e: Path) -> bool:
     return installed.stat().st_mtime < (e2e / "package-lock.json").stat().st_mtime
 
 
+def missing_browser_dirs(dry_run: str) -> list[str]:
+    locations = re.findall(r"Install location:\s+(\S.*)", dry_run)
+    return [path.strip() for path in locations if not Path(path.strip()).exists()]
+
+
 def say(message: str) -> None:
     print(f"==> {message}", flush=True)
 
 
-def in_image(image: str, command: list[str]) -> list[str]:
-    return docker_command(image, command, uid=os.getuid(), gid=os.getgid())
+def tool_version(tool: str) -> str | None:
+    try:
+        return subprocess.run(
+            [tool, "--version"], capture_output=True, text=True, check=True
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None
 
 
-def install_deps(image: str) -> None:
+def install_deps() -> None:
     if deps_are_stale(E2E):
-        say("Installing e2e dependencies (npm ci in the Playwright image)")
-        subprocess.run(in_image(image, ["npm", "ci"]), check=True)
+        problem = npm_problem(tool_version("npm"))
+        if problem:
+            raise E2eError(problem)
+        say("Installing e2e dependencies (npm ci in e2e/)")
+        subprocess.run(["npm", "ci"], cwd=E2E, check=True)
+    dry_run = subprocess.run(
+        [PLAYWRIGHT, "install", "--dry-run", "chromium"],
+        cwd=E2E,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    if missing_browser_dirs(dry_run):
+        say("Downloading the Playwright browser (chromium, once per Playwright version)")
+        subprocess.run([PLAYWRIGHT, "install", "chromium"], cwd=E2E, check=True)
 
 
 def check_docker() -> None:
@@ -140,12 +173,12 @@ def check_docker() -> None:
         subprocess.run(["docker", "info"], capture_output=True, check=True)
     except OSError:
         raise E2eError(
-            "Docker is not installed. `make e2e` runs npm and Playwright in a Docker image."
+            "Docker is not installed. Install Docker, or set APP_URL to a running app."
         ) from None
     except subprocess.CalledProcessError:
         raise E2eError(
-            "Docker is not running. `make e2e` runs npm and Playwright in a Docker image.\n"
-            "Start Docker and run `make e2e` again."
+            "Docker is not running, and nothing answers on http://localhost:8080.\n"
+            "Start Docker, or start the app another way and set APP_URL."
         ) from None
 
 
@@ -173,10 +206,11 @@ def _terminate(signum: int, frame: FrameType | None) -> None:
     raise KeyboardInterrupt
 
 
-def run(args: list[str] | None = None) -> int:
-    check_docker()
-    image = ci_image()
-    install_deps(image)
+def run() -> int:
+    problem = node_problem(tool_version("node"), (ROOT / ".nvmrc").read_text())
+    if problem:
+        raise E2eError(problem)
+    install_deps()
 
     explicit = bool(os.environ.get("APP_URL"))
     url = os.environ.get("APP_URL") or DEFAULT_APP_URL
@@ -187,12 +221,14 @@ def run(args: list[str] | None = None) -> int:
     signal.signal(signal.SIGTERM, _terminate)
     try:
         if action is Action.START:
+            check_docker()
             started = True
             start_app(url)
         else:
             say(f"Testing the app that already runs on {url}")
-        say(f"Running Playwright in {image}")
-        result = subprocess.run(in_image(image, [PLAYWRIGHT, "test", *(args or [])]), cwd=ROOT)
+        result = subprocess.run(
+            [PLAYWRIGHT, "test", *sys.argv[1:]], cwd=E2E, env={**os.environ, "APP_URL": url}
+        )
         return result.returncode
     finally:
         if started:
@@ -204,7 +240,7 @@ def run(args: list[str] | None = None) -> int:
 
 def main() -> int:
     try:
-        return run(sys.argv[1:])
+        return run()
     except E2eError as error:
         print(f"\nmake e2e: {error}", file=sys.stderr)
         return 1

@@ -20,53 +20,56 @@ from run_e2e import (
     Probe,
     choose,
     deps_are_stale,
-    docker_command,
-    playwright_image,
+    missing_browser_dirs,
+    node_problem,
+    npm_problem,
     probe,
 )
 
 
-class Image(unittest.TestCase):
-    DIGEST = "@sha256:" + "a" * 64
+class NodeVersion(unittest.TestCase):
+    def test_required_major_passes(self) -> None:
+        self.assertIsNone(node_problem("v24.22.2\n", "24\n"))
 
-    def test_reads_the_image_of_the_ci_workflow(self) -> None:
-        text = f"    env:\n      # note\n      PLAYWRIGHT_IMAGE: mcr.microsoft.com/playwright:v1.65.0-noble{self.DIGEST}\n"
-        self.assertEqual(
-            playwright_image(text), f"mcr.microsoft.com/playwright:v1.65.0-noble{self.DIGEST}"
-        )
+    def test_newer_major_passes(self) -> None:
+        self.assertIsNone(node_problem("v26.1.0", "24"))
 
-    def test_workflow_without_the_image_is_an_error(self) -> None:
+    def test_older_major_names_versions_and_nvm(self) -> None:
+        problem = node_problem("v22.14.0", "24")
+        assert problem is not None
+        self.assertIn("v22.14.0", problem)
+        self.assertIn("24", problem)
+        self.assertIn("nvm use", problem)
+
+    def test_unparsable_node_version_is_a_problem(self) -> None:
+        problem = node_problem("node.js 24", "24")
+        assert problem is not None
+        self.assertIn("node.js 24", problem)
+
+    def test_nvmrc_alias_is_a_clear_error(self) -> None:
         with self.assertRaises(E2eError) as error:
-            playwright_image("jobs: {}")
-        self.assertIn("PLAYWRIGHT_IMAGE", str(error.exception))
+            node_problem("v24.1.0", "lts/*")
+        self.assertIn("lts/*", str(error.exception))
 
-    def test_image_without_a_digest_is_an_error(self) -> None:
-        with self.assertRaises(E2eError) as error:
-            playwright_image("PLAYWRIGHT_IMAGE: mcr.microsoft.com/playwright:v1.65.0-noble")
-        self.assertIn("digest", str(error.exception))
-
-    def test_the_repository_workflow_names_a_pinned_image(self) -> None:
-        self.assertRegex(
-            run_e2e.ci_image(), r"^mcr\.microsoft\.com/playwright:v[\d.]+-[a-z]+@sha256:[0-9a-f]{64}$"
-        )
+    def test_missing_node(self) -> None:
+        problem = node_problem(None, "24")
+        assert problem is not None
+        self.assertIn("Node 24", problem)
 
 
-class DockerCommand(unittest.TestCase):
-    def setUp(self) -> None:
-        self.command = docker_command("img:1", ["npm", "ci"], uid=1000, gid=1001)
+class NpmVersion(unittest.TestCase):
+    def test_new_enough(self) -> None:
+        self.assertIsNone(npm_problem("11.10.0\n"))
+        self.assertIsNone(npm_problem("12.0.1"))
 
-    def test_runs_as_the_host_user_so_no_file_is_root_owned(self) -> None:
-        self.assertEqual(self.command[self.command.index("--user") + 1], "1000:1001")
+    def test_too_old_to_honour_min_release_age(self) -> None:
+        problem = npm_problem("11.9.3")
+        assert problem is not None
+        self.assertIn("11.9.3", problem)
+        self.assertIn("min-release-age", problem)
 
-    def test_uses_the_ci_flags(self) -> None:
-        for flag in ("--rm", "--network", "--ipc"):
-            self.assertIn(flag, self.command)
-        self.assertEqual(self.command[self.command.index("--network") + 1], "host")
-        self.assertEqual(self.command[self.command.index("--ipc") + 1], "host")
-
-    def test_mounts_e2e_and_ends_with_image_and_command(self) -> None:
-        self.assertIn(f"{run_e2e.E2E}:/e2e", self.command)
-        self.assertEqual(self.command[-3:], ["img:1", "npm", "ci"])
+    def test_missing(self) -> None:
+        self.assertIsNotNone(npm_problem(None))
 
 
 class Choose(unittest.TestCase):
@@ -181,6 +184,18 @@ class Deps(unittest.TestCase):
         self.assertTrue(deps_are_stale(self.dir))
 
 
+class Browsers(unittest.TestCase):
+    def test_lists_install_locations_that_do_not_exist(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            present = Path(tmp, "chromium-1")
+            present.mkdir()
+            dry_run = (
+                f"Chrome (playwright chromium v1)\n  Install location:    {present}\n"
+                f"  Download url: x\n\nFFmpeg\n  Install location:    {tmp}/ffmpeg-1\n"
+            )
+            self.assertEqual(missing_browser_dirs(dry_run), [f"{tmp}/ffmpeg-1"])
+
+
 class Orchestration(unittest.TestCase):
     """`make e2e` stops only what it started, and never starts anything for an explicit APP_URL."""
 
@@ -191,8 +206,8 @@ class Orchestration(unittest.TestCase):
         self.healthy_after_start = True
         self.app_running = False
         for name, value in {
-            "ci_image": lambda: "img:1",
-            "install_deps": lambda image: None,
+            "tool_version": lambda tool: "v24.1.0",
+            "install_deps": lambda: None,
             "check_docker": lambda: None,
             "probe": lambda url: Probe.APP if self.app_running else Probe.DOWN,
             "say": lambda message: None,
@@ -216,7 +231,7 @@ class Orchestration(unittest.TestCase):
         self.commands.append(command)
         if command[:2] == ["docker", "compose"] and "up" in command:
             self.app_running = self.healthy_after_start
-        if command[:2] == ["docker", "run"] and "./node_modules/.bin/playwright" in command:
+        if command[0].endswith("playwright") and command[1] == "test":
             if self.playwright_raises:
                 raise self.playwright_raises
             return subprocess.CompletedProcess(command, self.playwright_exit)
@@ -270,22 +285,9 @@ class Orchestration(unittest.TestCase):
         self.assertIn("http://", str(error.exception))
         self.assertEqual(self.commands, [])
 
-    def test_playwright_runs_in_the_image_from_node_modules_never_through_npx(self) -> None:
-        self.assertEqual(run_e2e.run(), 0)
-        [command] = [c for c in self.commands if c[:2] == ["docker", "run"]]
-        self.assertEqual(command[-2:], ["./node_modules/.bin/playwright", "test"])
-        self.assertIn("img:1", command)
-        self.assertIn("APP_URL=http://localhost:8080", command)
-        self.assertNotIn("npx", command)
-
-    def test_arguments_go_to_playwright(self) -> None:
-        self.assertEqual(run_e2e.run(["tests/home.spec.ts", "--retries=1"]), 0)
-        [command] = [c for c in self.commands if c[:2] == ["docker", "run"]]
-        self.assertEqual(command[-3:], ["test", "tests/home.spec.ts", "--retries=1"])
-
-    def test_docker_is_checked_before_anything_else(self) -> None:
+    def test_old_node_stops_before_anything_else(self) -> None:
         with (
-            mock.patch.object(run_e2e, "check_docker", side_effect=E2eError("no docker")),
+            mock.patch.object(run_e2e, "tool_version", lambda tool: "v22.14.0"),
             self.assertRaises(E2eError),
         ):
             run_e2e.run()
