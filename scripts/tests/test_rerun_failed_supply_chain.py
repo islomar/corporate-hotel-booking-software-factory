@@ -87,5 +87,18 @@ class MainTest(unittest.TestCase):
         self.assertEqual(code, 2)
 
 
+
+class RunAsTheWorkflowDoesTest(unittest.TestCase):
+    def test_the_script_starts_under_python_isolated_mode_from_the_repo_root(self):
+        # supply-chain.yml runs `python3 -I scripts/rerun_failed_supply_chain.py`; -I leaves the
+        # script's folder off sys.path, so its import of check_supply_chain must not rely on it.
+        import subprocess
+        root = Path(__file__).resolve().parents[2]
+        result = subprocess.run(
+            [sys.executable, "-I", "scripts/rerun_failed_supply_chain.py", "--help"],
+            cwd=root, capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
 if __name__ == "__main__":
     unittest.main()

@@ -22,7 +22,10 @@ import os
 import sys
 import urllib.request
 
-import check_supply_chain
+# supply-chain.yml runs this file with `python3 -I`, which leaves the script's folder off sys.path.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import check_supply_chain  # noqa: E402
 from check_supply_chain import API
 
 WORKFLOW_FILE = "supply-chain.yml"
