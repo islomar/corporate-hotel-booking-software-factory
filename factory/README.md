@@ -726,6 +726,9 @@ How the check stays current:
 Limits:
 
 - Only the latest review comment counts. A push that gets no review comment (docs-only, or the reviewer secrets are missing) keeps the earlier review's result.
+- The re-run path rests on the workflow token being able to re-run `pull_request` runs, as `supply-chain` does (CHB-184). It is untested until a PR with findings gets its triage.
+  If the check stays red after the triage comment, the human re-runs it: Actions, Triage, the run for the PR head, "Re-run jobs". The agent App cannot re-run workflows.
+- After a push, `triage` can pass on the previous review's triage until the new review comment arrives. The `review` check is not required yet (shadow mode), so a merge can land inside that gap.
 - The check proves that a triage comment exists, not that the decisions are right. The human reads the doubts.
 - A run in progress is not re-run. It reads the comments when it starts its read step, so a comment that lands within seconds of that read can wait for the next event.
 
