@@ -150,7 +150,7 @@ SECTIONS = {
 
 
 def description_with(*headings: str, body: str = "Some text.") -> dict[str, Any]:
-    content: list[dict[str, Any]] = [*doc(WHY_SECTION)["content"], {"type": "paragraph", "content": [{"type": "text", "text": "Intro."}]}]
+    content: list[dict[str, Any]] = [*doc(WHY_SECTION)["content"], *doc(DOR_SECTION)["content"], {"type": "paragraph", "content": [{"type": "text", "text": "Intro."}]}]
     for heading in headings:
         content.append({"type": "heading", "attrs": {"level": 2}, "content": [{"type": "text", "text": heading}]})
         if body:
@@ -158,8 +158,11 @@ def description_with(*headings: str, body: str = "Some text.") -> dict[str, Any]
     return {"type": "doc", "version": 1, "content": content}
 
 
-def issue_in(status: str, description: Any = None, links: list[dict[str, Any]] | None = None, *, kind: str = "Task") -> dict[str, Any]:
+def issue_in(
+    status: str, description: Any = None, links: list[dict[str, Any]] | None = None, *, kind: str = "Task", assignee: str | None = None
+) -> dict[str, Any]:
     fields = {
+        "assignee": {"accountId": assignee} if assignee else None,
         "status": {"name": status, "id": ALL_IDS[status]},
         "description": description,
         "issuelinks": links or [],
@@ -181,7 +184,7 @@ def blocks(*keys: str) -> list[dict[str, Any]]:
 
 BLOCKS_TYPE = {"id": "10000", "name": "Blocks", "inward": "is blocked by", "outward": "blocks"}
 RELATES_TYPE = {"id": "10003", "name": "Relates", "inward": "relates to", "outward": "relates to"}
-ISSUE_FIELDS = "status,description,issuelinks,issuetype"
+ISSUE_FIELDS = "status,description,issuelinks,issuetype,assignee"
 
 
 def doc(markdown: str) -> dict[str, Any]:
@@ -189,8 +192,11 @@ def doc(markdown: str) -> dict[str, Any]:
 
 
 WHY_SECTION = "## Why it matters\n\nThe owner waits for the thing."
-READY = doc(f"{WHY_SECTION}\n\n## Acceptance criteria\n\n- A test shows the thing.")
-NOT_READY = doc(f"{WHY_SECTION}\n\n## Plan\n\nDo the thing, some day.")
+ALL_BOXES = tuple(box.name for box in jira.DOR_BOXES)
+DOR_SECTION = f"## Definition of Ready\n\n{jira.checklist_markdown(ALL_BOXES)}"
+READY = doc(f"{WHY_SECTION}\n\n{DOR_SECTION}\n\n## Acceptance criteria\n\n- A test shows the thing.")
+NO_CHECKLIST = doc(f"{WHY_SECTION}\n\n## Acceptance criteria\n\n- A test shows the thing.")
+NOT_READY = doc(f"{WHY_SECTION}\n\n{DOR_SECTION}\n\n## Plan\n\nDo the thing, some day.")
 OPEN_JQL = "project = CHB AND (statusCategory != Done) ORDER BY Rank ASC"
 
 
@@ -242,6 +248,9 @@ def keys_answer(
     return answer
 
 
+AGENT_ID = "claude-id"
+
+
 def transition_fake(
     current: str,
     by_status: dict[str, list[str]] | None = None,
@@ -252,6 +261,7 @@ def transition_fake(
     links: dict[str, list[dict[str, Any]]] | None = None,
     priorities: dict[str, str | None] | None = None,
     state: str = "before",
+    assignee: str | None = None,
 ) -> FakeJira:
     """CHB-12 sits in `current`. A ticket in the pull list is listed there unless the test places it."""
     by_status = dict(by_status or {})
@@ -262,7 +272,9 @@ def transition_fake(
     return FakeJira(
         {
             ("GET", "/rest/api/3/issue/CHB-12/transitions"): transitions_of(state),
-            ("GET", f"/rest/api/3/issue/CHB-12?fields={ISSUE_FIELDS}"): issue_in(current, description, links.get("CHB-12")),
+            ("GET", f"/rest/api/3/issue/CHB-12?fields={ISSUE_FIELDS}"): issue_in(current, description, links.get("CHB-12"), assignee=assignee),
+            ("GET", "/rest/api/3/myself"): {"accountId": AGENT_ID},
+            ("PUT", "/rest/api/3/issue/CHB-12/assignee"): None,
             ("GET", BOARD): board_config(state=state, **BOARD_LIMITS) if board is None else board,
             ("POST", SEARCH): keys_answer(by_status, descriptions, epics, links, priorities),
             ("POST", "/rest/api/3/issue/CHB-12/transitions"): None,
@@ -349,6 +361,77 @@ class TransitionTest(unittest.TestCase):
         self.assertEqual(fake.writes(), [])
 
 
+class StartAssignsTheAgentTest(unittest.TestCase):
+    """CHB-187 AC1: a start assigns the agent after every check passed and before the move."""
+
+    def test_a_start_assigns_the_agent_and_then_moves(self) -> None:
+        fake = transition_fake("To Do", {})
+        code, out, _ = _run(["transition", "CHB-12", "In Progress"], fake)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(out.splitlines()[0], "CHB-12 -> In Progress")
+        self.assertEqual(
+            fake.writes(), [("PUT", ASSIGN_PATH, {"accountId": AGENT_ID}), ("POST", MOVE_PATH, {"transition": {"id": "12"}})]
+        )
+
+    def test_a_ticket_assigned_to_the_agent_is_not_assigned_again(self) -> None:
+        fake = transition_fake("To Do", {}, assignee=AGENT_ID)
+        code, _, _ = _run(["transition", "CHB-12", "In Progress"], fake)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(_write_paths(fake), [MOVE_PATH])
+
+    def test_a_ticket_assigned_to_someone_else_goes_to_the_agent(self) -> None:
+        fake = transition_fake("To Do", {}, assignee="owner-id")
+        code, _, _ = _run(["transition", "CHB-12", "In Progress"], fake)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(_write_paths(fake), [ASSIGN_PATH, MOVE_PATH])
+
+    def test_a_refused_start_assigns_nobody(self) -> None:
+        cases = {
+            "WIP limit (exit 5)": (5, transition_fake("To Do", {"In Progress": ["CHB-1", "CHB-2", "CHB-3"]})),
+            "not the top ticket (exit 4)": (4, transition_fake("To Do", {"To Do": ["CHB-5", "CHB-12"]})),
+            "no acceptance criteria (exit 4)": (4, transition_fake("To Do", {}, description=NOT_READY)),
+            "blocked (exit 4)": (4, transition_fake("To Do", {"In Review": ["CHB-91"]}, links={"CHB-12": blocked_by("CHB-91")})),
+            "Definition of Ready not ticked (exit 4)": (4, transition_fake("To Do", {}, description=NO_CHECKLIST)),
+        }
+        for name, (expected, fake) in cases.items():
+            with self.subTest(name):
+                code, _, _ = _run(["transition", "CHB-12", "In Progress"], fake)
+
+                self.assertEqual(code, expected)
+                self.assertEqual(fake.writes(), [])
+
+    def test_a_move_back_into_in_progress_assigns_nobody(self) -> None:
+        for current in ("In Review", "Needs human", "Validating"):
+            with self.subTest(current):
+                fake = transition_fake(current, {}, assignee="owner-id")
+                code, _, _ = _run(["transition", "CHB-12", "In Progress"], fake)
+
+                self.assertEqual(code, 0)
+                self.assertEqual(_write_paths(fake), [MOVE_PATH])
+
+    def test_a_failed_assignment_moves_nothing(self) -> None:
+        fake = transition_fake("To Do", {})
+        fake.routes[("PUT", ASSIGN_PATH)] = 403
+        code, _, err = _run(["transition", "CHB-12", "In Progress"], fake)
+
+        self.assertEqual(code, 1)
+        self.assertIn("403", err)
+        self.assertEqual(_write_paths(fake), [ASSIGN_PATH])
+
+    def test_the_start_refuses_unticked_judgment_boxes_and_names_them(self) -> None:
+        some = doc(f"{WHY_SECTION}\n\n## Definition of Ready\n\n{jira.checklist_markdown(('why', 'small'))}\n\n## Acceptance criteria\n\n- A test.")
+        fake = transition_fake("To Do", {}, description=some)
+        code, _, err = _run(["transition", "CHB-12", "In Progress"], fake)
+
+        self.assertEqual(code, 4)
+        self.assertIn("Definition of Ready is not complete (unticked: trigger, decision)", err)
+        self.assertIn("factory/bin/jira tick CHB-12 trigger", err)
+        self.assertEqual(fake.writes(), [])
+
+
 class WipLimitTest(unittest.TestCase):
     """CHB-108, CHB-127: a full column blocks starting work (exit 4), never recording a PR or a merge."""
 
@@ -417,7 +500,7 @@ class WipLimitTest(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertEqual(out.splitlines(), ["CHB-12 -> In Progress", "In Progress 2/3: 1 slot free; next: nothing to start in To Do"])
-        self.assertEqual(len(fake.writes()), 1)
+        self.assertEqual(len(fake.writes()), 2)  # the assignment and the move (CHB-187)
 
     def test_limit_comes_from_the_board_config(self) -> None:
         board = board_config(**{"Validating": {"max": 1}})
@@ -673,7 +756,7 @@ class TopTicketTest(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertEqual(out.splitlines()[0], "CHB-12 -> In Progress")
-        self.assertEqual(len(fake.writes()), 1)
+        self.assertEqual(len(fake.writes()), 2)  # the assignment and the move (CHB-187)
         self.assertIn(OPEN_JQL, fake.searches())
 
     def test_a_top_ticket_without_acceptance_criteria_is_not_skipped(self) -> None:
@@ -720,7 +803,7 @@ class TopTicketTest(unittest.TestCase):
 
     def test_a_ticket_with_depends_on_text_but_no_link_starts(self) -> None:
         """CHB-151: the text is not read any more."""
-        description = doc(f"{WHY_SECTION}\n\nDepends on CHB-91.\n\nAcceptance criteria:\n\n- A test.")
+        description = doc(f"{WHY_SECTION}\n\n{DOR_SECTION}\n\nDepends on CHB-91.\n\nAcceptance criteria:\n\n- A test.")
         fake = transition_fake("To Do", {"In Review": ["CHB-91"]}, description=description)
         code, _, _ = _run(["transition", "CHB-12", "In Progress"], fake)
 
@@ -871,7 +954,7 @@ class FreeSlotTest(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertIn(
-            "In Progress 1/3: 2 slots free; next: CHB-122 (needs Why it matters and acceptance criteria), CHB-8", out.splitlines()
+            "In Progress 1/3: 2 slots free; next: CHB-122 (needs Why it matters, acceptance criteria and Definition of Ready (no section)), CHB-8", out.splitlines()
         )
 
     def test_one_next_ticket_per_free_slot(self) -> None:
@@ -2205,6 +2288,7 @@ class ViewLinksTest(unittest.TestCase):
 WHY = "Why it matters"
 CREATE_PATH = "/rest/api/3/issue"
 MOVE_PATH = "/rest/api/3/issue/CHB-12/transitions"
+ASSIGN_PATH = "/rest/api/3/issue/CHB-12/assignee"
 
 
 def _create_with(
@@ -2434,7 +2518,7 @@ class SortTodoTest(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertEqual(out.splitlines()[0], "CHB-12 -> In Progress")
-        self.assertEqual(_write_paths(fake), [RANK_PATH, MOVE_PATH])
+        self.assertEqual(_write_paths(fake), [RANK_PATH, ASSIGN_PATH, MOVE_PATH])
 
     def test_a_blocked_epic_or_unlisted_start_writes_no_rank_even_when_to_do_is_out_of_order(self) -> None:
         """The refusals that do not depend on the order come before the sort."""
@@ -2610,7 +2694,7 @@ class PullListTest(unittest.TestCase):
 
                 self.assertEqual(code, 0, err)
                 self.assertEqual(out.splitlines()[0], "CHB-12 -> In Progress")
-                self.assertEqual(_write_paths(fake), [MOVE_PATH])
+                self.assertEqual(_write_paths(fake), [ASSIGN_PATH, MOVE_PATH])
 
     def test_a_start_from_the_pull_list_checks_the_top_ticket_of_that_list(self) -> None:
         for state in BOARD_STATES:
@@ -3122,7 +3206,7 @@ class TickTest(unittest.TestCase):
         self.assertEqual(code, 2)
 
     def test_no_checklist_names_the_command_that_adds_it(self) -> None:
-        fake = self._fake(READY)
+        fake = self._fake(NO_CHECKLIST)
         code, _, err = _run(["tick", "CHB-12", "small"], fake)
 
         self.assertEqual(code, 1)
@@ -3252,7 +3336,7 @@ class ReadyCommandTest(unittest.TestCase):
             self.assertIn(box.prefix, err)
 
     def test_no_checklist_refuses_and_names_the_command_that_adds_it(self) -> None:
-        fake = ready_fake(READY)
+        fake = ready_fake(NO_CHECKLIST)
         code, _, err = _run(["ready", "CHB-12", *self.TRIGGER], fake)
 
         self.assertEqual(code, 4)

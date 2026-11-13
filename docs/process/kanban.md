@@ -54,7 +54,7 @@ A WIP limit stops pulling new work. It never stops the board from recording what
 - Min: a signal from the wrapper, enforced by a Stop hook, except for Ready, where it is a quota (see [Ready](#ready)). When a move leaves a column below its min,
   the wrapper prints `<column> is below its minimum (count/min)`, for example `In Progress is below its minimum (0/1)`.
   The Stop hook `factory/hooks/check_wip_minimums.py` (CHB-162, CHB-164) reads the board when the agent ends its turn and sends it back once when
-  In Progress is below its min and Ready has a ticket that can start (it names the ticket), or when Ready is below its min (no reply text passes it;
+  In Progress is below its min and Ready has a ticket that a start accepts (it names the ticket), or when Ready is below its min (no reply text passes it;
   the reason lists the refill candidates). It fails open when Jira is unreachable and allows the stop on a
   second refusal for the same board.
 - Waiting for a slot: exit 5 means a WIP limit (exit 4 is every other board refusal). Its message names a wait command.
@@ -65,7 +65,7 @@ A WIP limit stops pulling new work. It never stops the board from recording what
 - Free slots: after every move between columns, the wrapper prints the free In Progress slots and the next top tickets of Ready, one per free slot,
   for example `In Progress 2/3: 1 slot free; next: CHB-123` (CHB-125).
   The next tickets follow the sorted order of [Ready](#ready). A Backlog ticket is never next. A ticket that a start would refuse for a missing section is marked:
-  `next: CHB-122 (needs acceptance criteria)` or `next: CHB-122 (needs Why it matters and acceptance criteria)`.
+  `next: CHB-122 (needs acceptance criteria)`, `next: CHB-122 (needs Why it matters and acceptance criteria)` or `next: CHB-122 (needs Definition of Ready (unticked: trigger, small))`.
   It prints no such line while In Progress, In Review or Validating is at its max: starting is blocked then.
   The moved ticket is never next, and it blocks its dependents unless it moved to Done or Discarded (CHB-143).
 - Pulling work: the agent fills In Progress up to its max, one agent per ticket, in parallel where it can (owner rule, 2026-11-10).
@@ -199,8 +199,10 @@ Ready was named To Do until 2026-11-10 (CHB-153). The rules below apply to it un
   (`factory/bin/jira section CHB-<n> --heading "Acceptance criteria" --body-file FILE`), derived from the ticket, its epic and the ADRs.
   It asks the owner only for decisions that are the owner's (owner rule, 2026-11-10).
 - `factory/bin/jira transition <key> "In Progress"` from Ready exits 4 when `<key>` is not that top ticket, is blocked by an open ticket,
-  or is the top ticket without a "Why it matters" first section or without acceptance criteria (CHB-125, CHB-148).
-  The message names the top ticket and the next step, or the `section` command that adds the missing section.
+  or is the top ticket without a "Why it matters" first section, without acceptance criteria or with a judgment box of its Definition of Ready unticked (CHB-125, CHB-148, CHB-187).
+  The message names the top ticket and the next step, or the `section`, `checklist` or `tick` command that fixes the gap.
+  The Stop hook `factory/hooks/check_wip_minimums.py` names a ticket as startable only when this start would accept it: both read one function, `start_gaps` (CHB-187).
+  When the top ticket has a gap, the hook says no Ready ticket can start and lists each Ready ticket with what it lacks.
   A move back into In Progress from another status is not checked.
 - WIP limit (owner decision, 2026-11-10, CHB-157): a min and a max on the board. Epics never count toward any column limit: the board shows no epic as a card.
   - Max: a move into Ready (`ready`, or a move back) exits 4 while Ready holds its max. The message names the tickets in Ready.
@@ -216,7 +218,9 @@ Ready was named To Do until 2026-11-10 (CHB-153). The rules below apply to it un
 
 Meaning: someone (the agent or the owner) is changing code, infrastructure or documents for this ticket.
 
-- Enter: from Ready only. The worker assigns the ticket to themselves (an agent runs `factory/bin/jira assign CHB-<n> --me`) and creates the branch `CHB-<n>-<slug>` from `main`.
+- Enter: from Ready only. `factory/bin/jira transition CHB-<n> "In Progress"` assigns the ticket to the agent account ("Claude (CHB agent)") in the same command,
+  after every start rule has passed and before the move (CHB-187). A refused start (exit 4 or 5) assigns nobody, and a ticket already assigned to the agent is not assigned again.
+  The agent then creates the branch `CHB-<n>-<slug>` from `main`. A move back into In Progress keeps the assignee.
 - Leave to In Review: a pull request is open, `make check` passed locally, and the PR body states what merging changes in plain words.
 - Leave to Needs human: the worker is blocked by a question or a decision only the owner can make.
 - WIP limit: a min and a max on the board. The max is the most agents that run in parallel. See [WIP limits](#wip-limits).
