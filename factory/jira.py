@@ -34,6 +34,7 @@ Tasks under a CHB Epic, and has no delete, no project, board, workflow or permis
 writes, and no raw request command. Do not add one. `rank` changes only the rank of
 issues. `section` writes only the description field, and changes only one section of it.
 In "Acceptance criteria (Validating)", `section` refuses a "When:" line without a "Speed up:" line.
+In "Needs human: owner steps", `section` refuses a body without an "Answer:" line (CHB-171).
 `priority` writes only the priority field, and only High, Medium or Low (docs/process/priorities.md).
 Highest marks an expedite ticket: only `create --expedite` sets it, one open at a time, for a production bug,
 a broken pipeline or a leaking secret. It skips Backlog, Ready and every column limit (CHB-157).
@@ -793,6 +794,25 @@ def check_speed_up(heading: str, body: str) -> None:
             part = [line] if line is not None else []
         elif part:
             part.append(line)
+
+
+ANSWER_PATTERN = re.compile(_LABEL.format("answer"), re.IGNORECASE)
+
+
+def check_answer_line(heading: str, body: str) -> None:
+    """Refuse a "Needs human: owner steps" section without an "Answer:" line (exit 2, CHB-171).
+
+    The line says where the owner answers: in the Claude Code chat, or in a ticket comment that the
+    next session start picks up (factory/hooks/validating_sweep.py).
+    """
+    if heading.strip() != REQUIRED_SECTIONS["needs human"]:
+        return
+    if not any(ANSWER_PATTERN.match(line) for line in body.splitlines()):
+        raise UsageError(
+            "the section has no Answer line. Add "
+            "'- Answer: <where the owner answers: in the Claude Code chat, or in a comment on this ticket, "
+            "which the next session start picks up>'"
+        )
 
 
 def check_link_input(blocked: str, blocker: str) -> None:
@@ -2199,6 +2219,7 @@ def main(
             args.body = _read_text(args.body_file)
             check_section_input(args.heading, args.body)
             check_speed_up(args.heading, args.body)
+            check_answer_line(args.heading, args.body)
         if args.command == "edit-comment":
             check_comment_id(args.comment_id)
             args.text = _read_text(args.body_file)
