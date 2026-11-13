@@ -359,8 +359,77 @@ class KeyringTimeoutTest(unittest.TestCase):
             sweep.op_service_account.read_token(sweep._capped_run(sweep.KEYRING_TIMEOUT_SECONDS, run=slow))
 
 
+def _pull(number: int, branch: str, merged: str | None = None, title: str | None = None) -> dict:
+    node = {"number": number, "title": title or f"PR {number}", "headRefName": branch}
+    if merged:
+        node["mergedAt"] = merged
+    return node
+
+
+def _pulls(merged: list[dict], opened: list[dict] | None = None) -> dict:
+    return {"data": {"repository": {"merged": {"nodes": merged}, "open": {"nodes": opened or []}}}}
+
+
+PULLS_NONE = _pulls([])
+
+
+class InReviewMergedTest(unittest.TestCase):
+    """CHB-179: In Review tickets whose PR is merged."""
+
+    def test_lists_a_ticket_with_a_merged_pr_with_number_and_time(self) -> None:
+        answer = _pulls([_pull(105, "CHB-170-contributing", "2026-11-11T09:00:00Z")])
+
+        self.assertEqual(sweep.merged_in_review(["CHB-170"], answer), [("CHB-170", 105, "2026-11-11T09:00:00Z")])
+        line = sweep.in_review_findings(["CHB-170"], answer)[0]
+        self.assertIn("CHB-170 is in In Review but PR #105 merged into main at 2026-11-11T09:00:00Z", line)
+        self.assertIn('factory/bin/jira transition CHB-170 "Validating"', line)
+
+    def test_an_open_pr_never_counts_even_with_an_older_merged_one(self) -> None:
+        answer = _pulls([_pull(1, "CHB-170-a", "2026-11-10T09:00:00Z")], [_pull(2, "CHB-170-b")])
+
+        self.assertEqual(sweep.merged_in_review(["CHB-170"], answer), [])
+
+    def test_no_pr_found_never_counts(self) -> None:
+        self.assertEqual(sweep.merged_in_review(["CHB-170"], PULLS_NONE), [])
+
+    def test_a_ticket_number_that_is_a_prefix_does_not_match(self) -> None:
+        answer = _pulls([_pull(9, "CHB-1790-other", "2026-11-11T09:00:00Z")])
+
+        self.assertEqual(sweep.merged_in_review(["CHB-179"], answer), [])
+
+    def test_the_title_matches_when_the_branch_does_not(self) -> None:
+        answer = _pulls([_pull(9, "feature/x", "2026-11-11T09:00:00Z", title="CHB-179: flag it")])
+
+        self.assertEqual([k for k, _, _ in sweep.merged_in_review(["CHB-179"], answer)], ["CHB-179"])
+
+    def test_the_latest_of_several_merged_prs_is_named(self) -> None:
+        answer = _pulls([_pull(1, "CHB-5-a", "2026-11-10T09:00:00Z"), _pull(2, "CHB-5-b", "2026-11-11T09:00:00Z")])
+
+        self.assertEqual(sweep.merged_in_review(["CHB-5"], answer), [("CHB-5", 2, "2026-11-11T09:00:00Z")])
+
+    def test_tickets_are_sorted_by_number(self) -> None:
+        answer = _pulls([_pull(1, "CHB-20-a", "2026-11-10T09:00:00Z"), _pull(2, "CHB-3-b", "2026-11-10T10:00:00Z")])
+
+        self.assertEqual([k for k, _, _ in sweep.merged_in_review(["CHB-20", "CHB-3"], answer)], ["CHB-3", "CHB-20"])
+
+    def test_a_graphql_error_is_a_failure(self) -> None:
+        with self.assertRaises(sweep.SweepError):
+            sweep.merged_in_review(["CHB-1"], {"errors": [{"message": "x"}]})
+
+    def test_lines_skip_github_when_nothing_is_in_review(self) -> None:
+        def boom() -> dict:
+            raise AssertionError("GitHub must not be read")
+
+        self.assertEqual(sweep.in_review_lines([], boom), [])
+
+    def test_lines_are_empty_when_no_pr_is_merged(self) -> None:
+        self.assertEqual(sweep.in_review_lines([{"key": "CHB-1"}], lambda: PULLS_NONE), [])
+
+
 def _run(stdin: str = "{}", **readers: object) -> tuple[int, dict]:
     readers.setdefault("read_rebase", lambda: REBASE_NONE)
+    readers.setdefault("read_in_review", lambda: [])
+    readers.setdefault("read_pulls", lambda: PULLS_NONE)
     out = io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
         code = sweep.main(io.StringIO(stdin), now=NOW, **readers)  # type: ignore[arg-type]
@@ -412,6 +481,31 @@ class MainTest(unittest.TestCase):
         context = _context(result)
         self.assertIn("Needs-rebase list failed: gh exited 4", context)
         self.assertIn("  - due: When: 2026-11-09.", context)
+
+    def test_a_merged_in_review_pr_is_listed_at_session_start(self) -> None:
+        _, result = _run(
+            read_issues=lambda: ISSUES,
+            read_reviews=lambda: FIXTURE,
+            read_in_review=lambda: [{"key": "CHB-170"}],
+            read_pulls=lambda: _pulls([_pull(105, "CHB-170-x", "2026-11-11T09:00:00Z")]),
+        )
+
+        context = _context(result)
+        self.assertIn("In Review tickets whose PR is merged", context)
+        self.assertIn("CHB-170 is in In Review but PR #105 merged into main at 2026-11-11T09:00:00Z", context)
+
+    def test_an_in_review_error_prints_one_line_and_keeps_the_rest(self) -> None:
+        code, result = _run(
+            read_issues=lambda: ISSUES,
+            read_reviews=lambda: FIXTURE,
+            read_in_review=lambda: [{"key": "CHB-1"}],
+            read_pulls=_fail(sweep.SweepError("gh exited 4")),
+        )
+
+        self.assertEqual(code, 0)
+        context = _context(result)
+        self.assertIn("In Review check failed: gh exited 4", context)
+        self.assertIn("- CHB-1 Past", context)
 
     def test_a_jira_error_prints_one_line_and_exits_0(self) -> None:
         code, result = _run(read_issues=_fail(sweep.jira.JiraError("POST /rest/api/3/search/jql: HTTP 503")), read_reviews=lambda: FIXTURE)

@@ -12,14 +12,16 @@ The hook adds to the agent's context, before the first prompt:
    A line with no absolute date names an event: "check". A ticket without the section: "no section".
 2. Open agent PRs labelled `needs-rebase` (CHB-172): the update workflow found a merge conflict.
    The agent rebases them first, locally, as the agent, and removes the label.
-3. The `make review-agreement` line (factory/review/agreement.py, same tally), and up to 5 merged
+3. In Review tickets whose PR is merged into main (CHB-179), with the PR number and merge time.
+   A ticket with an open PR, or with no PR found, is not listed.
+4. The `make review-agreement` line (factory/review/agreement.py, same tally), and up to 5 merged
    PRs whose last review comment has no owner reaction, newest first, with links.
 
-Reads: one Jira search as the agent account (factory/jira.py; credentials from 1Password through
-the service account) and two GitHub GraphQL queries with the owner's `gh` login. It writes nothing.
+Reads: two Jira searches as the agent account (factory/jira.py; credentials from 1Password through
+the service account) and three GitHub GraphQL queries with the owner's `gh` login. It writes nothing.
 
 It fails open: each part that fails prints one line ("Validating sweep failed: <reason>",
-"Review agreement failed: <reason>", "Needs-rebase list failed: <reason>") and the hook exits 0. Every call has a timeout; the parts run
+"Review agreement failed: <reason>", "Needs-rebase list failed: <reason>", "In Review check failed: <reason>") and the hook exits 0. Every call has a timeout; the parts run
 in parallel and stop waiting after DEADLINE_SECONDS. A reason is the message of a known error (they
 hold no secret) or only the type name of an unexpected one.
 
@@ -96,6 +98,18 @@ query($owner: String!, $name: String!) {
   repository(owner: $owner, name: $name) {
     pullRequests(states: OPEN, labels: ["needs-rebase"], first: 50, orderBy: {field: CREATED_AT, direction: ASC}) {
       nodes { number title url author { login __typename } }
+    }
+  }
+}
+"""
+PULLS_QUERY = """
+query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    merged: pullRequests(states: MERGED, baseRefName: "main", first: 100, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      nodes { number title headRefName mergedAt }
+    }
+    open: pullRequests(states: OPEN, first: 100, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      nodes { number title headRefName }
     }
   }
 }
@@ -345,6 +359,76 @@ def rebase_lines(answer: dict[str, Any]) -> list[str]:
     return lines
 
 
+# In Review tickets whose PR is merged (CHB-179)
+
+
+def read_pulls(gh: Callable[[list[str]], dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Recent merged and open PRs, as one GraphQL answer."""
+    gh = gh or _gh_json
+    return gh(["gh", "api", "graphql", "-F", "owner={owner}", "-F", "name={repo}", "-f", f"query={PULLS_QUERY}"])
+
+
+def read_in_review() -> list[dict[str, Any]]:
+    """The In Review tickets: one 1Password read, one Jira search."""
+    return jira_client().search('status = "In Review"', fields=["summary"])
+
+
+def _pr_nodes(answer: dict[str, Any], alias: str) -> list[dict[str, Any]]:
+    if answer.get("errors"):
+        raise SweepError("GitHub GraphQL answered with errors")
+    repository = (answer.get("data") or {}).get("repository")
+    connection = repository.get(alias) if isinstance(repository, dict) else None
+    if not isinstance(connection, dict):
+        raise SweepError("GitHub GraphQL answer has no repository")
+    return [pr for pr in connection.get("nodes") or [] if isinstance(pr, dict)]
+
+
+def _belongs_to(pr: dict[str, Any], key: str) -> bool:
+    """The PR is the ticket's: branch CHB-<n>-<slug> or title "CHB-<n>: ..." (CLAUDE.md, one ticket per branch)."""
+    pattern = re.compile(rf"^{re.escape(key)}(?![0-9])[-:]?")
+    return bool(pattern.match(str(pr.get("headRefName", ""))) or pattern.match(str(pr.get("title", ""))))
+
+
+def merged_in_review(keys: Sequence[str], answer: dict[str, Any]) -> list[tuple[str, int, str]]:
+    """(key, PR number, merge time) for each In Review ticket whose PR is merged and that has no open PR.
+
+    A ticket with an open PR, or with no PR in the answer, is not listed. A ticket with several merged PRs
+    lists the latest one. Sorted by ticket number.
+    """
+    merged = _pr_nodes(answer, "merged")
+    opened = _pr_nodes(answer, "open")
+    found = []
+    for key in sorted(set(keys), key=lambda k: int(re.search(r"\d+$", k).group()) if re.search(r"\d+$", k) else 0):
+        if any(_belongs_to(pr, key) for pr in opened):
+            continue
+        mine = [pr for pr in merged if _belongs_to(pr, key) and isinstance(pr.get("mergedAt"), str)]
+        if mine:
+            latest = max(mine, key=lambda pr: pr["mergedAt"])
+            found.append((key, int(latest["number"]), latest["mergedAt"]))
+    return found
+
+
+def in_review_findings(keys: Sequence[str], answer: dict[str, Any]) -> list[str]:
+    """One line per In Review ticket whose PR is merged: what to do now."""
+    return [
+        f"{quote(key)} is in In Review but PR #{number} merged into main at {quote(merged_at)}. "
+        f'Move it now: factory/bin/jira transition {quote(key)} "Validating" '
+        f"(first write its section \"{SECTION}\", docs/process/kanban.md, Validating), or to Done when nothing deploys."
+        for key, number, merged_at in merged_in_review(keys, answer)
+    ]
+
+
+def in_review_lines(issues: Sequence[dict[str, Any]], read_pulls: Callable[[], dict[str, Any]]) -> list[str]:
+    """Session start lines; nothing when no In Review ticket has a merged PR. GitHub is read only when one is in In Review."""
+    keys = [str(issue.get("key", "")) for issue in issues]
+    if not keys:
+        return []
+    found = in_review_findings(keys, read_pulls())
+    if not found:
+        return []
+    return ["In Review tickets whose PR is merged (CHB-179). Move each now:"] + [f"- {line}" for line in found]
+
+
 # Hook
 
 
@@ -374,8 +458,11 @@ def summary(
     read_reviews: Callable[[], dict[str, Any]] = read_reviews,
     deadline: float = DEADLINE_SECONDS,
     read_rebase: Callable[[], dict[str, Any]] = read_rebase,
+    read_in_review: Callable[[], list[dict[str, Any]]] = read_in_review,
+    read_pulls: Callable[[], dict[str, Any]] = read_pulls,
 ) -> str:
     parts = [
+        ("In Review check failed", _in_background(lambda: in_review_lines(read_in_review(), read_pulls))),
         ("Validating sweep failed", _in_background(lambda: validating_lines(read_issues(), now))),
         ("Needs-rebase list failed", _in_background(lambda: rebase_lines(read_rebase()))),
         ("Review agreement failed", _in_background(lambda: review_lines(read_reviews()))),
@@ -403,13 +490,15 @@ def main(
     read_reviews: Callable[[], dict[str, Any]] = read_reviews,
     deadline: float = DEADLINE_SECONDS,
     read_rebase: Callable[[], dict[str, Any]] = read_rebase,
+    read_in_review: Callable[[], list[dict[str, Any]]] = read_in_review,
+    read_pulls: Callable[[], dict[str, Any]] = read_pulls,
 ) -> int:
     try:
         stdin.read()  # the event; the summary does not depend on it
     except (OSError, ValueError):
         pass
     try:
-        context = summary(now or datetime.now(timezone.utc), read_issues, read_reviews, deadline, read_rebase)
+        context = summary(now or datetime.now(timezone.utc), read_issues, read_reviews, deadline, read_rebase, read_in_review, read_pulls)
     except Exception as error:  # noqa: BLE001 - fail open
         context = f"Validating sweep failed: {_reason(error)}\n"
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": context}}))
