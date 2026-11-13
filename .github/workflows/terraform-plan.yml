@@ -1,0 +1,121 @@
+# Terraform plan of infra/gcp on pull requests (CHB-13, ADR-3c1f).
+#
+# What: a pull request that changes infra/gcp/** gets one comment, updated on each push: the count
+# of resources to add, change and destroy, and the address and action of each. A reviewer sees the
+# effect of the change before merging. Nothing is applied: the owner applies locally (infra/README.md).
+#
+# Public repository: no plan text, attribute value or state content may reach the log, the job
+# summary or the comment. The plan goes to a file in $RUNNER_TEMP. Only scripts/plan_summary.py
+# reads its JSON, and it keeps counts, addresses and actions. Terraform output goes to files too;
+# on a failure the log shows the `Error:` lines only. The two variables the plan needs are read from
+# the state and masked (see plan_summary.py), so no secret is stored in the repository settings.
+#
+# Credential: the read-only `github-planner` service account through the `github-pr` pool
+# (infra/gcp/planner.tf). It trusts `pull_request` runs of this repository only. It cannot write
+# state or take the state lock, so the plan runs with -lock=false.
+#
+# Trust: a pull request runs this file from its own branch, so the branch controls what runs with the
+# planner credential. That is the accepted cost of ADR-3c1f: the planner reads, and cannot change.
+# Forks get no OIDC token and are skipped.
+name: Terraform plan
+
+on:
+  pull_request:
+    paths:
+      - infra/gcp/**
+
+permissions: {}
+
+concurrency:
+  group: terraform-plan-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  # The project number is public (the production URL holds it). Pool and provider: infra/gcp/planner.tf.
+  PLANNER_PROVIDER: projects/1027266991110/locations/global/workloadIdentityPools/github-pr/providers/github-pr
+  PLANNER_SERVICE_ACCOUNT: github-planner@chb-factory-a92932.iam.gserviceaccount.com
+  TF_IN_AUTOMATION: "1"
+  TF_INPUT: "0"
+
+jobs:
+  plan:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write # the OIDC token for the planner
+      pull-requests: write # the comment, posted with the workflow token
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Same download and check as ci.yml. A bump of infra/gcp/.terraform-version fails here until
+      # TERRAFORM_SHA256 is updated (here and in ci.yml): the linux_amd64 line of terraform_<version>_SHA256SUMS.
+      - name: Install Terraform (checked by SHA-256)
+        env:
+          TERRAFORM_SHA256: 4638628058e71a55212b1c563712eac03b902128f40740f3dc8174df12135061 # 1.17.1 linux_amd64
+        run: |
+          version=$(cat infra/gcp/.terraform-version)
+          curl -fsSL -o "$RUNNER_TEMP/terraform.zip" "https://releases.hashicorp.com/terraform/${version}/terraform_${version}_linux_amd64.zip"
+          echo "$TERRAFORM_SHA256  $RUNNER_TEMP/terraform.zip" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/bin"
+          unzip -o "$RUNNER_TEMP/terraform.zip" terraform -d "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ env.PLANNER_PROVIDER }}
+          service_account: ${{ env.PLANNER_SERVICE_ACCOUNT }}
+
+      - name: Plan (output goes to files, the log shows the summary only)
+        id: plan
+        working-directory: infra/gcp
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set +x
+          out="$RUNNER_TEMP/tf"
+          mkdir -p "$out"
+          fail() {
+            echo "::error::$1"
+            python3 -I "$GITHUB_WORKSPACE/scripts/plan_summary.py" errors "$out/$2.log" || true
+            python3 -I "$GITHUB_WORKSPACE/scripts/plan_summary.py" failure "$out/body.md" --sha "$HEAD_SHA" --run-url "$RUN_URL" > /dev/null
+            echo "body=$out/body.md" >> "$GITHUB_OUTPUT"
+            exit 1
+          }
+          terraform init -no-color > "$out/init.log" 2>&1 || fail "terraform init failed" init
+          terraform show -json > "$out/state.json" 2> "$out/state.log" || fail "reading the state failed" state
+          python3 -I "$GITHUB_WORKSPACE/scripts/plan_summary.py" state-vars "$out/state.json" "$out/vars.env" || fail "the state lacks a variable the plan needs" state
+          rm -f "$out/state.json"
+          # The masks are printed. Only then do the values go into the environment of this step's successors.
+          cat "$out/vars.env" >> "$GITHUB_ENV"
+          set -a
+          while IFS='=' read -r name value; do export "$name=$value"; done < "$out/vars.env"
+          set +a
+          rm -f "$out/vars.env"
+          terraform plan -lock=false -no-color -out="$out/plan.tfplan" > "$out/plan.log" 2>&1 || fail "terraform plan failed" plan
+          terraform show -json "$out/plan.tfplan" > "$out/plan.json" 2> "$out/show.log" || fail "reading the plan failed" show
+          python3 -I "$GITHUB_WORKSPACE/scripts/plan_summary.py" summary "$out/plan.json" "$out/body.md" --sha "$HEAD_SHA" --run-url "$RUN_URL" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "body=$out/body.md" >> "$GITHUB_OUTPUT"
+
+      # One comment per pull request, found by its marker and by its author, then updated.
+      - name: Comment on the pull request
+        if: ${{ always() && steps.plan.outputs.body != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BODY_FILE: ${{ steps.plan.outputs.body }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          marker="<!-- chb-terraform-plan -->"
+          id=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\"))) | .id" | head -n 1)
+          payload=$(jq -n --rawfile body "$BODY_FILE" '{body: $body}')
+          if [ -n "$id" ]; then
+            echo "$payload" | gh api --method PATCH "repos/$REPO/issues/comments/$id" --input - > /dev/null
+          else
+            echo "$payload" | gh api --method POST "repos/$REPO/issues/$PR_NUMBER/comments" --input - > /dev/null
+          fi
