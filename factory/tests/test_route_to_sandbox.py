@@ -25,6 +25,8 @@ DENIED = [
     "npx vitest run src/x.test.ts",
     "pytest tests/test_x.py",
     "python3 -m pytest -k slow",
+    "python -mpytest tests/x.py",
+    "python3 -I -mpip install x",
     "python3 -m pip install requests",
     "pip install requests",
     "rtk npm ci",
@@ -41,12 +43,22 @@ DENIED = [
     "setsid uv sync",
     "/tmp/x/.devcontainer/run npm ci",
     "other/.devcontainer/run make check",
+    "cd backend && .devcontainer/run npm ci",
+    "cd $X && .devcontainer/run npm ci",
+    "cd backend; ./.devcontainer/run make check",
+    "env -S 'npm ci'",
+    "exec -a x npm ci",
+    "timeout --foreground 5 npm ci",
+    "nice --unknown-option 5 make check",
 ]
 
 ALLOWED = [
     ".devcontainer/run make check",
     "./.devcontainer/run make check",
     "timeout 900 .devcontainer/run make check",
+    "cd /home/u/repo/.claude/worktrees/CHB-9 && .devcontainer/run make check",
+    "cd .claude/worktrees/CHB-9 && ./.devcontainer/run make check",
+    "/home/u/repo/.claude/worktrees/CHB-9/.devcontainer/run make check",
     "/home/u/repo/.devcontainer/run bash -c 'cd frontend && npm ci && npm test'",
     "rtk .devcontainer/run uv run pytest tests/test_x.py",
     "make",
@@ -64,21 +76,29 @@ ALLOWED = [
 ]
 
 
+CWD = "/home/u/repo"
+LAUNCHERS = {"/home/u/repo/.devcontainer/run", "/home/u/repo/.claude/worktrees/CHB-9/.devcontainer/run"}
+
+
 class ReasonTest(unittest.TestCase):
     def test_third_party_code_on_the_host_is_denied_with_the_sandbox_command(self):
         for command in DENIED:
             with self.subTest(command=command):
-                why = hook.reason(command, top="/home/u/repo")
+                why = hook.reason(command, CWD, LAUNCHERS)
                 self.assertIsNotNone(why)
                 self.assertIn(".devcontainer/run", why)
 
     def test_the_sandbox_launcher_and_host_only_commands_are_allowed(self):
         for command in ALLOWED:
             with self.subTest(command=command):
-                self.assertIsNone(hook.reason(command, top="/home/u/repo"))
+                self.assertIsNone(hook.reason(command, CWD, LAUNCHERS))
 
-    def test_an_absolute_launcher_path_needs_a_known_checkout(self):
-        self.assertIsNotNone(hook.reason("/home/u/repo/.devcontainer/run npm ci", top=None))
+    def test_a_launcher_is_trusted_only_in_a_worktree_of_this_repository(self):
+        self.assertIsNotNone(hook.reason(".devcontainer/run npm ci", CWD, set()))
+
+    def test_the_trusted_launchers_are_those_of_the_worktrees_git_lists(self):
+        listing = "worktree /home/u/repo\nHEAD abc\n\nworktree /home/u/repo/.claude/worktrees/CHB-9\nHEAD def\n"
+        self.assertEqual(hook.launchers_from_worktree_list(listing), LAUNCHERS)
 
 
 class MainTest(unittest.TestCase):
@@ -96,6 +116,13 @@ class MainTest(unittest.TestCase):
     def test_allowed_command_exits_0_silently(self):
         code, err = self.run_hook(json.dumps({"tool_input": {"command": "git status"}}))
         self.assertEqual((code, err), (0, ""))
+
+    def test_the_launcher_of_this_checkout_passes_through_the_stdin_contract(self):
+        top = str(Path(__file__).resolve().parents[2])
+        payload = {"cwd": top, "tool_input": {"command": f"{top}/.devcontainer/run make check"}}
+        self.assertEqual(self.run_hook(json.dumps(payload)), (0, ""))
+        payload = {"cwd": f"{top}/backend", "tool_input": {"command": ".devcontainer/run make check"}}
+        self.assertEqual(self.run_hook(json.dumps(payload))[0], 2)
 
     def test_input_that_is_not_json_is_denied(self):
         code, _ = self.run_hook("not json")

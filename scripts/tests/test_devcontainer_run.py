@@ -78,6 +78,18 @@ class DockerArgsTest(unittest.TestCase):
         self.assertNotIn("-t", self.args(tty=False))
 
 
+class HiddenTest(unittest.TestCase):
+    def test_an_existing_host_venv_is_hidden_behind_an_empty_tmpfs(self):
+        args = run.docker_args(TOP, COMMON, "img", ["true"], tty=False, hidden=["backend/.venv"])
+        self.assertIn(f"type=tmpfs,target={TOP}/backend/.venv", args)
+
+    def test_a_host_venv_the_container_creates_stops_the_run(self):
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder) / "backend" / ".venv").mkdir(parents=True)
+            self.assertEqual(run.new_host_paths(folder, existed=set()), [str(Path(folder) / "backend" / ".venv")])
+            self.assertEqual(run.new_host_paths(folder, existed={"backend/.venv"}), [])
+
+
 class PrepareTest(unittest.TestCase):
     def test_the_node_modules_mount_point_is_made_by_the_user_so_docker_does_not_make_it_as_root(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -85,6 +97,27 @@ class PrepareTest(unittest.TestCase):
             run.prepare(folder)
             self.assertTrue((Path(folder) / "frontend" / "node_modules").is_dir())
             run.prepare(folder)  # an existing folder is kept
+
+
+class StrayGitTest(unittest.TestCase):
+    def test_a_git_folder_or_file_the_container_made_in_a_writable_folder_is_found(self):
+        with tempfile.TemporaryDirectory() as folder:
+            top = Path(folder)
+            for d in ("backend/app", "frontend/src", "frontend/node_modules/pkg/.git", "infra"):
+                (top / d).mkdir(parents=True)
+            (top / "backend" / ".git").mkdir()
+            (top / "frontend" / "src" / ".git").write_text("gitdir: /tmp/evil\n")
+            (top / "infra" / ".git").mkdir()
+            found = run.stray_git_entries(folder)
+            self.assertEqual(
+                sorted(found),
+                [str(top / "backend" / ".git"), str(top / "frontend" / "src" / ".git")],
+            )
+
+    def test_a_clean_checkout_has_none(self):
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder) / "backend").mkdir()
+            self.assertEqual(run.stray_git_entries(folder), [])
 
 
 class ImageTagTest(unittest.TestCase):

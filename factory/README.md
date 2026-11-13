@@ -485,6 +485,10 @@ It denies a bare full-suite run and names the related-test form:
 A path of `.` counts as no filter. A number does not count as a vitest filter: it is likely the value of an option such as `--retry 2`.
 `make check` and `make test` run the full suite and stay allowed: CLAUDE.md requires `make check` before every commit.
 
+The two Bash hooks drop redirections (`2>&1`, `> file`, `2>/dev/null`) and strip `rtk`, `rtk proxy`, `factory/bin/as-agent`, `env`, `uv run`, `npx` and `python -m` before they read a command.
+Like the Jira hook, they read the command text only, deny on unreadable input or an internal error, and let the command run if `python3` cannot start.
+They split a command with unbalanced quotes, such as a heredoc with an apostrophe, on spaces and separators instead.
+
 ## Hook: third-party code runs in the sandbox container
 
 `.claude/settings.json` runs `factory/hooks/route_to_sandbox.py` before every Bash command (CHB-31).
@@ -495,12 +499,10 @@ The hook denies them on the host and names the sandbox form, `.devcontainer/run 
 - `make check`, `make test`, `make check-backend`, `make check-frontend`, `make check-deps`, `make format`, `make mutate`.
 
 Wrappers such as `timeout`, `nice -n 5`, `env -u X`, `xargs` and `sudo` are skipped with their options.
-Allowed: `.devcontainer/run ...` (relative, or the absolute path in this checkout), other `make` targets (`dev`, `up` and `e2e` start Docker themselves), stdlib Python such as `python3 -I -m unittest`.
-It does not see a tool called inside `bash -c "..."`, `eval` or a script. The sandbox container is described in README.md, "Sandbox container".
-
-The two Bash hooks drop redirections (`2>&1`, `> file`, `2>/dev/null`) and strip `rtk`, `rtk proxy`, `factory/bin/as-agent`, `env`, `uv run`, `npx` and `python -m` before they read a command.
-Like the Jira hook, they read the command text only, deny on unreadable input or an internal error, and let the command run if `python3` cannot start.
-They split a command with unbalanced quotes, such as a heredoc with an apostrophe, on spaces and separators instead.
+Allowed: the `.devcontainer/run` of a worktree of this repository, resolved after any literal `cd`.
+Also allowed: other `make` targets (`dev`, `up` and `e2e` start Docker themselves), stdlib Python such as `python3 -I -m unittest`.
+It does not see a tool called inside `bash -c "..."`, `eval` or a script.
+The related-tests hook reads the command behind `.devcontainer/run`, so a bare full-suite run in the container is denied too. The sandbox container is described in README.md, "Sandbox container".
 
 ## Hook: warn on repeated edits of one file
 

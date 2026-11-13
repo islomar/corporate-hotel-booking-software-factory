@@ -11,12 +11,16 @@ Its outbound network is limited to .devcontainer/allowed-hosts.txt (init-firewal
   the host runs later.
 - frontend/node_modules is a Docker volume per checkout, apart from the host folder.
 - The image tag is a hash of the image files: a changed allow list builds a new image.
-Exit code: the command's, or 125 to 127 from Docker.
+- An existing backend/.venv is hidden behind an empty tmpfs.
+- After the command, a `.git` entry in backend/ or frontend/, or a new backend/.venv, stops
+  with exit code 3.
+Exit code: the command's, 3 for a stray `.git`, or 125 to 127 from Docker.
 """
 
 from __future__ import annotations
 
 import hashlib
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -27,6 +31,9 @@ CACHE_VOLUME = "chb-sandbox-cache"
 # The only folders the container may write. Everything else, including the hooks the host runs
 # (factory/, scripts/, .claude/, .devcontainer/, Makefile), is read-only.
 WRITABLE = ("backend", "frontend")
+# Host folders inside a writable folder that the host runs code from. The container sees an
+# empty tmpfs there; if one did not exist, its appearance after the run stops the launcher.
+HOST_ONLY = ("backend/.venv",)
 
 
 def image_tag(context: Path = HERE) -> str:
@@ -40,7 +47,9 @@ def node_modules_volume(top: str) -> str:
     return f"chb-sandbox-nm-{hashlib.sha256(top.encode()).hexdigest()[:12]}"
 
 
-def docker_args(top: str, git_common_dir: str, image: str, command: list[str], *, tty: bool) -> list[str]:
+def docker_args(
+    top: str, git_common_dir: str, image: str, command: list[str], *, tty: bool, hidden: list[str] | tuple[str, ...] = ()
+) -> list[str]:
     args = ["docker", "run", "--rm", "-i"]
     if tty:
         args.append("-t")
@@ -51,11 +60,32 @@ def docker_args(top: str, git_common_dir: str, image: str, command: list[str], *
         *[a for d in WRITABLE for a in ("--mount", f"type=bind,source={top}/{d},target={top}/{d}")],
         "--mount", f"type=volume,source={node_modules_volume(top)},target={top}/frontend/node_modules",
         "--mount", f"type=volume,source={CACHE_VOLUME},target=/home/agent/.cache",
+        *[a for d in hidden for a in ("--mount", f"type=tmpfs,target={top}/{d}")],
         "--workdir", top,
         image,
         *command,
     ]
     return args
+
+
+def stray_git_entries(top: str) -> list[str]:
+    """`.git` folders or files in the writable folders. Git on the host, started inside one,
+    would load that repository's config, which can run commands (core.fsmonitor, hooks).
+    frontend/node_modules is skipped: the container sees its own volume there, not this folder."""
+    found = []
+    for folder in WRITABLE:
+        for root, dirs, files in os.walk(Path(top) / folder):
+            if root == str(Path(top) / "frontend"):
+                dirs[:] = [d for d in dirs if d != "node_modules"]
+            if ".git" in dirs or ".git" in files:
+                found.append(os.path.join(root, ".git"))
+            dirs[:] = [d for d in dirs if d != ".git"]
+    return found
+
+
+def new_host_paths(top: str, existed: set[str]) -> list[str]:
+    """HOST_ONLY folders that exist now but did not before the run: the container made them."""
+    return [str(Path(top) / d) for d in HOST_ONLY if d not in existed and (Path(top) / d).exists()]
 
 
 def prepare(top: str) -> None:
@@ -87,8 +117,19 @@ def main(argv: list[str]) -> int:
         print(f"run: docker build failed ({error.returncode})", file=sys.stderr)
         return 125
     prepare(top)
+    existed = {d for d in HOST_ONLY if (Path(top) / d).exists()}
     tty = sys.stdin.isatty() and sys.stdout.isatty()
-    return subprocess.run(docker_args(top, common, tag, argv, tty=tty), check=False).returncode
+    args = docker_args(top, common, tag, argv, tty=tty, hidden=sorted(existed))
+    code = subprocess.run(args, check=False).returncode
+    stray = stray_git_entries(top) + new_host_paths(top, existed)
+    if stray:
+        print("run: STOP. The container made a git repository or a Python environment in a", file=sys.stderr)
+        print("run: folder it can write. The host could run code from it: do not use it.", file=sys.stderr)
+        print("run: The owner checks and removes:", file=sys.stderr)
+        for path in stray:
+            print(f"run:   {path}", file=sys.stderr)
+        return 3
+    return code
 
 
 if __name__ == "__main__":
