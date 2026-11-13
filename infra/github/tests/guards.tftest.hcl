@@ -105,3 +105,20 @@ run "main_ruleset_requires_up_to_date_branches" {
     error_message = "The main ruleset must require branches to be up to date before merge (CHB-177)."
   }
 }
+
+run "repository_topics_fit_github_and_name_the_community" {
+  command = plan
+
+  assert {
+    condition     = length(github_repository.this.topics) <= 20
+    error_message = "GitHub allows at most 20 repository topics; the apply fails above that."
+  }
+  assert {
+    condition     = alltrue([for t in ["kanban", "lean", "lean-software-development"] : contains(github_repository.this.topics, t)])
+    error_message = "The topics must include kanban, lean and lean-software-development (CHB-186)."
+  }
+  assert {
+    condition     = !anytrue([for t in ["codurance", "corporate-hotel-booking", "kata"] : contains(github_repository.this.topics, t)])
+    error_message = "codurance, corporate-hotel-booking and kata were removed on the owner's request (CHB-186)."
+  }
+}
