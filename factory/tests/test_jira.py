@@ -1800,11 +1800,43 @@ class SectionCommandTest(unittest.TestCase):
     def test_other_headings_need_no_speed_up(self) -> None:
         fake = FakeJira({("GET", DESCRIPTION_PATH): {"fields": {"description": None}}, ("PUT", "/rest/api/3/issue/CHB-12"): None})
         with tempfile.NamedTemporaryFile("w") as handle:
-            handle.write("1. Click Merge.\n- When: today")
+            handle.write("1. Click Merge.\n- When: today\n- Answer: in the chat")
             handle.flush()
             code, _, _ = _run(["section", "CHB-12", "--heading", "Needs human: owner steps", "--body-file", handle.name], fake)
 
         self.assertEqual(code, 0)
+
+    def test_needs_human_without_an_answer_line_is_a_usage_error_naming_the_line(self) -> None:
+        fake = FakeJira({})
+        bodies = ("1. Click Merge.\n2. Run make infra-apply.", "1. Do it.\nThe answer: in the chat")
+        for body in bodies:
+            with tempfile.NamedTemporaryFile("w") as handle:
+                handle.write(body)
+                handle.flush()
+                argv = ["section", "CHB-12", "--heading", "Needs human: owner steps", "--body-file", handle.name]
+                code, _, err = _run(argv, fake, credentials_reader=mock.Mock(side_effect=AssertionError("read credentials")))
+
+            self.assertEqual(code, 2, body)
+            self.assertIn("Answer:", err)
+            self.assertEqual(fake.requests, [])
+
+    def test_needs_human_with_an_answer_line_is_accepted(self) -> None:
+        bodies = (
+            "1. Click Merge.\n- Answer: reply in the Claude Code chat, or comment on this ticket",
+            "1. Do it.\n**Answer:** comment on this ticket; the next session start picks it up",
+            "1. Do it.\n2. answer: chat",
+        )
+        for body in bodies:
+            fake = FakeJira({("GET", DESCRIPTION_PATH): {"fields": {"description": None}}, ("PUT", "/rest/api/3/issue/CHB-12"): None})
+            with tempfile.NamedTemporaryFile("w") as handle:
+                handle.write(body)
+                handle.flush()
+                argv = ["section", "CHB-12", "--heading", "Needs human: owner steps", "--body-file", handle.name]
+                self.assertEqual(_run(argv, fake)[0], 0, body)
+
+    def test_the_validating_section_needs_no_answer_line(self) -> None:
+        fake = FakeJira({("GET", DESCRIPTION_PATH): {"fields": {"description": None}}, ("PUT", "/rest/api/3/issue/CHB-12"): None})
+        self.assertEqual(self._section(fake, "AC1. Works.")[0], 0)
 
     def test_two_matching_headings_exit_1_without_a_write(self) -> None:
         current = _doc(_heading(HEADING), _para("a"), _heading(HEADING), _para("b"))
