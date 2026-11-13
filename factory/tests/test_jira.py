@@ -3717,6 +3717,139 @@ class ExpediteTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("more than one open expedite ticket: CHB-200, CHB-201", out)
 
+class CriteriaCheckboxTest(unittest.TestCase):
+    """CHB-185: Done only when every acceptance criterion is a ticked checkbox."""
+
+    OPEN = doc(f"{WHY_SECTION}\n\n## Acceptance criteria\n\n- [x] First.\n- [ ] Second.\n- [ ] Third.")
+    CLOSED = doc(f"{WHY_SECTION}\n\n## Acceptance criteria\n\n- [x] First.\n- [x] Second.")
+
+    def _tick_fake(self, description: Any) -> FakeJira:
+        return FakeJira(
+            {
+                ("GET", DESCRIPTION_PATH): {"fields": {"description": description}},
+                ("PUT", ISSUE_PATH): None,
+                ("POST", COMMENT_PATH): {"id": "1"},
+            }
+        )
+
+    def _evidence(self, text: str = "ran it, it works") -> str:
+        path = Path(tempfile.mkdtemp()) / "evidence.md"
+        path.write_text(text, encoding="utf-8")
+        return str(path)
+
+    def test_done_is_refused_while_a_criterion_is_unticked(self) -> None:
+        fake = transition_fake("Validating", description=self.OPEN)
+        code, _, err = _run(["transition", "CHB-12", "Done"], fake)
+
+        self.assertEqual(code, 4)
+        self.assertIn("Second.", err)
+        self.assertIn("Third.", err)
+        self.assertNotIn("First.", err)
+        self.assertEqual(fake.writes(), [])
+
+    def test_done_is_allowed_when_every_criterion_is_ticked(self) -> None:
+        fake = transition_fake("Validating", description=self.CLOSED)
+        code, out, err = _run(["transition", "CHB-12", "Done"], fake)
+
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.splitlines()[0], "CHB-12 -> Done")
+
+    def test_the_validating_section_counts_too(self) -> None:
+        both = doc(f"{WHY_SECTION}\n\n## Acceptance criteria\n\n- [x] A.\n\n## Acceptance criteria (Validating)\n\n- [ ] Live check.")
+        code, _, err = _run(["transition", "CHB-12", "Done"], transition_fake("Validating", description=both))
+
+        self.assertEqual(code, 4)
+        self.assertIn("Live check.", err)
+
+    def test_plain_text_criteria_do_not_block_done(self) -> None:
+        """Tickets written before CHB-185 have bullets, not checkboxes: nothing to tick."""
+        code, _, err = _run(["transition", "CHB-12", "Done"], transition_fake("Validating", description=READY))
+
+        self.assertEqual(code, 0, err)
+
+    def test_tick_by_number_posts_the_evidence_then_ticks(self) -> None:
+        fake = self._tick_fake(self.OPEN)
+        code, out, err = _run(["tick", "CHB-12", "2", "--evidence-file", self._evidence()], fake)
+
+        self.assertEqual(code, 0, err)
+        self.assertIn("criterion 2 ticked", out)
+        self.assertEqual([p for _, p, _ in fake.writes()], [COMMENT_PATH, ISSUE_PATH])
+        (comment,) = _comments(fake)
+        self.assertIn("Second.", comment)
+        self.assertIn("ran it, it works", comment)
+        (after,) = _put_descriptions(fake)
+        self.assertEqual([i["attrs"]["state"] for i in _task_items(after)], ["DONE", "DONE", "TODO"])
+
+    def test_tick_by_unique_text(self) -> None:
+        fake = self._tick_fake(self.OPEN)
+        code, _, err = _run(["tick", "CHB-12", "third", "--evidence-file", self._evidence()], fake)
+
+        self.assertEqual(code, 0, err)
+        (after,) = _put_descriptions(fake)
+        self.assertEqual([i["attrs"]["state"] for i in _task_items(after)], ["DONE", "TODO", "DONE"])
+
+    def test_an_ambiguous_or_unknown_criterion_writes_nothing(self) -> None:
+        for target in ("d", "9", "nothing like it"):
+            with self.subTest(target):
+                fake = self._tick_fake(self.OPEN)
+                code, _, err = _run(["tick", "CHB-12", target, "--evidence-file", self._evidence()], fake)
+
+                self.assertEqual(code, 1)
+                self.assertTrue(err)
+                self.assertEqual(fake.writes(), [])
+
+    def test_a_criterion_needs_evidence(self) -> None:
+        fake = FakeJira({})
+        code, _, err = _run(["tick", "CHB-12", "2"], fake, credentials_reader=_no_credentials)
+        self.assertEqual(code, 2)
+        self.assertIn("evidence", err)
+        code, _, _ = _run(["tick", "CHB-12", "2", "--evidence-file", self._evidence("  \n")], fake, credentials_reader=_no_credentials)
+        self.assertEqual(code, 2)
+        self.assertEqual(fake.requests, [])
+
+    def test_a_ticked_criterion_writes_nothing(self) -> None:
+        fake = self._tick_fake(self.OPEN)
+        code, out, _ = _run(["tick", "CHB-12", "1", "--evidence-file", self._evidence()], fake)
+
+        self.assertEqual(code, 0)
+        self.assertIn("unchanged", out)
+        self.assertEqual(fake.writes(), [])
+
+    def test_section_writes_acceptance_bullets_as_checkboxes(self) -> None:
+        fake = FakeJira({("GET", DESCRIPTION_PATH): {"fields": {"description": doc(WHY_SECTION)}}, ("PUT", ISSUE_PATH): None})
+        path = self._evidence("- One.\n- Two.\n  more of two\n\n1. A numbered step.")
+        code, _, err = _run(["section", "CHB-12", "--heading", "Acceptance criteria", "--body-file", path], fake)
+
+        self.assertEqual(code, 0, err)
+        (after,) = _put_descriptions(fake)
+        self.assertEqual([i["attrs"]["state"] for i in _task_items(after)], ["TODO", "TODO"])
+        self.assertEqual([n["type"] for n in after["content"] if n["type"] != "heading"], ["paragraph", "taskList", "orderedList"])
+
+    def test_section_leaves_other_sections_alone(self) -> None:
+        self.assertEqual(jira.acceptance_checkboxes("Notes", "- One."), "- One.")
+
+    def test_validating_label_lines_stay_plain(self) -> None:
+        body = "- Pipeline runs.\n  - When: 2026-11-20\n  - Speed up: cannot be sped up\n- Where to check: URL"
+        out = jira.acceptance_checkboxes("Acceptance criteria (Validating)", body)
+
+        self.assertEqual(out.splitlines()[0], "- [ ] Pipeline runs.")
+        self.assertEqual(out.splitlines()[1:3], body.splitlines()[1:3])
+        self.assertEqual(out.splitlines()[3], "- Where to check: URL")
+
+    def test_create_writes_acceptance_bullets_as_checkboxes(self) -> None:
+        fake = backlog_create_fake("after", "Backlog")
+        path = self._evidence(f"{WHY_SECTION}\n\n## Acceptance criteria\n\n- One.\n- Two.")
+        code, _, err = _run(
+            ["create", "--parent", "CHB-27", "--summary", "S", "--description-file", path, "--priority", "High"], fake
+        )
+
+        self.assertEqual(code, 0, err)
+        (created,) = [b for m, p, b in fake.writes() if (m, p) == ("POST", CREATE_PATH)]
+        items = _task_items(created["fields"]["description"])
+        self.assertEqual([i["attrs"]["state"] for i in items[-2:]], ["TODO", "TODO"])
+        self.assertEqual(len(items), len(jira.DOR_BOXES) + 2)
+
+
 
 if __name__ == "__main__":
     unittest.main()
