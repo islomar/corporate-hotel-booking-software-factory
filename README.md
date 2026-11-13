@@ -171,8 +171,8 @@ It exports metrics from the same place, at most once a minute.
 One thread runs flushes, one at a time; concurrent responses share the next flush.
 A response waits at most 2 s for a flush. After a span and log flush that fails or takes over 0.5 s, responses skip flushing for 30 s.
 If telemetry setup fails at startup, the app logs one warning and runs without export.
-The backend decides sampling itself: health checks (`/api/health`) get request metrics but no traces and no access log line, every other request is traced.
-The sampled flag in an incoming `traceparent` header is ignored; its trace ID is kept.
+The backend decides sampling itself: health checks (`/api/health`) get request metrics but no traces and no access log line; the backend traces every other request.
+The backend ignores the sampled flag of an incoming `traceparent` header and keeps its trace ID.
 
 ## Sandbox container
 
@@ -193,8 +193,8 @@ What the container gets:
 - The checkout, read-only, at its own path, so git worktrees work.
   Only `backend/` and `frontend/` are writable: the container cannot change a hook, script or Makefile that the host runs.
   Changes in those two folders show in `git status`; files git ignores there do not.
-  An existing `backend/.venv` on the host is hidden behind an empty folder.
-  If the container makes `backend/.venv`, or a `.git` or bare repository in either folder, the launcher stops with exit code 3: the host could run code from it.
+  An empty folder hides the host's Python environment in backend/ (`.venv`), if it has one.
+  If the container makes that `.venv`, or a `.git` or bare repository in either folder, the launcher stops with exit code 3: the host could run code from it.
 - The frontend's installed packages in a Docker volume per checkout (`chb-sandbox-nm-<hash>`), apart from the host folder.
   `npm ci` runs there when `frontend/package-lock.json` changes.
 - A cache volume for uv and npm (`chb-sandbox-cache`).
@@ -242,7 +242,7 @@ Limits:
 Pushes to `main` run CI. When CI passes, the deploy workflow builds the image, deploys it to Cloud Run, checks that `/api/health` reports the new commit, and runs Playwright against the live URL.
 
 - Tasks live in Jira, space `CHB`: [board](https://islomar.atlassian.net/jira/software/projects/CHB/boards/2). [`docs/process/kanban.md`](docs/process/kanban.md) defines each status.
-- Setup and factory work is tracked in Jira too. [`TODO.md`](TODO.md) lists the epics.
+- Jira tracks setup and factory work too. [`TODO.md`](TODO.md) lists the epics.
 - One ticket, one short-lived branch, one pull request. See `docs/decisions/ADR-0faf-short-lived-branches.md`.
 - Merged is not done. See `docs/decisions/ADR-ad3e-definition-of-done.md`.
 - Dependabot updates arrive every weekday. Safe ones merge without a person once the setup in `docs/decisions/ADR-ebe6-unattended-dependency-updates.md` is complete.
