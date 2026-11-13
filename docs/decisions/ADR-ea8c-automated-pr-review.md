@@ -27,6 +27,7 @@
 - Status: accepted (2026-11-06)
 - Date: 2026-11-06
 - Ticket: CHB-82
+- Amended 2026-11-13 (CHB-181): the author App keeps `workflows: write` (CHB-86, ADR-d7b7). The text that removes it no longer applies: decision 1, decision 8 stage 0, owner decision 2.
 - Amended by CHB-93 (decision 2), CHB-105 (decisions 2, 3 and 7, owner decision 4) and CHB-141 (decisions 3 and 8)
 
 ## Context

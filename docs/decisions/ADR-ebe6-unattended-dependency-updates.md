@@ -20,6 +20,7 @@
 
 - Status: accepted
 - Date: 2026-11-06
+- Amended 2026-11-13 (CHB-181): the author App keeps `workflows: write` (CHB-86, amendment in ADR-d7b7). The next step under GitHub Actions bumps, "after CHB-86 removes `workflows: write`", does not apply.
 
 ## Context
 
