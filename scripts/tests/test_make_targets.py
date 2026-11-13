@@ -21,15 +21,17 @@ def described_targets() -> set[str]:
 
 
 def readme_targets() -> set[str]:
-    """The targets in the `make <target>` lines of the README's quick start."""
-    return set(re.findall(r"^make ([a-zA-Z0-9_-]+)\b", (ROOT / "README.md").read_text(), re.MULTILINE))
+    """The targets in the `make <target>` lines of the README's quick start: the code block that starts with `make setup`."""
+    blocks = re.findall(r"^```sh\n(.*?)^```", (ROOT / "README.md").read_text(), re.MULTILINE | re.DOTALL)
+    quick_start = next(block for block in blocks if block.startswith("make setup"))
+    return set(re.findall(r"^make ([a-zA-Z0-9_-]+)\b", quick_start, re.MULTILINE))
 
 
 class HelpTest(unittest.TestCase):
     def test_make_help_lists_every_described_target(self) -> None:
         listed = {line.split()[0] for line in _make("help")}
 
-        self.assertIn("e2e", described_targets())
+        self.assertIn("e2e", listed)
         self.assertEqual(described_targets() - listed, set())
 
     def test_the_readme_names_every_target_make_help_prints(self) -> None:
