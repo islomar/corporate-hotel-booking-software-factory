@@ -102,11 +102,13 @@ class MainTest(unittest.TestCase):
             "registry.terraform.io",
             "github.com",
             "api.github.com",
-            "api.anthropic.com",
-            "islomar.atlassian.net",
-            "oauth2.googleapis.com",
         ):
             self.assertIn(needed, hosts)
+
+    def test_services_that_need_a_secret_are_not_reachable_the_container_holds_none(self):
+        hosts = committed_hosts()
+        for absent in ("api.anthropic.com", "islomar.atlassian.net", "my.1password.com", "oauth2.googleapis.com"):
+            self.assertNotIn(absent, hosts)
 
     def test_hosts_command_prints_one_host_per_line(self):
         out = io.StringIO()

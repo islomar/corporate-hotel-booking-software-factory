@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Limit outbound traffic of the devcontainer to .devcontainer/allowed-hosts.txt (CHB-31).
-# Run as root at every container start (devcontainer.json, postStartCommand).
+# Limit outbound traffic of the sandbox container to .devcontainer/allowed-hosts.txt (CHB-31).
+# Run as root at every container start, by entry.sh.
 # Pattern: Anthropic's Claude Code reference devcontainer,
 # https://github.com/anthropics/claude-code/blob/main/.devcontainer/init-firewall.sh
 # Differences: the host list is a file validated by egress.py, DNS goes only to the

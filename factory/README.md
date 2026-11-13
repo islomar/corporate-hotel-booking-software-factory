@@ -19,6 +19,7 @@
   - [Hook: no personal agent memory](#hook-no-personal-agent-memory)
   - [Hook: branch names follow the ticket key](#hook-branch-names-follow-the-ticket-key)
   - [Hook: related tests only while iterating](#hook-related-tests-only-while-iterating)
+  - [Hook: third-party code runs in the sandbox container](#hook-third-party-code-runs-in-the-sandbox-container)
   - [Hook: warn on repeated edits of one file](#hook-warn-on-repeated-edits-of-one-file)
   - [Hook: no harness edits in feature tickets](#hook-no-harness-edits-in-feature-tickets)
   - [Hook: no secrets in the agent's context](#hook-no-secrets-in-the-agents-context)
@@ -390,6 +391,7 @@ flowchart TD
         DJ["deny_raw_jira_writes.py<br/>matcher: Bash<br/>blocks acli writes and raw REST writes to Jira"]
         DB["deny_bad_branch_names.py<br/>matcher: Bash<br/>blocks a branch not named CHB-n-slug"]
         DT["deny_full_test_suite.py<br/>matcher: Bash<br/>blocks a test run that nothing narrows"]
+        RS["route_to_sandbox.py<br/>matcher: Bash<br/>blocks package installs and tests outside the sandbox container"]
         DM["deny_agent_memory_writes.py<br/>matcher: Write, Edit, MultiEdit, NotebookEdit<br/>blocks writes to personal agent memory"]
         DH["deny_harness_edits.py<br/>matcher: Write, Edit, MultiEdit, NotebookEdit, Bash<br/>blocks edits of .claude, factory and .github on a product ticket branch"]
         DS["deny_secret_reads.py<br/>matcher: Read, Bash<br/>blocks reads and prints of secret files"]
@@ -482,6 +484,18 @@ It denies a bare full-suite run and names the related-test form:
 
 A path of `.` counts as no filter. A number does not count as a vitest filter: it is likely the value of an option such as `--retry 2`.
 `make check` and `make test` run the full suite and stay allowed: CLAUDE.md requires `make check` before every commit.
+
+## Hook: third-party code runs in the sandbox container
+
+`.claude/settings.json` runs `factory/hooks/route_to_sandbox.py` before every Bash command (CHB-31).
+Package installs, linters and test runners run code from npm and PyPI. On the host that code could read the owner's keyring, 1Password and home folder.
+The hook denies them on the host and names the sandbox form, `.devcontainer/run <command>`:
+
+- `uv`, `uvx`, `npm`, `npx`, `pnpm`, `yarn`, `pip`, `pip3`, `pytest`, `vitest`, `python -m pytest`, `python -m pip`;
+- `make check`, `make test`, `make check-backend`, `make check-frontend`, `make check-deps`, `make format`, `make mutate`.
+
+Allowed: `.devcontainer/run ...`, other `make` targets (`dev`, `up` and `e2e` start Docker themselves), stdlib Python such as `python3 -I -m unittest`.
+It does not see a tool called inside `bash -c "..."`, `eval` or a script. The sandbox container is described in README.md, "Sandbox container".
 
 The two Bash hooks drop redirections (`2>&1`, `> file`, `2>/dev/null`) and strip `rtk`, `rtk proxy`, `factory/bin/as-agent`, `env`, `uv run`, `npx` and `python -m` before they read a command.
 Like the Jira hook, they read the command text only, deny on unreadable input or an internal error, and let the command run if `python3` cannot start.

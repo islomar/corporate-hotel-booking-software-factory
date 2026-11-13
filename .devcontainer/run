@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""Run one command in the sandbox container: `.devcontainer/run make check` (CHB-31).
+
+Third-party code (npm and PyPI packages, test runners, linters) runs here, not on the host.
+The container holds no secret: no host environment variable, no keyring, no 1Password.
+Its outbound network is limited to .devcontainer/allowed-hosts.txt (init-firewall.sh).
+
+- The checkout is mounted at its own host path, so a git worktree's `.git` file resolves.
+- The git folder and `.claude/` are read-only: the container cannot plant a git hook or a
+  Claude Code hook that the host would run later.
+- frontend/node_modules is a Docker volume per checkout, apart from the host folder.
+- The image tag is a hash of the image files: a changed allow list builds a new image.
+Exit code: the command's, or 125 to 127 from Docker.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import subprocess
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+IMAGE_FILES = ("Dockerfile", "allowed-hosts.txt", "egress.py", "init-firewall.sh", "entry.sh")
+CACHE_VOLUME = "chb-sandbox-cache"
+
+
+def image_tag(context: Path = HERE) -> str:
+    digest = hashlib.sha256()
+    for name in IMAGE_FILES:
+        digest.update(name.encode() + b"\0" + (context / name).read_bytes() + b"\0")
+    return f"chb-sandbox:{digest.hexdigest()[:16]}"
+
+
+def node_modules_volume(top: str) -> str:
+    return f"chb-sandbox-nm-{hashlib.sha256(top.encode()).hexdigest()[:12]}"
+
+
+def docker_args(top: str, git_common_dir: str, image: str, command: list[str], *, tty: bool) -> list[str]:
+    args = ["docker", "run", "--rm", "-i"]
+    if tty:
+        args.append("-t")
+    args += ["--cap-add", "NET_ADMIN", "--cap-add", "NET_RAW"]
+    args += [
+        "--mount", f"type=bind,source={top},target={top}",
+        "--mount", f"type=bind,source={git_common_dir},target={git_common_dir},readonly",
+        "--mount", f"type=bind,source={top}/.claude,target={top}/.claude,readonly",
+        "--mount", f"type=volume,source={node_modules_volume(top)},target={top}/frontend/node_modules",
+        "--mount", f"type=volume,source={CACHE_VOLUME},target=/home/agent/.cache",
+        "--workdir", top,
+        image,
+        *command,
+    ]
+    return args
+
+
+def _git(*args: str) -> str:
+    return subprocess.run(["git", *args], capture_output=True, text=True, check=True).stdout.strip()
+
+
+def _ensure_image(tag: str) -> None:
+    present = subprocess.run(["docker", "image", "inspect", tag], capture_output=True, check=False)
+    if present.returncode != 0:
+        print(f"run: building {tag} (first run after a change of .devcontainer/)", file=sys.stderr)
+        subprocess.run(["docker", "build", "-q", "-t", tag, str(HERE)], check=True, stdout=subprocess.DEVNULL)
+
+
+def main(argv: list[str]) -> int:
+    if not argv:
+        print("usage: .devcontainer/run <command> [args...]   for example: .devcontainer/run make check", file=sys.stderr)
+        return 2
+    top = _git("rev-parse", "--show-toplevel")
+    common = str(Path(_git("rev-parse", "--path-format=absolute", "--git-common-dir")))
+    tag = image_tag()
+    try:
+        _ensure_image(tag)
+    except subprocess.CalledProcessError as error:
+        print(f"run: docker build failed ({error.returncode})", file=sys.stderr)
+        return 125
+    tty = sys.stdin.isatty() and sys.stdout.isatty()
+    return subprocess.run(docker_args(top, common, tag, argv, tty=tty), check=False).returncode
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
