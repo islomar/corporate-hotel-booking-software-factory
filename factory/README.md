@@ -26,6 +26,7 @@
   - [Hook: what to finish first, at session start](#hook-what-to-finish-first-at-session-start)
   - [Hook: rules health check is due](#hook-rules-health-check-is-due)
   - [Automated PR review (shadow mode)](#automated-pr-review-shadow-mode)
+  - [Triage of review findings](#triage-of-review-findings)
   - [Workflow output schemas and routing](#workflow-output-schemas-and-routing)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -695,6 +696,42 @@ Run the gate on a saved result:
 python3 -I factory/review/gate.py --result result.json --claude-exit-code 0 --schema factory/review/schema.json \
   --changed-files names.z --prior-runs runs.json --app-slug chb-factory-reviewer --head-sha HEAD_SHA --out check-run.json
 ```
+
+## Triage of review findings
+
+A review lists findings. Without a step in between, the agent applies all of them or drops some alone, and the human cannot see which (CHB-60, ADR-ea8c decision 5).
+`factory/bin/triage-review` sorts each finding into `apply`, `discard` or `doubt`, with a one-line reason, and posts the result.
+
+```sh
+factory/bin/triage-review 123                  # the findings of the latest review, numbered
+factory/bin/triage-review 123 --file triage.txt
+```
+
+The review is the last comment of `chb-factory-reviewer[bot]` with the marker `chb-review reviewed:<sha>`.
+The file has one line per finding, for example `2 doubt the test client may rewrite the header`.
+The script refuses a file that misses a finding or a reason, names what is missing and posts nothing.
+Otherwise it replaces the "Caveats" section of the PR body with the doubts, then posts the comment "Triage of review `<sha>`" through `as-agent`: a table of finding, decision and reason.
+After the comment, the agent fixes the `apply` findings in the PR and lists the doubts to the human in the chat.
+
+The required check `triage` (`.github/workflows/triage.yml`) fails while the latest review comment has findings and the PR has no triage comment for the same SHA from `chb-factory-agent[bot]`.
+It passes when the review has no findings, or there is no review comment. A comment from any other account does not count. Tests: `factory/tests/test_triage_review.py`.
+
+How the check stays current:
+
+- `triage.yml` runs on `pull_request` (each push). It reads the comments through the API, with a read-only token and no secret.
+- A review or triage comment arrives after that run. `triage-rerun.yml` runs on `issue_comment`, from `main`, for comments of the reviewer App and the agent.
+  It re-runs the completed `Triage` runs of the PR head.
+  A re-run reads the live comments and replaces the result in place. Same pattern as `supply-chain` (CHB-184).
+- Both workflows read comments as data. They never run or expand comment text, and the re-run job checks out `main`, not the PR.
+
+Limits:
+
+- Only the latest review comment counts. A push that gets no review comment (docs-only, or the reviewer secrets are missing) keeps the earlier review's result.
+- The re-run path rests on the workflow token being able to re-run `pull_request` runs, as `supply-chain` does (CHB-184). It is untested until a PR with findings gets its triage.
+  If the check stays red after the triage comment, the human re-runs it: Actions, Triage, the run for the PR head, "Re-run jobs". The agent App cannot re-run workflows.
+- After a push, `triage` can pass on the previous review's triage until the new review comment arrives. The `review` check is not required yet (shadow mode), so a merge can land inside that gap.
+- The check proves that a triage comment exists, not that the decisions are right. The human reads the doubts.
+- A run in progress is not re-run. It reads the comments when it starts its read step, so a comment that lands within seconds of that read can wait for the next event.
 
 ## Workflow output schemas and routing
 
