@@ -122,6 +122,16 @@ class StrayGitTest(unittest.TestCase):
             (bare / "HEAD").write_text("ref: refs/heads/main\n")
             self.assertEqual(run.stray_git_entries(folder), [str(bare)])
 
+    def test_a_folder_the_scan_cannot_read_counts_as_found(self):
+        with tempfile.TemporaryDirectory() as folder:
+            hidden = Path(folder) / "backend" / "hidden"
+            hidden.mkdir(parents=True)
+            hidden.chmod(0)
+            try:
+                self.assertEqual(run.stray_git_entries(folder), [str(hidden)])
+            finally:
+                hidden.chmod(0o700)
+
     def test_a_clean_checkout_has_none(self):
         with tempfile.TemporaryDirectory() as folder:
             (Path(folder) / "backend").mkdir()

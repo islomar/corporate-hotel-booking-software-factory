@@ -69,12 +69,15 @@ def docker_args(
 
 
 def stray_git_entries(top: str) -> list[str]:
-    """`.git` folders or files, and bare repositories, in the writable folders. Git on the host, started inside one,
+    """`.git` folders or files, bare repositories and unreadable folders, in the writable folders. Git on the host, started inside one,
     would load that repository's config, which can run commands (core.fsmonitor, hooks).
     frontend/node_modules is skipped: the container sees its own volume there, not this folder."""
     found = []
     for folder in WRITABLE:
-        for root, dirs, files in os.walk(Path(top) / folder):
+        if not (Path(top) / folder).exists():
+            continue  # the container cannot make it: the checkout root is read-only
+        # Fail closed: a folder the scan cannot read could hide a repository.
+        for root, dirs, files in os.walk(Path(top) / folder, onerror=lambda error: found.append(error.filename)):
             if root == str(Path(top) / "frontend"):
                 dirs[:] = [d for d in dirs if d != "node_modules"]
             if ".git" in dirs or ".git" in files:
