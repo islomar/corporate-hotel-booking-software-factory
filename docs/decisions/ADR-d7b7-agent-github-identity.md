@@ -39,6 +39,8 @@ Events created with the default `GITHUB_TOKEN` start no new workflow runs, so bo
   - the default `GITHUB_TOKEN` is read-only, and Actions cannot approve pull requests.
   A live probe on 2026-11-07 (run 42422566406, throwaway branch) confirmed it: the job with `environment: reviewer` was rejected by the environment rule, and the job without it read an empty secret.
   A new secret goes in an environment limited to `main`, never at repository level.
+- Amended 2026-11-13 (CHB-181, change made by CHB-172): the agent App key is also a secret of the `agent-pr-updates` environment, which admits only `main`.
+  `.github/workflows/pr-updates.yml` reads it there. `infra/github/environments.tf` creates the environment.
 
 ## Alternatives rejected
 
