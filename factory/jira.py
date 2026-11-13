@@ -102,7 +102,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from collections.abc import Callable, Collection, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -174,7 +174,7 @@ ACCEPTANCE_PATTERN = re.compile(
 OPEN_JQL = "statusCategory != Done ORDER BY Rank ASC"
 OPEN_FIELDS = ("status", "issuetype", "description", "issuelinks", "priority")
 # The fields before_transition and ready read of the moving ticket.
-ISSUE_FIELDS = "status,description,issuelinks,issuetype"
+ISSUE_FIELDS = "status,description,issuelinks,issuetype,assignee"
 # Dependencies are Jira "Blocks" links (CHB-151): inward "is blocked by", outward "blocks". In an issue's
 # issuelinks, an entry of this type with an inwardIssue means "this issue is blocked by inwardIssue".
 BLOCKS = "Blocks"
@@ -236,6 +236,8 @@ class Move:
     columns: tuple[Column, ...] = ()
     comment: str | None = None  # the trigger comment to post after the move (check_trigger, CHB-153)
     epic: bool = False  # an epic counts toward no column limit (CHB-157)
+    starts: bool = False  # a start from the pull list that passed every check: the agent becomes the assignee (CHB-187)
+    assignee: str | None = None  # the account id the ticket had when the start was checked
 
 
 @dataclass(frozen=True)
@@ -1047,6 +1049,8 @@ class Jira:
         comment = move.comment
         if prepare is not None:
             prepare()
+        if move.starts:
+            self.assign_agent_for_start(key, move)
         self.request("POST", f"/rest/api/3/issue/{key}/transitions", {"transition": {"id": matches[0]["id"]}}, empty_ok=True)
         if comment:
             try:
@@ -1057,6 +1061,16 @@ class Jira:
                     f"Post it: factory/bin/jira comment {key} --body-file FILE with the line {comment!r}"
                 ) from None
         return target, after_transition(self, key, move)
+
+    def assign_agent_for_start(self, key: str, move: Move) -> None:
+        """Assign the agent account to a ticket the start has accepted, unless it is assigned to it already (CHB-187).
+
+        Runs after every start check and before the move, so a refused start assigns nobody. A failure
+        here is a JiraError before the move: the ticket stays in the pull list.
+        """
+        me = str(self.myself()["accountId"])
+        if move.assignee != me:
+            self.assign(key, me)
 
     def place_created(self, key: str) -> Column | None:
         """Put a ticket just created in Backlog (CHB-153). Return its column. `ready` moves it on (CHB-154).
@@ -1536,6 +1550,8 @@ def before_transition(jira: Jira, key: str, status: str, *, status_id: str, trig
         )
     if target.name == IN_PROGRESS and source is not None and source == pull:
         check_top_of_to_do(jira, key, issue, columns)
+        assignee = issue.get("assignee")
+        return replace(move, starts=True, assignee=str(assignee["accountId"]) if isinstance(assignee, dict) and assignee.get("accountId") else None)
     return move
 
 
@@ -1615,19 +1631,78 @@ def check_top_of_to_do(jira: Jira, key: str, fields: dict[str, Any], columns: li
             f"rank it above {top} (factory/bin/jira rank {key} --before {top}), and try again. "
             f"Every start sorts {name} by priority, so a rank across priorities does not hold (docs/process/kanban.md, Ready)."
         )
+    gaps = start_gaps(key, description)
+    if gaps:
+        raise BlockedError(gaps[0].message)
+
+
+@dataclass(frozen=True)
+class StartGap:
+    """Something a ticket in the pull list lacks before a start accepts it (CHB-187)."""
+
+    label: str  # what it needs, in a few words, for a notice
+    message: str  # the refusal text of the start
+
+
+def dor_gap(description: Any) -> tuple[str, list[str]] | None:
+    """What the Definition of Ready of a ticket in the pull list still lacks, or None when it holds (CHB-187).
+
+    The judgment boxes must be ticked. `ready` ticks the two verified boxes (acceptance criteria, not blocked) and
+    the start checks them itself, so their ticks do not count: ticking cannot replace checking (CHB-154).
+    Returns a short detail and the `tick` box names to run; the names are empty when the section is missing or doubled.
+    """
+    count = checklist_count(description)
+    if count == 0:
+        return "no section", []
+    if count > 1:
+        return f"{count} sections", []
+    states = box_states(description) or {}
+    open_boxes = [box.name for box in DOR_BOXES if box.name in JUDGMENT_BOXES and states.get(box.name) != "DONE"]
+    return (f"unticked: {', '.join(open_boxes)}", open_boxes) if open_boxes else None
+
+
+def start_gaps(key: str, description: Any) -> list[StartGap]:
+    """Every gap in the ticket's own description that makes a start refuse it, in the order the start reports them (CHB-187).
+
+    The start (check_top_of_to_do) and the Stop hook (check_wip_minimums) both read this, so the hook
+    names only tickets the start accepts. Order and blockers are the callers' business.
+    """
+    gaps = []
     problem = why_problem(description)
     if problem:
-        raise BlockedError(
-            f"{key} cannot start: its description {problem}. Write it first: "
-            f'factory/bin/jira section {key} --heading "{WHY_HEADING}" --first --body-file FILE '
-            "(2 to 5 plain sentences: the pain, who feels it and the value of solving it; docs/process/kanban.md, Ready)."
+        gaps.append(
+            StartGap(
+                WHY_HEADING,
+                f"{key} cannot start: its description {problem}. Write it first: "
+                f'factory/bin/jira section {key} --heading "{WHY_HEADING}" --first --body-file FILE '
+                "(2 to 5 plain sentences: the pain, who feels it and the value of solving it; docs/process/kanban.md, Ready).",
+            )
         )
     if not has_acceptance_criteria(description):
-        raise BlockedError(
-            f"{key} has no acceptance criteria. Write them first: "
-            f'factory/bin/jira section {key} --heading "Acceptance criteria" --body-file FILE '
-            "(derive them from the ticket, its epic and the ADRs; ask the owner only for decisions that are the owner's)."
+        gaps.append(
+            StartGap(
+                "acceptance criteria",
+                f"{key} has no acceptance criteria. Write them first: "
+                f'factory/bin/jira section {key} --heading "Acceptance criteria" --body-file FILE '
+                "(derive them from the ticket, its epic and the ADRs; ask the owner only for decisions that are the owner's).",
+            )
         )
+    dor = dor_gap(description)
+    if dor is not None:
+        detail, boxes = dor
+        fix = (
+            f"tick the boxes you have checked, {'; '.join(f'factory/bin/jira tick {key} {name}' for name in boxes)}"
+            if boxes
+            else f"add or fix it: factory/bin/jira checklist {key}"
+        )
+        gaps.append(
+            StartGap(
+                f"{DOR_HEADING} ({detail})",
+                f"{key} cannot start: its {DOR_HEADING} is not complete ({detail}). Fix it: {fix}. "
+                f"A start needs every judgment box ticked (docs/process/kanban.md, Backlog).",
+            )
+        )
+    return gaps
 
 
 def top_queue(
@@ -1962,9 +2037,26 @@ def _free_slot_notice(jira: Jira, key: str, move: Move) -> list[str]:
 
 
 def _with_missing_sections(key: str, description: Any) -> str:
-    """`CHB-7`, or `CHB-7 (needs Why it matters and acceptance criteria)` for what a start would refuse."""
-    missing = [name for name, gap in ((WHY_HEADING, why_problem(description)), ("acceptance criteria", not has_acceptance_criteria(description))) if gap]
-    return f"{key} (needs {' and '.join(missing)})" if missing else key
+    """`CHB-7`, or `CHB-7 (needs Why it matters and acceptance criteria)` for what a start would refuse (start_gaps)."""
+    missing = [gap.label for gap in start_gaps(key, description)]
+    if not missing:
+        return key
+    return f"{key} (needs {', '.join(missing[:-1])} and {missing[-1]})" if len(missing) > 1 else f"{key} (needs {missing[0]})"
+
+
+def startable(issues: list[dict[str, Any]], columns: Sequence[Column]) -> tuple[str | None, list[tuple[str, list[StartGap]]]]:
+    """The ticket a start would accept now, and the pull-list tickets it would refuse for a gap (CHB-187).
+
+    A start takes only the top ticket (todo_order(...).ready, the order check_top_of_to_do uses), so that is the
+    only candidate. It is None when the top ticket has a gap (start_gaps). The second item lists every ticket
+    of the queue with its gaps, in queue order: what the agent must write or tick, starting with the top ticket.
+    `issues` is the whole of open_issues().
+    """
+    by_key = {str(issue["key"]): issue for issue in issues}
+    queue = todo_order(issues, columns).ready
+    refused = [(key, gaps) for key in queue if (gaps := start_gaps(key, by_key[key]["fields"].get("description")))]
+    top = queue[0] if queue and not any(key == queue[0] for key, _ in refused) else None
+    return top, refused
 
 
 def has_section(description: Any, heading: str) -> bool:

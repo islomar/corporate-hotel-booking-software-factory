@@ -335,7 +335,10 @@ The 1Password service account narrows who can read it to processes that can read
   This covers `ready` and a move back into Ready. The check runs before `ready` ticks any box.
   The message names the tickets in Ready and the command that moves one back to Backlog to make room;
 - the move starts work from the pull list, passes the limits, and the ticket is not the top ticket of the pull list,
-  or is the top ticket without a "Why it matters" first section or without acceptance criteria (CHB-125, CHB-148).
+  or is the top ticket without a "Why it matters" first section, without acceptance criteria or with a judgment box of its Definition of Ready unticked (CHB-125, CHB-148, CHB-187).
+  `start_gaps` holds these three checks. The Stop hook and the `next:` line read it too, so none names a ticket the start refuses.
+  A start that passes every check assigns the ticket to the agent account before the move (CHB-187): `PUT /rest/api/3/issue/<key>/assignee` with the account of `GET /rest/api/3/myself`.
+  A ticket already assigned to the agent gets no write. A refused start writes nothing. A move back into In Progress assigns nobody.
   The top ticket and acceptance criteria are defined in `docs/process/kanban.md`, Ready.
   One search, `statusCategory != Done ORDER BY Rank ASC`, gives the rank order and the open tickets.
   The search also returns each ticket's `issuelinks`. A ticket is blocked by every ticket on an "is blocked by" link of type "Blocks" that is still open (`open_blockers`, CHB-151).
@@ -440,7 +443,9 @@ On 2026-11-10 the agent ended its turn four times with the wrapper's "below its 
 
 The hook reads the column minimums from the board and the open tickets as the agent account (one 1Password read, two Jira reads). It exits 2 with a reason when:
 
-- In Progress is below its minimum and Ready has a ticket that can start. The reason names the top ticket and the `transition` command.
+- In Progress is below its minimum and Ready has a ticket that a start accepts (`jira.startable`, CHB-187). The reason names the top ticket and the `transition` command.
+  A start takes only the top ticket, so when it lacks a section or a ticked Definition of Ready box, the reason says no Ready ticket can start
+  and lists each Ready ticket that no blocker holds back but that has a gap, with what it lacks, as `CHB-44 lacks acceptance criteria`.
   It stays quiet while In Progress, In Review or Validating is at its max.
 - Ready is below its minimum (CHB-164). No reply text passes this; the reason lists the refill candidates, as `transition` does.
 - A Validating ticket has a due item and the agent account has no comment on it from the current day (CHB-163). "Due" is as `validating_sweep.py` defines it
