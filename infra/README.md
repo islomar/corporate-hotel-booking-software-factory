@@ -6,6 +6,7 @@
   - [Use](#use)
     - [Destroy and replace](#destroy-and-replace)
     - [Guard tests](#guard-tests)
+  - [Planner identity](#planner-identity)
   - [Rules](#rules)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -16,7 +17,7 @@ Terraform manages the infrastructure. See ADR-aae8.
 
 | Folder | Scope | Credentials | State |
 |---|---|---|---|
-| `gcp/` | Google Cloud: APIs, registry, service accounts, Workload Identity, budget, Cloud Run, monitoring (uptime check, SLO, alert policies, email channel) | your gcloud login (configuration `chb`) | `gs://chb-factory-a92932-tfstate/gcp` |
+| `gcp/` | Google Cloud: APIs, registry, service accounts, Workload Identity (deployer from `main`, read-only planner for pull requests), budget, Cloud Run, monitoring (uptime check, SLO, alert policies, email channel) | your gcloud login (configuration `chb`) | `gs://chb-factory-a92932-tfstate/gcp` |
 | `github/` | Repository settings, Actions variables and permissions (allow list, SHA pinning), the `main` ruleset, deployment environments, the Dependabot labels, the Jira autolink, and guards for what it cannot manage (`guards.tf`) | your `gh auth token` (admin) | `gs://chb-factory-a92932-tfstate/github` |
 
 The state bucket was created by hand (CHB-10) and is imported into `gcp/`.
@@ -75,14 +76,33 @@ The list must match exactly. A missing or an extra address fails.
 
 `github/guards.tf` fails the plan when a setting Terraform cannot manage is off, for example CodeQL default setup.
 `github/tests/guards.tftest.hcl` checks each guard against stubbed GitHub responses. It needs no credentials.
-`make check` runs it (`scripts/check_guard_tests.py`, CHB-158). CI does not run it yet.
-The script needs Terraform at the version in `github/.terraform-version`, network access to download the provider, and no credentials.
+`gcp/guards.tf` fails the plan when the planner holds a role outside a read-only allowlist or the deployer's `refs/heads/main` condition changes (CHB-81).
+`gcp/tests/guards.tftest.hcl` breaks each guard with a mocked Google provider.
+`make check` and the `backend` job of CI run both folders (`scripts/check_guard_tests.py`, CHB-158, CHB-166). A PR that breaks a guard shows `backend` failing.
+CI installs Terraform from releases.hashicorp.com, pinned by SHA-256 (`TERRAFORM_SHA256` in `.github/workflows/ci.yml`), and uses no third-party action and no credentials.
+Both folders pin the same Terraform version. When you change a `.terraform-version`, change both, and update that hash from `terraform_<version>_SHA256SUMS` (the `linux_amd64` line) in the same PR.
+The script needs Terraform at the version in each `.terraform-version`, network access to download the provider, and no credentials.
 It removes GitHub and Google credentials from the environment and keeps `.terraform` out of the checkout.
 Run it alone:
 
 ```sh
 python3 -I ~/workspace/corporate-hotel-booking-software-factory/scripts/check_guard_tests.py
 ```
+
+## Planner identity
+
+Pull request runs plan with a separate identity (CHB-81, ADR-3c1f), used by CHB-13.
+
+| Item | Value |
+|---|---|
+| Pool and provider | `github-pr` / `github-pr`, trust `pull_request` runs of this repository only |
+| Service account | `github-planner@<project>.iam.gserviceaccount.com` |
+| Roles | `roles/viewer`, `roles/iam.securityReviewer`, `roles/storage.objectViewer` on the state bucket |
+
+It reads and cannot write. It plans with `terraform plan -lock=false`, because the state lock is a write to the state bucket.
+Its pool is separate from the deployer's: the deployer binding trusts the whole `github` pool.
+Add a role only to `local.planner_role_allowlist` in `gcp/guards.tf` and `gcp/planner.tf`, with the owner's approval.
+Bind planner roles only in `gcp/planner.tf`. See ADR-3c1f for what the planner can and cannot do.
 
 ## Rules
 

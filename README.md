@@ -33,6 +33,7 @@
 - Production: <https://chb-1027266991110.europe-west1.run.app>
 - API reference (OpenAPI): <https://chb-1027266991110.europe-west1.run.app/api/docs>
 - Work tracking (Jira board `CHB`, sign-in required): <https://islomar.atlassian.net/jira/software/projects/CHB/boards/2>
+- New here? Start with [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 A web app built from the Codurance kata [Corporate Hotel Booking](https://www.codurance.com/katas/corporate-hotel-booking), developed through an AI-agent software factory.
 
@@ -81,15 +82,41 @@ The schema cannot drift from the code because the code is its source.
 | Path | Content |
 |---|---|
 | `/api/docs` | Swagger UI: browse and call the endpoints |
-| `/api/redoc` | ReDoc: read-only reference |
 | `/api/openapi.json` | The raw schema, for clients and contract checks |
 
-Locally the same paths work on <http://localhost:8000> (`make dev`) and <http://localhost:8080> (`make up`).
+Locally the same paths work on <http://localhost:5173> (`make dev`) and <http://localhost:8080> (`make up`).
+On <http://localhost:8000> (the `make dev` backend alone) the Swagger UI page has no assets: the dev server on port 5173 provides them.
+
+The backend sends a strict `Content-Security-Policy` and other security headers on every response (`backend/src/chb/security_headers.py`).
+Swagger UI comes from the `swagger-ui-dist` npm package, copied into the frontend build and served from `/api/docs-assets`, so the policy names no CDN.
+ReDoc is off: it has no self-hosted copy.
 
 ## Observability
 
-The backend sends traces, metrics and logs with OpenTelemetry (ADR-c17d).
+The backend sends traces, metrics and logs with OpenTelemetry ([ADR-c17d](docs/decisions/ADR-c17d-observability-with-opentelemetry.md)).
 The code is the same everywhere. Only the destination changes:
+
+```mermaid
+flowchart LR
+    browser(["Browser"])
+
+    subgraph container["The app: backend/src/chb/app.py"]
+        static["Built frontend<br/>served at /"]
+        api["FastAPI routes<br/>/api/..."]
+        tel["Telemetry<br/>chb/telemetry.py"]
+    end
+
+    lgtm["grafana/otel-lgtm<br/>Tempo, Prometheus, Loki"]
+    gcp["Cloud Trace, Cloud Monitoring, Cloud Logging"]
+
+    browser --> static
+    browser --> api
+    api --> tel
+    tel -- "make dev" --> lgtm
+    tel -- "Cloud Run" --> gcp
+```
+
+Under `make dev`, Vite serves the frontend on port 5173 and the backend runs on port 8000.
 
 | | Local (`make dev`) | Production (Cloud Run) |
 |---|---|---|
@@ -112,7 +139,7 @@ Open <http://localhost:3000>, then **Explore**, and pick a data source:
 - **Loki** (logs): query `{service_name="chb"}`.
 
 Health checks (`/api/health`) produce metrics, but no traces and no access log lines.
-To create traces and logs, open <http://localhost:8000/api/docs> and reload it a few times.
+To create traces and logs, open <http://localhost:5173/api/docs> and reload it a few times.
 
 ### Production: Google Cloud console
 

@@ -78,12 +78,34 @@ A Claude Code hook in `.claude/settings.json` denies raw `acli` writes and direc
 
 ## Flow
 
-```text
-Backlog → Ready → In Progress → In Review → Validating → Done
-  (trigger)             │             │            │
-                        └─────────────┴────────────┴──→ Needs human → (back to where it was)
-any status ──→ Discarded
+```mermaid
+stateDiagram-v2
+    state "In Progress" as InProgress
+    state "In Review" as InReview
+    state "Needs human" as NeedsHuman
+
+    [*] --> Backlog: jira create
+    [*] --> InProgress: jira create --expedite
+    Backlog --> Ready: jira ready, trigger and Definition of Ready
+    Ready --> InProgress: top ticket, WIP slot free
+    InProgress --> InReview: PR open, make check passed
+    InReview --> InProgress: review asked for changes
+    InReview --> Validating: PR merged and deployed
+    Validating --> InProgress: live check failed
+    Validating --> Done: evidence on the ticket
+    InProgress --> NeedsHuman: owner needed
+    InReview --> NeedsHuman: owner needed
+    Validating --> NeedsHuman: owner needed
+    NeedsHuman --> InProgress: owner answered, back to In Progress
+    NeedsHuman --> InReview: owner answered, back to In Review
+    NeedsHuman --> Validating: owner answered, back to Validating, then live check and Done
+    Done --> [*]
+    Discarded --> [*]
 ```
+
+Not drawn, to keep the diagram readable: any open ticket can go back to Backlog (not needed now) or to Discarded (will not be done).
+A ticket with nothing to deploy (a decision, an investigation) skips Validating and goes to Done once its output exists.
+A ticket leaves Needs human for the status it came from.
 
 ## Statuses
 

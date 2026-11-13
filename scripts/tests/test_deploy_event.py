@@ -185,7 +185,7 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn("continue-on-error: true", self.job)
 
     def test_the_record_job_runs_after_deploy_and_smoke_even_when_they_fail(self):
-        self.assertIn("needs: [deploy, smoke]", self.job)
+        self.assertIn("needs: [gate, deploy, smoke]", self.job)
         self.assertIn("always()", self.job)
 
     def test_only_the_record_job_can_write_deployments(self):

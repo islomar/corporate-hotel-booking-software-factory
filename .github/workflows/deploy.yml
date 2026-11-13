@@ -23,11 +23,39 @@ env:
   IMAGE: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT }}/chb/app:${{ github.event.workflow_run.head_sha }}
 
 jobs:
-  deploy:
+  # CHB-173: `branches: [main]` matches the short name of the triggering ref, so a pushed tag named
+  # `main` passes it, and a CI run from such a tag can carry its own workflow named "CI".
+  # This job holds no credentials. It requires the real CI file and a commit on main, and every
+  # other job needs it to succeed. The check comes from main's copy, never from the deployed commit.
+  gate:
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.path == '.github/workflows/ci.yml' &&
       github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/heads/main
+          persist-credentials: false
+          fetch-depth: 0 # the ancestor check needs main's history
+      - name: The commit is on main
+        env:
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
+          git cat-file -e "$HEAD_SHA^{commit}" 2>/dev/null || git fetch --no-tags origin "$HEAD_SHA" || true
+          script="$RUNNER_TEMP/check_deploy_commit.py"
+          git show refs/remotes/origin/main:scripts/check_deploy_commit.py > "$script"
+          python3 -I "$script" --repo . --sha "$HEAD_SHA" --main-ref refs/remotes/origin/main
+
+  deploy:
+    needs: gate
+    if: needs.gate.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -78,7 +106,8 @@ jobs:
         run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
   smoke:
-    needs: deploy
+    needs: [gate, deploy]
+    if: needs.gate.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Browsers and their system packages ship in the image: no apt mirror on the critical path.
@@ -105,8 +134,9 @@ jobs:
   # deployment status. scripts/deploy_event.py builds and writes it. Every step and the job
   # tolerate failure, so a failed event write never turns the deploy red.
   record:
-    needs: [deploy, smoke]
-    if: ${{ always() && needs.deploy.result != 'skipped' }}
+    needs: [gate, deploy, smoke]
+    # Runs after a failed deploy too, but never when the gate refused: it gets deployer credentials.
+    if: ${{ always() && needs.gate.result == 'success' && needs.deploy.result != 'skipped' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     continue-on-error: true

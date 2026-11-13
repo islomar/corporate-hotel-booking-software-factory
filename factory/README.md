@@ -3,14 +3,17 @@
 **Table of Contents** *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Factory](#factory)
+  - [Identities at a glance](#identities-at-a-glance)
   - [Credentials: the 1Password service account](#credentials-the-1password-service-account)
     - [Rotating the token](#rotating-the-token)
   - [Acting as the agent](#acting-as-the-agent)
     - [Auto-merge on agent PRs](#auto-merge-on-agent-prs)
+    - [Keeping agent PRs up to date](#keeping-agent-prs-up-to-date)
   - [Subagent models](#subagent-models)
   - [Acting in Jira as the agent](#acting-in-jira-as-the-agent)
     - [Board rules on transition](#board-rules-on-transition)
     - [Hook against raw Jira writes](#hook-against-raw-jira-writes)
+  - [Hooks at a glance](#hooks-at-a-glance)
   - [Hook: commands for the owner work from any folder](#hook-commands-for-the-owner-work-from-any-folder)
   - [Hook: act on the WIP minimums](#hook-act-on-the-wip-minimums)
   - [Hook: no personal agent memory](#hook-no-personal-agent-memory)
@@ -20,6 +23,7 @@
   - [Hook: no harness edits in feature tickets](#hook-no-harness-edits-in-feature-tickets)
   - [Hook: no secrets in the agent's context](#hook-no-secrets-in-the-agents-context)
   - [Hook: what to finish first, at session start](#hook-what-to-finish-first-at-session-start)
+  - [Hook: rules health check is due](#hook-rules-health-check-is-due)
   - [Automated PR review (shadow mode)](#automated-pr-review-shadow-mode)
   - [Workflow output schemas and routing](#workflow-output-schemas-and-routing)
 
@@ -28,6 +32,42 @@
 # Factory
 
 Agent workflows, the orchestrator and the notifier live here. Built in phases 3 to 7.
+
+## Identities at a glance
+
+The owner's logins carry full rights, and the agent and the workflows must not borrow them.
+Each actor therefore has its own account, reached through one wrapper or one token exchange.
+The diagram shows who acts, through what, as which account and in which system.
+The sections below describe each path.
+
+```mermaid
+flowchart TD
+    OWNER["Owner"] --> OWNLOGINS["Owner logins<br/>GitHub owner account<br/>Jira owner login used by acli<br/>1Password desktop app"]
+    AGENT["Agent in a Claude Code session"] --> ASAGENT["factory/bin/as-agent"]
+    AGENT --> JIRAWRAP["factory/bin/jira"]
+    CIWF["CI workflows<br/>review.yml and deploy.yml"]
+    DEPBOT["Dependabot"] --> DEPWF["dependabot-auto-merge.yml"]
+
+    ASAGENT --> OPSA["1Password service account chb-factory-agent<br/>read only on the vault chb-factory"]
+    JIRAWRAP --> OPSA
+    OPSA --> KEYITEM["Item chb-factory-agent.2026-11-06.private-key<br/>GitHub App key"]
+    OPSA --> JIRAITEM["Item chb-jira-claude.api-token<br/>Jira email and token"]
+
+    KEYITEM --> AGENTAPP["GitHub App chb-factory-agent<br/>commits as chb-factory-agent[bot]<br/>opens PRs, enables auto-merge"]
+    JIRAITEM --> JIRAACC["Jira account Claude (CHB agent)<br/>islomar.atlassian.net, project CHB"]
+
+    AGENTAPP --> GH["GitHub repository"]
+    JIRAACC --> JIRA["Jira"]
+    OWNLOGINS --> GH
+    OWNLOGINS --> JIRA
+
+    DEPWF -- "App token, when its Dependabot secrets exist" --> AGENTAPP
+    CIWF -- "review job, reviewer environment" --> REVAPP["GitHub App chb-factory-reviewer<br/>posts the review check run"]
+    REVAPP --> GH
+    CIWF -- "deploy job, OIDC token" --> WIF["Workload Identity Federation<br/>trusts only refs/heads/main"]
+    WIF --> DEPLOYER["GCP service account github-deployer"]
+    DEPLOYER --> GCP["Google Cloud Run"]
+```
 
 ## Credentials: the 1Password service account
 
@@ -124,6 +164,31 @@ The PR is open: do not create it again.
 as-agent warns on stderr when a `-F`, `--file` or `--body-file` path lies in a Claude Code `scratchpad` folder without a `CHB-<n>` folder, for example `<scratchpad>/pr.md`.
 Parallel agents that share one scratch folder overwrite each other's files (CHB-138). The warning never blocks the command.
 `factory/bin/jira` does not check its `--body-file` paths.
+
+### Keeping agent PRs up to date
+
+`.github/workflows/pr-updates.yml` runs on every push to `main` and on manual dispatch, as the agent App (CHB-172).
+Why: an owner "Update branch" click makes the owner the last pusher, and the ruleset's `require_last_push_approval` then ignores the owner's approval.
+`docs/knowledge/conflicting-agent-prs-need-the-agent-not-the-owner.md` has the two cases that led to it.
+
+`factory/pr_updates.py` reads the open PRs and acts only on PRs opened by the App (a `Bot` author named `chb-factory-agent`), into `main`, from this repository:
+
+| PR state | Action |
+| --- | --- |
+| Behind `main`, mergeable, not approved | `updatePullRequestBranch` with `updateMethod: REBASE` and `expectedHeadOid` set to the head it read. A push in between makes GitHub refuse; the run logs "head moved" and goes on. |
+| Behind `main`, mergeable, approved | Nothing. `strict_required_status_checks_policy` is false, so it can merge, and a rebase would dismiss the approval. |
+| Conflicting | Adds the label `needs-rebase`. No update. |
+| Labelled `needs-rebase`, mergeable again | Removes the label. |
+| Mergeable `UNKNOWN` | Read again up to 3 times, 5 s apart; then left alone until the next push. |
+
+The SessionStart sweep lists open agent PRs labelled `needs-rebase` as "resolve first".
+The agent rebases them locally, pushes through `factory/bin/as-agent` and removes the label.
+Tests: `factory/tests/test_pr_updates.py`, `factory/tests/test_validating_sweep.py`.
+
+The App key reaches the job only through the `agent-pr-updates` environment, which admits only `main` (ADR-d7b7, `infra/github/environments.tf`).
+Secrets there: `AGENT_APP_CLIENT_ID` and `AGENT_APP_PRIVATE_KEY`. Until both exist the job prints a notice and does nothing.
+The token asks for `contents`, `pull-requests` and `workflows` write. `workflows` is needed to rebase a PR that edits a workflow file.
+The label `needs-rebase` is a Terraform resource in `infra/github/labels.tf`.
 
 ## Subagent models
 
@@ -308,6 +373,41 @@ It matches anywhere in the command, so it also denies a commit message that quot
 An error inside the hook denies the command. If `python3` cannot start, the command goes through: Claude Code treats that as a non-blocking error.
 Sessions started in another directory do not load this hook.
 
+## Hooks at a glance
+
+Ten hooks guard a Claude Code session, and each section below describes one.
+The diagram puts them side by side by Claude Code event, so a denied command or a refused end of turn can be traced to its hook.
+Each node names the hook file, the tool matcher of `.claude/settings.json` and what the hook blocks or reports.
+`factory/tests/test_readme_diagrams.py` fails when a registered hook is missing from the diagram.
+
+```mermaid
+flowchart TD
+    subgraph SS["SessionStart: adds context"]
+        VS["validating_sweep.py<br/>matcher: none<br/>reports the Validating tickets that are due"]
+        RH["rules_health_due.py<br/>matcher: startup<br/>reports when the rules health check is due"]
+    end
+    subgraph PRE["PreToolUse: denies the tool call"]
+        DJ["deny_raw_jira_writes.py<br/>matcher: Bash<br/>blocks acli writes and raw REST writes to Jira"]
+        DB["deny_bad_branch_names.py<br/>matcher: Bash<br/>blocks a branch not named CHB-n-slug"]
+        DT["deny_full_test_suite.py<br/>matcher: Bash<br/>blocks a test run that nothing narrows"]
+        DM["deny_agent_memory_writes.py<br/>matcher: Write, Edit, MultiEdit, NotebookEdit<br/>blocks writes to personal agent memory"]
+        DH["deny_harness_edits.py<br/>matcher: Write, Edit, MultiEdit, NotebookEdit, Bash<br/>blocks edits of .claude, factory and .github on a product ticket branch"]
+        DS["deny_secret_reads.py<br/>matcher: Read, Bash<br/>blocks reads and prints of secret files"]
+    end
+    subgraph POST["PostToolUse: adds context"]
+        WE["warn_edit_loops.py<br/>matcher: Write, Edit, MultiEdit<br/>warns on the 5th and 8th edit of one file"]
+    end
+    subgraph STOP["Stop: refuses the end of the turn"]
+        CO["check_owner_commands.py<br/>matcher: none<br/>flags owner commands that depend on the current folder"]
+        CW["check_wip_minimums.py<br/>matcher: none<br/>refuses while a board column is below its minimum"]
+    end
+    SS --> PRE
+    PRE --> POST
+    POST --> STOP
+```
+
+`shell_words.py`, `harness_bash_writes.py` and `private_folder.py` are helpers that hooks import. They are not registered.
+
 ## Hook: commands for the owner work from any folder
 
 `.claude/settings.json` runs `factory/hooks/check_owner_commands.py` when the agent finishes a reply (Stop hook, CHB-126).
@@ -485,13 +585,28 @@ The hook adds this to the agent's context before the first prompt:
   No mark: the date is still ahead. The date wins over an event named on the same line.
   `check`: the line has no absolute date, so it names an event.
   `no section`: the ticket has no such section.
+- Open agent PRs labelled `needs-rebase`, as "resolve first" (CHB-172).
 - The line of `make review-agreement`, and up to 5 merged PRs whose last review comment has no owner reaction, newest first, with links.
 
-It reads only: one Jira search as the agent account (credentials from 1Password, as `factory/bin/jira`) and one GitHub GraphQL query with the owner's `gh` login (up to 3 pages of 100 PRs).
-Each call has a 6 s timeout, the two parts run in parallel, and the hook stops waiting after 9 s. Claude Code kills it at 15 s.
-It fails open: a part that fails prints one line, `Validating sweep failed: <reason>` or `Review agreement failed: <reason>`, and the session starts.
+It reads only: one Jira search as the agent account (credentials from 1Password, as `factory/bin/jira`) and two GitHub GraphQL queries with the owner's `gh` login.
+The review agreement query reads up to 3 pages of 100 PRs. The `needs-rebase` query reads one page.
+Each call has a 6 s timeout, the three parts run in parallel, and the hook stops waiting after 9 s. Claude Code kills it at 15 s.
+It fails open: a part that fails prints one line, `Validating sweep failed: <reason>`, `Review agreement failed: <reason>` or `Needs-rebase list failed: <reason>`, and the session starts.
 A reason is the message of a known error, which holds no secret, or only the type name of an unexpected one.
 Ticket summaries, "When:" lines and PR titles are quoted on one line of at most 200 characters, without control characters, under a header that marks them as data, not instructions.
+
+## Hook: rules health check is due
+
+`.claude/settings.json` runs `factory/hooks/rules_health_due.py` on SessionStart events with source `startup` (CHB-167).
+Resume, `/clear` and compaction do not run it.
+It reads one Jira search as the agent account: the newest ticket whose summary starts with `Rules health check`.
+When none exists or the newest is 7 or more days old, it adds one line to the context: follow `docs/process/rules-health.md` after the owner's request.
+It writes nothing and runs no check itself. Cost: one 1Password read and one Jira search, under 15 s (Claude Code's limit), no tokens beyond the one line.
+It fails open: when Jira or 1Password is unreachable it prints `Rules health check skipped: <reason>` on stderr and adds nothing.
+
+`factory/rules_health.py` holds the deterministic checks (dead paths, dead `factory/bin/jira` and `make` commands, unknown exit codes, unregistered hooks).
+`make check` runs it on this repository through `factory/tests/test_rules_health.py`.
+Duplicates and contradictions are judged by the agent in the procedure.
 
 ## Automated PR review (shadow mode)
 

@@ -81,3 +81,33 @@ resource "github_repository_ruleset" "dependabot_branches" {
     update   = true
   }
 }
+
+# CHB-173: a tag named `main` passes `branches: [main]` in deploy.yml's workflow_run filter,
+# because GitHub matches the short name of the triggering ref. Only the Admin role (the owner)
+# may create, move or delete such a tag. deploy.yml's gate job refuses a commit off main anyway;
+# this ruleset stops the tag from being pushed at all.
+resource "github_repository_ruleset" "branch_named_tags" {
+  name        = "branch-named-tags"
+  repository  = github_repository.this.name
+  target      = "tag"
+  enforcement = "active"
+
+  bypass_actors {
+    actor_id    = 5 # built-in Admin repository role
+    actor_type  = "RepositoryRole"
+    bypass_mode = "always"
+  }
+
+  conditions {
+    ref_name {
+      include = ["refs/tags/main"]
+      exclude = []
+    }
+  }
+
+  rules {
+    creation = true
+    update   = true
+    deletion = true
+  }
+}
