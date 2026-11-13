@@ -227,7 +227,7 @@ factory/bin/jira edit-comment CHB-12 10071 --body-file comment.md   # the agent'
 factory/bin/jira link CHB-88 --blocked-by CHB-146   # a "Blocks" link: CHB-146 blocks CHB-88
 ```
 
-Text files are plain text. Blank lines separate paragraphs and URLs become links.
+Text files are Markdown: the wrapper renders headings, lists, task lists, `code`, bold and links, and links CHB keys and PR numbers (`text_to_adf` in `factory/jira.py`).
 A file that is not valid UTF-8, an empty summary or an empty comment body exits 2 before the wrapper reads 1Password.
 
 `search` reads only CHB. It sends `project = CHB AND (<jql>)`, with a trailing `ORDER BY` kept outside the parentheses.
@@ -300,8 +300,11 @@ It reads them again after the POST and exits 1 when `CHB-<b>` does not show as a
 A key outside CHB or a ticket linked to itself exits 2 before the wrapper reads 1Password.
 It never removes a link: the owner does that in the Jira UI.
 
-Exit codes: 0 done, 1 Jira refused or failed, 2 usage error, 3 no credential (no service account token in the keyring, or `op` failed), 4 a board rule blocks the transition.
+Exit codes: 0 done, 1 Jira refused or failed, 2 usage error, 3 no credential (no service account token in the keyring, or `op` failed), 4 a board rule blocks the transition,
+5 a WIP limit blocks the move, 6 the move is done and Ready is below its minimum (CHB-164).
 On 3 the agent stops and reports. On 4 the ticket does not move: the agent comments on it and reports.
+On 5 the ticket does not move: the agent runs the wait command that `transition` prints, in the background.
+On 6 the ticket moved: the agent refills Ready from the candidates that `transition` prints.
 
 The account is a CHB project Administrator, not a Member: Jira Free has no Member role.
 It can delete issues and change project and board settings through the REST API.
@@ -378,7 +381,7 @@ Sessions started in another directory do not load this hook.
 
 ## Hooks at a glance
 
-Ten hooks guard a Claude Code session, and each section below describes one.
+Twelve hooks guard a Claude Code session, and each section below describes one.
 The diagram puts them side by side by Claude Code event, so a denied command or a refused end of turn can be traced to its hook.
 Each node names the hook file, the tool matcher of `.claude/settings.json` and what the hook blocks or reports.
 `factory/tests/test_readme_diagrams.py` fails when a registered hook is missing from the diagram.
@@ -668,7 +671,8 @@ make -C ~/workspace/corporate-hotel-booking-software-factory review-agreement
 | `review/schema.json` | Output shape: five dimensions, each with a score and findings, plus a summary. |
 | `review/gate.py` | Validates the output, recomputes the scores, decides, and builds the check run. |
 | `review/resolve_pr.py` | Picks the PR to review from API data: open, not draft, into `main`, same repository, not Dependabot, head equal to the run's SHA. |
-| `review/plan.py` | Skip, carry forward or review, and which model. Holds the docs allowlist. |
+| `review/plan.py` | Skip, carry forward or review, and which model. |
+| `review/docs_list.py` | The docs allowlist, shared by `plan.py` and `ci.yml` (CHB-117). |
 | `review/agreement.py` | Counts the owner's 👍 and 👎 on review comments of merged PRs. Prints the stage 1 exit. |
 
 The gate ignores every score the model claims. Each dimension starts at 10 and loses 3 per critical finding, 2 per improvement and 0.5 per cleanup.
