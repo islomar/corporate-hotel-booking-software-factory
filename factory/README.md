@@ -666,7 +666,8 @@ make -C ~/workspace/corporate-hotel-booking-software-factory review-agreement
 | `review/schema.json` | Output shape: five dimensions, each with a score and findings, plus a summary. |
 | `review/gate.py` | Validates the output, recomputes the scores, decides, and builds the check run. |
 | `review/resolve_pr.py` | Picks the PR to review from API data: open, not draft, into `main`, same repository, not Dependabot, head equal to the run's SHA. |
-| `review/plan.py` | Skip, carry forward or review, and which model. Holds the docs allowlist. |
+| `review/plan.py` | Skip, carry forward or review, and which model. |
+| `review/docs_list.py` | The docs allowlist, shared by `plan.py` and `ci.yml` (CHB-117). |
 | `review/agreement.py` | Counts the owner's 👍 and 👎 on review comments of merged PRs. Prints the stage 1 exit. |
 
 The gate ignores every score the model claims. Each dimension starts at 10 and loses 3 per critical finding, 2 per improvement and 0.5 per cleanup.
