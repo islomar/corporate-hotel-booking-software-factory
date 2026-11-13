@@ -7,6 +7,7 @@
     - [Destroy and replace](#destroy-and-replace)
     - [Guard tests](#guard-tests)
   - [Planner identity](#planner-identity)
+    - [Plan on pull requests](#plan-on-pull-requests)
   - [Rules](#rules)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -37,7 +38,7 @@ Never write the address in a file that git tracks, dotfiles included.
 
 `make infra-plan` stops without it. `make infra-apply` reads it from the saved plan.
 
-Until CI applies (CHB-13), the owner applies locally, after the PR with the Terraform change merges:
+CI plans and never applies (see [Plan on pull requests](#plan-on-pull-requests)). The owner applies locally, after the PR with the Terraform change merges:
 
 1. Update `main`: `git switch main && git pull --ff-only`.
 2. Run `make infra-plan`. It writes `infra/.plans/gcp.tfplan` and `infra/.plans/github.tfplan`, and prints a summary per folder: add, change, destroy, replace and forget counts.
@@ -103,6 +104,34 @@ It reads and cannot write. It plans with `terraform plan -lock=false`, because t
 Its pool is separate from the deployer's: the deployer binding trusts the whole `github` pool.
 Add a role only to `local.planner_role_allowlist` in `gcp/guards.tf` and `gcp/planner.tf`, with the owner's approval.
 Bind planner roles only in `gcp/planner.tf`. See ADR-3c1f for what the planner can and cannot do.
+
+### Plan on pull requests
+
+`.github/workflows/terraform-plan.yml` (CHB-13) runs for a pull request that changes a file under `infra/gcp/`.
+It runs `terraform plan -lock=false` as the planner, and posts one comment on the pull request.
+Each push updates that comment.
+Pull requests from forks and pull requests without an `infra/gcp/` change do not run it.
+It never applies.
+
+The comment shows:
+
+- the count of resources to add, change and destroy (a replace counts as one add and one destroy);
+- the address and the action of each changed resource, for example `google_cloud_run_v2_service.chb` and `update`;
+- the commit and a link to the run.
+
+It hides everything else, because the repository is public:
+
+- attribute values, the plan text and the state content (the state holds the alert address and the billing account ID);
+- the plan itself: it is a file in `$RUNNER_TEMP` that is never printed or uploaded.
+
+`scripts/plan_summary.py` reads the plan JSON and keeps only counts, addresses and actions. `scripts/tests/test_plan_summary.py` feeds it a plan with a sensitive value and checks that the value is absent.
+
+A failed plan fails the job. The log shows the `Error:` lines of Terraform and nothing else, and the comment says the plan failed.
+
+The plan needs `billing_account` and `alert_email`. The job reads both from the state, masks them in the log, and passes them as `TF_VAR_*`. No repository secret holds them.
+Limit: a pull request that changes one of the two values shows no change for it, because the plan compares against the applied value.
+
+`terraform-plan.yml` pins Terraform like `ci.yml`: the version of `infra/gcp/.terraform-version`, checked against `TERRAFORM_SHA256`. When you bump the version, update the hash in both workflows.
 
 ## Rules
 

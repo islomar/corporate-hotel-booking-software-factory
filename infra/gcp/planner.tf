@@ -1,5 +1,5 @@
 # Read-only identity for `terraform plan` in pull requests (CHB-81, ADR-3c1f).
-# CHB-13 uses it. It cannot change anything: guards.tf fails the plan when it holds a role outside
+# CHB-13 uses it (.github/workflows/terraform-plan.yml). It cannot change anything: guards.tf fails the plan when it holds a role outside
 # a read-only allowlist.
 
 # A separate pool, not a second provider in the `github` pool. The deployer binding
