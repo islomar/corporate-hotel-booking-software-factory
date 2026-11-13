@@ -194,7 +194,7 @@ What the container gets:
   Only `backend/` and `frontend/` are writable: the container cannot change a hook, script or Makefile that the host runs.
   Changes in those two folders show in `git status`; files git ignores there do not.
   An existing `backend/.venv` on the host is hidden behind an empty folder.
-  If the container makes `backend/.venv`, or a `.git` in either folder, the launcher stops with exit code 3: the host could run code from it.
+  If the container makes `backend/.venv`, or a `.git` or bare repository in either folder, the launcher stops with exit code 3: the host could run code from it.
 - The frontend's installed packages in a Docker volume per checkout (`chb-sandbox-nm-<hash>`), apart from the host folder.
   `npm ci` runs there when `frontend/package-lock.json` changes.
 - A cache volume for uv and npm (`chb-sandbox-cache`).

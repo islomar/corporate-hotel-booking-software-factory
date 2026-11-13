@@ -69,7 +69,7 @@ def docker_args(
 
 
 def stray_git_entries(top: str) -> list[str]:
-    """`.git` folders or files in the writable folders. Git on the host, started inside one,
+    """`.git` folders or files, and bare repositories, in the writable folders. Git on the host, started inside one,
     would load that repository's config, which can run commands (core.fsmonitor, hooks).
     frontend/node_modules is skipped: the container sees its own volume there, not this folder."""
     found = []
@@ -79,6 +79,8 @@ def stray_git_entries(top: str) -> list[str]:
                 dirs[:] = [d for d in dirs if d != "node_modules"]
             if ".git" in dirs or ".git" in files:
                 found.append(os.path.join(root, ".git"))
+            if "HEAD" in files and "objects" in dirs and "refs" in dirs:  # a bare repository
+                found.append(root)
             dirs[:] = [d for d in dirs if d != ".git"]
     return found
 

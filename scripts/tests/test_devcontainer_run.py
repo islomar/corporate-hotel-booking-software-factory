@@ -114,6 +114,14 @@ class StrayGitTest(unittest.TestCase):
                 [str(top / "backend" / ".git"), str(top / "frontend" / "src" / ".git")],
             )
 
+    def test_a_bare_repository_layout_is_found_too(self):
+        with tempfile.TemporaryDirectory() as folder:
+            bare = Path(folder) / "backend" / "app"
+            (bare / "objects").mkdir(parents=True)
+            (bare / "refs").mkdir()
+            (bare / "HEAD").write_text("ref: refs/heads/main\n")
+            self.assertEqual(run.stray_git_entries(folder), [str(bare)])
+
     def test_a_clean_checkout_has_none(self):
         with tempfile.TemporaryDirectory() as folder:
             (Path(folder) / "backend").mkdir()
