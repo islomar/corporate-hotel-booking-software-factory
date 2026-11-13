@@ -172,14 +172,16 @@ Parallel agents that share one scratch folder overwrite each other's files (CHB-
 Why: an owner "Update branch" click makes the owner the last pusher, and the ruleset's `require_last_push_approval` then ignores the owner's approval.
 `docs/knowledge/conflicting-agent-prs-need-the-agent-not-the-owner.md` has the two cases that led to it.
 
-`factory/pr_updates.py` reads the open PRs and acts only on PRs opened by the App (a `Bot` author named `chb-factory-agent`), into `main`, from this repository:
+`factory/pr_updates.py` reads the open PRs and acts only on PRs opened by the App (a `Bot` author named `chb-factory-agent`) or by Dependabot, into `main`, from this repository.
+Every merge to `main` makes each other open PR rebase and run its checks again (ADR-2ba2):
 
 | PR state | Action |
 | --- | --- |
-| Behind `main`, mergeable, not approved | `updatePullRequestBranch` with `updateMethod: REBASE` and `expectedHeadOid` set to the head it read. A push in between makes GitHub refuse; the run logs "head moved" and goes on. |
-| Behind `main`, mergeable, approved | Nothing. `strict_required_status_checks_policy` is false, so it can merge, and a rebase would dismiss the approval. |
+| Behind `main`, mergeable | `updatePullRequestBranch` with `updateMethod: REBASE` and `expectedHeadOid` set to the head it read. A push in between makes GitHub refuse; the run logs "head moved" and goes on. |
+| Behind `main`, mergeable, approved | The same rebase. The `main` ruleset requires an up-to-date branch (`strict_required_status_checks_policy = true`, CHB-177), so an approved PR behind `main` cannot merge. The rebase dismisses the approval: the owner approves the new head, and auto-merge then goes on. |
 | Conflicting | Adds the label `needs-rebase`. No update. |
 | Labelled `needs-rebase`, mergeable again | Removes the label. |
+| Dependabot PR, behind `main`, mergeable | Comments `@dependabot rebase`, unless the agent commented it after the head commit. The `dependabot-branches` ruleset lets only Dependabot push to its branches, so the agent never rebases one itself. A conflicting Dependabot PR rebases on its own. |
 | Mergeable `UNKNOWN` | Read again up to 3 times, 5 s apart; then left alone until the next push. |
 
 The SessionStart sweep lists open agent PRs labelled `needs-rebase` as "resolve first".

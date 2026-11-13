@@ -1,4 +1,4 @@
-"""CHB-172: agent PRs stay up to date with main without the owner.
+"""CHB-172, CHB-177: agent and Dependabot PRs stay up to date with main without the owner.
 
 The decision table: which PRs the workflow updates, labels or leaves alone. The run: which GitHub
 calls it makes, with a fake `gh`.
@@ -30,6 +30,7 @@ def _pr(**changes: object) -> pu.Pr:
         "review_decision": None,
         "behind_by": 3,
         "labels": frozenset(),
+        "rebase_requested": False,
     }
     fields.update(changes)
     return pu.Pr(**fields)
@@ -41,9 +42,10 @@ class DecideTest(unittest.TestCase):
         self.assertEqual(pu.decide(_pr(review_decision="REVIEW_REQUIRED")), ("update",))
         self.assertEqual(pu.decide(_pr(review_decision="CHANGES_REQUESTED")), ("update",))
 
-    def test_behind_mergeable_and_approved_is_left_alone(self) -> None:
-        # strict_required_status_checks_policy is false: it can merge as it is, and a rebase drops the approval.
-        self.assertEqual(pu.decide(_pr(review_decision="APPROVED")), ())
+    def test_behind_mergeable_and_approved_is_updated_too(self) -> None:
+        # CHB-177: strict_required_status_checks_policy is true, so an approved PR behind main cannot merge.
+        # The rebase drops the approval; the owner approves the new head.
+        self.assertEqual(pu.decide(_pr(review_decision="APPROVED")), ("update",))
 
     def test_up_to_date_is_left_alone(self) -> None:
         self.assertEqual(pu.decide(_pr(behind_by=0)), ())
@@ -66,7 +68,7 @@ class DecideTest(unittest.TestCase):
         self.assertEqual(pu.decide(_pr(labels=frozenset({pu.LABEL}))), ("unlabel", "update"))
 
     def test_a_pr_not_opened_by_the_agent_is_never_touched(self) -> None:
-        for author in ("islomar", "dependabot", "chb-factory-agent-fake", "", None):
+        for author in ("islomar", "chb-factory-agent-fake", "", None):
             with self.subTest(author=author):
                 self.assertEqual(pu.decide(_pr(author=author)), ())
                 self.assertEqual(pu.decide(_pr(author=author, mergeable="CONFLICTING")), ())
@@ -89,6 +91,8 @@ def _node(**changes: object) -> dict:
         "mergeable": "MERGEABLE",
         "reviewDecision": None,
         "labels": {"nodes": [{"name": "x"}]},
+        "comments": {"nodes": []},
+        "commits": {"nodes": [{"commit": {"committedDate": "2026-11-12T10:00:00Z"}}]},
     }
     node.update(changes)
     return node
@@ -98,12 +102,53 @@ def _answer(*nodes: dict) -> dict:
     return {"data": {"repository": {"pullRequests": {"nodes": list(nodes)}}}}
 
 
+class DependabotDecideTest(unittest.TestCase):
+    def test_behind_and_mergeable_gets_a_rebase_comment(self) -> None:
+        self.assertEqual(pu.decide(_pr(author="dependabot")), ("comment",))
+        self.assertEqual(pu.decide(_pr(author="dependabot", review_decision="APPROVED")), ("comment",))
+
+    def test_a_request_newer_than_the_head_is_not_repeated(self) -> None:
+        self.assertEqual(pu.decide(_pr(author="dependabot", rebase_requested=True)), ())
+
+    def test_up_to_date_or_conflicting_or_unknown_is_left_alone(self) -> None:
+        # Dependabot rebases on its own when there is a conflict.
+        self.assertEqual(pu.decide(_pr(author="dependabot", behind_by=0)), ())
+        self.assertEqual(pu.decide(_pr(author="dependabot", mergeable="CONFLICTING")), ())
+        self.assertEqual(pu.decide(_pr(author="dependabot", mergeable="UNKNOWN")), ())
+
+    def test_never_updates_the_branch_or_labels(self) -> None:
+        # The dependabot-branches ruleset lets only Dependabot push to its branches.
+        for changes in ({}, {"labels": frozenset({pu.LABEL})}, {"mergeable": "CONFLICTING"}):
+            with self.subTest(changes=changes):
+                actions = pu.decide(_pr(author="dependabot", **changes))
+                self.assertFalse({"update", "label", "unlabel"} & set(actions))
+
+    def test_not_into_main_or_from_a_fork_is_never_touched(self) -> None:
+        self.assertEqual(pu.decide(_pr(author="dependabot", base="x")), ())
+        self.assertEqual(pu.decide(_pr(author="dependabot", cross_repository=True)), ())
+
+
 class ToPrTest(unittest.TestCase):
     def test_reads_the_fields_the_decision_needs(self) -> None:
         self.assertEqual(
             pu.to_pr(_node(labels={"nodes": [{"name": "needs-rebase"}]}), 2),
             _pr(behind_by=2, labels=frozenset({"needs-rebase"})),
         )
+
+    def test_a_rebase_request_by_the_agent_after_the_head_commit_is_pending(self) -> None:
+        def request(login: str, body: str, at: str) -> dict:
+            return {"nodes": [{"body": body, "createdAt": at, "author": {"login": login}}]}
+
+        late, early = "2026-11-12T11:00:00Z", "2026-11-12T09:00:00Z"
+        for login, body, at, expected in (
+            (pu.AGENT_LOGIN, "@dependabot rebase", late, True),
+            (pu.AGENT_LOGIN, "@dependabot rebase", early, False),
+            ("islomar", "@dependabot rebase", late, False),
+            (pu.AGENT_LOGIN, "thanks", late, False),
+        ):
+            with self.subTest(login=login, body=body, at=at):
+                pr = pu.to_pr(_node(comments=request(login, body, at)), 1)
+                self.assertEqual(pr.rebase_requested, expected)
 
     def test_a_missing_author_is_not_the_agent(self) -> None:
         self.assertIsNone(pu.to_pr(_node(author=None), 0).author)
@@ -180,9 +225,28 @@ class RunTest(unittest.TestCase):
         self.assertEqual(len(gh.writes()), 1)
         self.assertIn("-X DELETE repos/owner/repo/issues/7/labels/needs-rebase", gh.writes()[0])
 
-    def test_writes_nothing_for_approved_foreign_and_current_prs(self) -> None:
+    def test_updates_an_approved_behind_pr(self) -> None:
+        gh = FakeGh([_node(reviewDecision="APPROVED")], {7: 3})
+
+        _run(gh)
+
+        self.assertEqual(len(gh.writes()), 1)
+        self.assertIn("updatePullRequestBranch", gh.writes()[0])
+
+    def test_comments_on_a_behind_dependabot_pr_and_never_updates_its_branch(self) -> None:
+        dependabot = {"login": "dependabot", "__typename": "Bot"}
+        gh = FakeGh([_node(author=dependabot)], {7: 3})
+
+        code, _ = _run(gh)
+
+        self.assertEqual(code, 0)
+        writes = gh.writes()
+        self.assertEqual(len(writes), 1)
+        self.assertIn("-X POST repos/owner/repo/issues/7/comments", writes[0])
+        self.assertIn("body=@dependabot rebase", writes[0])
+
+    def test_writes_nothing_for_foreign_and_current_prs(self) -> None:
         nodes = [
-            _node(number=1, headRefOid="1" * 40, reviewDecision="APPROVED"),
             _node(number=2, headRefOid="2" * 40, author={"login": "islomar", "__typename": "User"}),
             _node(number=3, headRefOid="3" * 40),
             _node(number=4, headRefOid="4" * 40, mergeable="UNKNOWN"),

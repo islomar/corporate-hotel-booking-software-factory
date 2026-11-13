@@ -1,19 +1,26 @@
 #!/usr/bin/env python3
-"""Keep agent pull requests up to date with main without the owner (CHB-172). Standard library only.
+"""Keep agent and Dependabot pull requests up to date with main without the owner (CHB-172, CHB-177). Standard library only.
 
 Why: when one agent PR merges, the others fall behind main. The owner's "Update branch" click makes
 the owner the last pusher, and the `main` ruleset requires approval of the last push by someone
 else, so the owner's own approval stops counting (PR #102, 2026-11-10). A push by the agent App
 leaves the owner free to approve.
 
+The `main` ruleset requires a branch to contain the latest main before it merges
+(`strict_required_status_checks_policy = true`, CHB-177), so a PR behind main cannot merge.
+
 What: for each open PR opened by the agent App, into main, from this repository:
-- behind main, mergeable, not approved: rebase it with the GraphQL mutation `updatePullRequestBranch`
-  (`expectedHeadOid` = the head this run read, so a push in between makes GitHub refuse);
-- behind main, mergeable, approved: leave it. `strict_required_status_checks_policy` is false, so
-  it can merge as it is, and a rebase would dismiss the approval;
+- behind main, mergeable: rebase it with the GraphQL mutation `updatePullRequestBranch`
+  (`expectedHeadOid` = the head this run read, so a push in between makes GitHub refuse).
+  An approved PR is rebased too: the rebase dismisses the approval (`dismiss_stale_reviews_on_push`)
+  and the owner approves the new head. Leaving it would stop it from ever merging;
 - conflicting: add the label `needs-rebase` (GitHub runs no `pull_request` workflow on a
   conflicting PR, so its checks page proves nothing). The agent resolves it in a session;
 - labelled `needs-rebase` but mergeable again: remove the label.
+For each open PR opened by Dependabot, into main, from this repository:
+- behind main, mergeable: comment `@dependabot rebase`, unless the agent already did so after the
+  head commit. The agent never pushes to a Dependabot branch (the `dependabot-branches` ruleset
+  stops it); Dependabot does the rebase. A conflicting Dependabot PR rebases itself, so it is left.
 Any other PR is never touched.
 
 The workflow (.github/workflows/pr-updates.yml) runs this on every push to main with a token of the
@@ -36,6 +43,8 @@ from dataclasses import dataclass
 from typing import Any
 
 AGENT_LOGIN = "chb-factory-agent"  # the GitHub App; GraphQL gives its login without "[bot]"
+DEPENDABOT_LOGIN = "dependabot"
+REBASE_COMMENT = "@dependabot rebase"
 LABEL = "needs-rebase"
 BASE_BRANCH = "main"
 READS = 3  # reads while some PR has mergeable UNKNOWN (GitHub computes it lazily)
@@ -50,6 +59,8 @@ query($owner: String!, $name: String!) {
         id number headRefOid baseRefName isCrossRepository mergeable reviewDecision
         author { login __typename }
         labels(first: 50) { nodes { name } }
+        comments(last: 10) { nodes { body createdAt author { login } } }
+        commits(last: 1) { nodes { commit { committedDate } } }
       }
     }
   }
@@ -82,20 +93,42 @@ class Pr:
     review_decision: str | None
     behind_by: int
     labels: frozenset[str]
+    rebase_requested: bool = False  # the agent commented REBASE_COMMENT after the head commit
 
 
 def decide(pr: Pr) -> tuple[str, ...]:
-    """The actions for one PR: "update", "label", "unlabel". Empty means leave it alone."""
-    if pr.author != AGENT_LOGIN or pr.base != BASE_BRANCH or pr.cross_repository:
+    """The actions for one PR: "update", "label", "unlabel", "comment". Empty means leave it alone."""
+    if pr.base != BASE_BRANCH or pr.cross_repository:
+        return ()
+    if pr.author == DEPENDABOT_LOGIN:
+        # Dependabot alone writes to its branches; ask it to rebase. It rebases a conflict by itself.
+        if pr.mergeable == "MERGEABLE" and pr.behind_by > 0 and not pr.rebase_requested:
+            return ("comment",)
+        return ()
+    if pr.author != AGENT_LOGIN:
         return ()
     if pr.mergeable == "CONFLICTING":
         return () if LABEL in pr.labels else ("label",)
     if pr.mergeable != "MERGEABLE":
         return ()
     actions = ("unlabel",) if LABEL in pr.labels else ()
-    if pr.behind_by > 0 and pr.review_decision != "APPROVED":
+    if pr.behind_by > 0:
         actions += ("update",)
     return actions
+
+
+def _rebase_requested(node: dict[str, Any]) -> bool:
+    """True when the agent commented REBASE_COMMENT after the head commit (ISO timestamps compare as text)."""
+    try:
+        committed = str(node["commits"]["nodes"][-1]["commit"]["committedDate"])
+    except (KeyError, IndexError, TypeError):
+        return False
+    for comment in (node.get("comments") or {}).get("nodes") or []:
+        author = (comment.get("author") or {}).get("login")
+        if author == AGENT_LOGIN and str(comment.get("body", "")).strip() == REBASE_COMMENT:
+            if str(comment.get("createdAt", "")) >= committed:
+                return True
+    return False
 
 
 def to_pr(node: dict[str, Any], behind_by: int) -> Pr:
@@ -112,6 +145,7 @@ def to_pr(node: dict[str, Any], behind_by: int) -> Pr:
         review_decision=node.get("reviewDecision"),
         behind_by=behind_by,
         labels=frozenset(label["name"] for label in (node.get("labels") or {}).get("nodes") or []),
+        rebase_requested=_rebase_requested(node),
     )
 
 
@@ -119,7 +153,7 @@ def _mine(node: dict[str, Any]) -> bool:
     author = node.get("author") or {}
     return (
         author.get("__typename") == "Bot"
-        and author.get("login") == AGENT_LOGIN
+        and author.get("login") in (AGENT_LOGIN, DEPENDABOT_LOGIN)
         and node.get("baseRefName") == BASE_BRANCH
         and not node.get("isCrossRepository")
     )
@@ -146,6 +180,9 @@ def apply(repo: str, pr: Pr, action: str, gh: Gh) -> str:
     if action == "update":
         gh(["api", "graphql", "-f", f"query={UPDATE}", "-f", f"id={pr.node_id}", "-f", f"oid={pr.head_oid}"])
         return f"#{pr.number}: rebased on {BASE_BRANCH} (was {pr.behind_by} commits behind, head {pr.head_oid[:7]})"
+    if action == "comment":
+        gh(["api", "-X", "POST", f"repos/{repo}/issues/{pr.number}/comments", "-f", f"body={REBASE_COMMENT}"])
+        return f"#{pr.number}: {pr.behind_by} commits behind {BASE_BRANCH}, asked Dependabot to rebase"
     if action == "label":
         gh(["api", "-X", "POST", f"repos/{repo}/issues/{pr.number}/labels", "-f", f"labels[]={LABEL}"])
         return f"#{pr.number}: conflicts with {BASE_BRANCH}, labelled {LABEL}"
