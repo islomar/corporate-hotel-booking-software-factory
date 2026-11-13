@@ -67,12 +67,17 @@ def client_ip(scope: Mapping[str, Any], hops: int) -> str:
     With hops=0, or when the header has fewer entries than hops, the socket peer is used.
     """
     if hops > 0:
-        for name, value in scope.get("headers", []):
-            if name == b"x-forwarded-for":
-                entries = [e.strip() for e in value.decode("latin-1").split(",") if e.strip()]
-                if len(entries) >= hops:
-                    return entries[-hops]
-                break
+        # A client can send several X-Forwarded-For lines. Proxies append to the last one,
+        # so read all lines as one list, in order.
+        entries = [
+            e.strip()
+            for name, value in scope.get("headers", [])
+            if name == b"x-forwarded-for"
+            for e in value.decode("latin-1").split(",")
+            if e.strip()
+        ]
+        if len(entries) >= hops:
+            return entries[-hops]
     peer = scope.get("client")
     return peer[0] if peer else "unknown"
 

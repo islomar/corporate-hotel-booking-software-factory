@@ -201,6 +201,30 @@ def test_a_client_cannot_dodge_the_limit_by_forging_the_left_of_x_forwarded_for(
     assert response.status_code == 429
 
 
+def test_a_second_x_forwarded_for_line_cannot_be_forged_by_a_first_line() -> None:
+    client = TestClient(app_with_echo(SMALL))
+    proxy_line = ("x-forwarded-for", "198.51.100.1")
+    for i in range(3):
+        forged = ("x-forwarded-for", f"10.0.0.{i}")
+        client.post("/api/echo", content=b"x", headers=[forged, proxy_line])
+
+    response = client.post(
+        "/api/echo", content=b"x", headers=[("x-forwarded-for", "10.9.9.9"), proxy_line]
+    )
+
+    assert response.status_code == 429
+
+
+def test_client_ip_joins_repeated_x_forwarded_for_lines() -> None:
+    scope = {
+        "client": ("10.1.1.1", 1),
+        "headers": [(b"x-forwarded-for", b"6.6.6.6"), (b"x-forwarded-for", b"1.1.1.1, 2.2.2.2")],
+    }
+
+    assert client_ip(scope, hops=1) == "2.2.2.2"
+    assert client_ip(scope, hops=3) == "6.6.6.6"
+
+
 def test_the_table_of_clients_stays_bounded() -> None:
     limits = RequestLimits(max_body_bytes=100, writes_per_minute=1, max_tracked_clients=5)
     app = app_with_echo(limits)
