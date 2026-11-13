@@ -1,13 +1,13 @@
 ---
-name: ticket-gate
-description: Check that every acceptance criterion of a Jira ticket can be checked. Use before `factory/bin/jira ready` when you wrote the criteria yourself, or when asked to gate a ticket (`/ticket-gate CHB-<n>`). It is read-only and never edits the ticket.
+name: review-acceptance-criteria
+description: Check that every acceptance criterion of a Jira ticket can be checked. Use before `factory/bin/jira ready` when you wrote the criteria yourself, or when asked to review the acceptance criteria of a ticket (`/review-acceptance-criteria CHB-<n>`). It is read-only and never edits the ticket.
 ---
 
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
 **Table of Contents** *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
-- [ticket-gate](#ticket-gate)
+- [review-acceptance-criteria](#review-acceptance-criteria)
   - [Steps](#steps)
   - [The three tests](#the-three-tests)
   - [Report format](#report-format)
@@ -15,7 +15,7 @@ description: Check that every acceptance criterion of a Jira ticket can be check
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
-# ticket-gate
+# review-acceptance-criteria
 
 Input: one ticket key, for example `CHB-164`. If none is given, ask for it.
 
@@ -48,7 +48,7 @@ when it names the event and where to read the result.
 ## Report format
 
 ```text
-ticket-gate CHB-<n>: <PASS | REJECT>
+review-acceptance-criteria CHB-<n>: <PASS | REJECT>
 1. [CHECKABLE] <criterion, shortened>
 2. [NOT CHECKABLE: <no observable outcome | no place to look | vague word "<word>">] <criterion, shortened>
    Rewrite: <one checkable sentence that names the outcome and where to read it>
@@ -62,4 +62,4 @@ ticket-gate CHB-<n>: <PASS | REJECT>
 ## After a REJECT
 
 The agent that wrote the criteria rewrites them (`factory/bin/jira section CHB-<n> --heading "Acceptance criteria" --body-file FILE`)
-and runs `/ticket-gate` again. A criterion that needs an owner decision goes to the owner; see `docs/process/kanban.md`, Ready.
+and runs `/review-acceptance-criteria` again. A criterion that needs an owner decision goes to the owner; see `docs/process/kanban.md`, Ready.

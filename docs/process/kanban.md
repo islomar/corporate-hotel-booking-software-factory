@@ -198,7 +198,7 @@ Ready was named To Do until 2026-11-10 (CHB-153). The rules below apply to it un
   "Acceptance criteria (Validating)" does not count. A top ticket without them is not skipped: the agent writes them
   (`factory/bin/jira section CHB-<n> --heading "Acceptance criteria" --body-file FILE`), derived from the ticket, its epic and the ADRs.
   It asks the owner only for decisions that are the owner's (owner rule, 2026-11-10).
-- Check the criteria (CHB-39): when the agent wrote the acceptance criteria itself, it runs `/ticket-gate CHB-<n>` (`.claude/skills/ticket-gate/SKILL.md`)
+- Check the criteria (CHB-39): when the agent wrote the acceptance criteria itself, it runs `/review-acceptance-criteria CHB-<n>` (`.claude/skills/review-acceptance-criteria/SKILL.md`)
   before `factory/bin/jira ready`. The skill lists each criterion as checkable or not, with the reason (no observable outcome, no place to look, a vague word),
   and proposes a rewrite for each one that is not. It is read-only: the agent edits the section and runs the skill again until it prints PASS.
 - `factory/bin/jira transition <key> "In Progress"` from Ready exits 4 when `<key>` is not that top ticket, is blocked by an open ticket,
