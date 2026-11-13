@@ -37,3 +37,13 @@ How it works:
   If the app runs without a proxy that appends the header, set `TRUSTED_PROXY_HOPS=0`.
   Otherwise a client can forge the header and dodge the limit.
 - Both answers carry the security headers and a JSON body `{"detail": "..."}`.
+
+Why the limits live in the app (owner decision, 2026-11-13):
+
+- Cloud Run already refuses HTTP/1 bodies over 32 MiB, and `max-instances=1` caps the cost of a flood. It has no per-IP rate limit.
+- Per-IP rate limiting on GCP is Cloud Armor, which needs an external load balancer: about US$25 a month (forwarding rule about $18, policy $5, rules $1 each, prices of 2026-11-13).
+  That is the project's first fixed cost and goes against ADR-d5e6.
+- Cloudflare's free plan has one rate-limiting rule per client IP, but needs a domain on Cloudflare, and the `run.app` address would stay open as a way around it.
+
+Next step, when the app gets real users or a custom domain: put Cloudflare's free plan in front.
+Make the app refuse requests without a secret header that Cloudflare adds, and set `TRUSTED_PROXY_HOPS=2`. The limits here stay as a second line.
