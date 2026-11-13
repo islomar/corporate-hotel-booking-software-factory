@@ -198,6 +198,10 @@ Ready was named To Do until 2026-11-10 (CHB-153). The rules below apply to it un
   "Acceptance criteria (Validating)" does not count. A top ticket without them is not skipped: the agent writes them
   (`factory/bin/jira section CHB-<n> --heading "Acceptance criteria" --body-file FILE`), derived from the ticket, its epic and the ADRs.
   It asks the owner only for decisions that are the owner's (owner rule, 2026-11-10).
+- Check the criteria (CHB-39): when the agent wrote the acceptance criteria itself, it runs `/review-acceptance-criteria CHB-<n>` (`.claude/skills/review-acceptance-criteria/SKILL.md`)
+  before `factory/bin/jira ready`. The skill lists each criterion as checkable or not, with the reason (no observable outcome, no place to look, a vague word),
+  and proposes a rewrite for each one that is not. It is read-only: the agent edits the section and runs the skill again until it prints PASS,
+  or until the remaining criteria need an owner decision, which goes to the owner.
 - `factory/bin/jira transition <key> "In Progress"` from Ready exits 4 when `<key>` is not that top ticket, is blocked by an open ticket,
   or is the top ticket without a "Why it matters" first section, without acceptance criteria or with a judgment box of its Definition of Ready unticked (CHB-125, CHB-148, CHB-187).
   The message names the top ticket and the next step, or the `section`, `checklist` or `tick` command that fixes the gap.
@@ -260,6 +264,11 @@ Meaning: the change is merged and deployed, but nobody has yet confirmed that it
 - Leave to Done: each acceptance criterion is checked in the live system, and the evidence is written as a ticket comment.
   Evidence is concrete: the smoke test of the deploy, a `gcloud` or `gh api` read of the real setting, a screenshot, a log line, a metric.
   A passing plan or a green CI run is not evidence of the live result.
+- Criteria are checkboxes (CHB-185). `factory/bin/jira create` and `section` write each top-level bullet of "Acceptance criteria" and "Acceptance criteria (Validating)" as an unticked Jira checkbox.
+  The "When:", "Speed up:", "Where", "Pass", "Who" and "If it fails" lines of the Validating section stay plain.
+  After the live check, `factory/bin/jira tick CHB-<n> <number or text> --evidence-file FILE` posts the evidence as a comment, then ticks that criterion.
+  `factory/bin/jira transition CHB-<n> Done` exits 4 and names each unticked criterion. The agent moves a ticket to Done unattended only when every criterion is ticked.
+  A ticket whose criteria are plain bullets (written before CHB-185) has no checkbox to tick and is not blocked by this rule.
 - Leave to In Progress: the check fails. A new or reopened PR fixes it.
 - Some checks need time (for example a background cleanup that runs within a day). The ticket stays in Validating until then.
 - At session start, the SessionStart hook lists each "When:" line as due, check, or unmarked while its date is ahead (CHB-140, `factory/hooks/validating_sweep.py`).

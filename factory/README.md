@@ -212,6 +212,7 @@ factory/bin/jira search 'status = "In Review"'   # sent as project = CHB AND (<j
 factory/bin/jira create --parent CHB-27 --summary "Short title" --description-file description.txt --priority Medium
 factory/bin/jira transition CHB-12 "In Review"
 factory/bin/jira tick CHB-12 small   # one box of the Definition of Ready: why, trigger, decision or small
+factory/bin/jira tick CHB-12 2 --evidence-file FILE   # one acceptance criterion (number or unique text): posts the evidence, ticks it; `transition ... Done` exits 4 while one is open (CHB-185)
 factory/bin/jira ready CHB-12 --trigger "2. the owner asked for it on 2026-11-10"   # Backlog to Ready
 factory/bin/jira checklist CHB-12   # or --open: adds the Definition of Ready where it is missing
 factory/bin/jira comment CHB-12 --body-file comment.txt   # "-" reads stdin
