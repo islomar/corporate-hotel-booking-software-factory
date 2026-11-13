@@ -56,8 +56,15 @@ make dev     # backend and frontend with hot reload: http://localhost:5173
 make down    # stop the containers
 make clean-dev  # remove this checkout's containers and volumes (run it when done with make dev in a worktree)
 make check   # lint, typecheck and tests (the pre-commit gate); agents: .devcontainer/run make check
+make test    # only the tests: backend, frontend, scripts and factory
+make format  # format all code
+make mutate  # mutation testing for the backend
+make check-npm  # fail if npm is too old to honour min-release-age (make setup runs it)
 make up      # production image: http://localhost:8080
 make e2e     # Playwright against the production image
+make review-agreement  # the human's agreement with the review verdict on merged PRs
+make infra-plan   # Terraform plans for GCP and GitHub (from main only)
+make infra-apply  # apply the saved plans, only if made from the current main
 make help    # all targets
 ```
 

@@ -44,7 +44,7 @@ from shell_words import ASSIGNMENT, PYTHON, is_operator, name, redirection, toke
 
 PROGRAMS = {"uv", "uvx", "npm", "npx", "pnpm", "yarn", "pip", "pip3", "pytest", "py.test", "vitest"}
 PYTHON_MODULES = {"pytest", "pip"}
-SANDBOX_TARGETS = {"check", "test", "check-backend", "check-frontend", "check-deps", "format", "mutate"}
+SANDBOX_TARGETS = {"check", "test", "check-backend", "check-frontend", "lint-backend", "lint-frontend", "test-backend", "test-frontend", "test-scripts", "check-deps", "format", "mutate"}
 WRAPPERS = {"rtk", "env", "time", "nice", "nohup", "command", "exec", "setsid", "ionice", "stdbuf", "timeout",
             "xargs", "sudo", "doas", "chrt", "taskset", "flock", "unbuffer", "watch", "strace"}
 MAKE_VALUE_OPTIONS = {"-C", "--directory", "-f", "--file", "--makefile", "-j", "--jobs", "-I", "-o", "-W"}
