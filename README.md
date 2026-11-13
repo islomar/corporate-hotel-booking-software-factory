@@ -47,7 +47,7 @@ The experiment combines two sources and borrows one related idea:
 
 ## Quick start
 
-Requirements: Docker, GNU Make. For running checks outside Docker: [uv](https://docs.astral.sh/uv/) and Node 24.
+Requirements: Docker, GNU Make, Python 3 (`make e2e` needs nothing else). For running checks outside Docker: [uv](https://docs.astral.sh/uv/) and Node 24.
 
 ```sh
 make setup   # dependencies, Playwright browser, git pre-commit hook
@@ -56,13 +56,21 @@ make dev     # backend and frontend with hot reload: http://localhost:5173
 make down    # stop the containers
 make clean-dev  # remove this checkout's containers and volumes (run it when done with make dev in a worktree)
 make check   # lint, typecheck and tests (the pre-commit gate); agents: .devcontainer/run make check
+make test    # only the tests: backend, frontend, scripts and factory
+make format  # format all code
+make mutate  # mutation testing for the backend
+make check-npm  # fail if npm is too old to honour min-release-age (make setup runs it)
 make up      # production image: http://localhost:8080
-make e2e     # Playwright against the production image
+make e2e     # Playwright against the production image, run in its Docker image
+make review-agreement  # the human's agreement with the review verdict on merged PRs
+make infra-plan   # Terraform plans for GCP and GitHub (from main only)
+make infra-apply  # apply the saved plans, only if made from the current main
 make help    # all targets
 ```
 
-`make e2e` needs Node 24 (run `nvm use`) and Docker.
-It installs the e2e dependencies and the Playwright browser when they are missing.
+`make e2e` needs Docker and Python 3, no Node.
+It runs `npm ci` and Playwright in the pinned Playwright image of the e2e job in `.github/workflows/ci.yml`, as your user, so no file in `e2e/` is owned by root.
+It installs the e2e dependencies when they are missing.
 If the app from `make up` answers on port 8080, it tests that app and leaves it running.
 Otherwise it builds and starts the production container, runs the tests, and removes the container.
 `make dev` does not get in the way: it uses ports 5173, 8000 and 3000.
@@ -73,7 +81,7 @@ To test an app that runs elsewhere, set `APP_URL`. Then `make e2e` starts nothin
 APP_URL=https://chb-1027266991110.europe-west1.run.app make e2e
 ```
 
-To pass arguments to Playwright, run the script directly: `python3 scripts/run_e2e.py --headed`.
+To pass arguments to Playwright, run the script directly: `python3 scripts/run_e2e.py tests/walking-skeleton.spec.ts`. The browser runs headless in the image.
 
 ## API documentation
 

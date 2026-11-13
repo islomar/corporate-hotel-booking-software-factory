@@ -2,7 +2,7 @@
 """Claude Code PreToolUse hook: deny bare full-suite test runs while iterating (CHB-54).
 
 While iterating, the agent runs the tests related to its change. The full suite runs in
-`make check` before every commit (CLAUDE.md), and `make check` and `make test` stay allowed.
+`make check` before every commit (CLAUDE.md), and `make check` and `make test` (the tests only) stay allowed.
 
 Denied, when nothing narrows the run:
 - `pytest`, `py.test`, `python -m pytest`, `uv run pytest`: narrowed by a path (a word with `/` or `::`,

@@ -492,7 +492,7 @@ It denies a bare full-suite run and names the related-test form:
 - `python3 -m unittest` or `python3 -m unittest discover` without `-s <folder>`, `-p <pattern>`, `-k`, a module or a file.
 
 A path of `.` counts as no filter. A number does not count as a Vitest filter: it is likely the value of an option such as `--retry 2`.
-`make check` and `make test` run the full suite and stay allowed: CLAUDE.md requires `make check` before every commit.
+`make check` (everything) and `make test` (only the tests) run the full suite and stay allowed: CLAUDE.md requires `make check` before every commit.
 
 The two Bash hooks drop redirections (`2>&1`, `> file`, `2>/dev/null`) and strip `rtk`, `rtk proxy`, `factory/bin/as-agent`, `env`, `uv run`, `npx` and `python -m` before they read a command.
 Like the Jira hook, they read the command text only, deny on unreadable input or an internal error, and let the command run if `python3` cannot start.
@@ -505,7 +505,8 @@ Package installs, linters and test runners run code from npm and PyPI. On the ho
 The hook denies them on the host and names the sandbox form, `.devcontainer/run <command>`:
 
 - `uv`, `uvx`, `npm`, `npx`, `pnpm`, `yarn`, `pip`, `pip3`, `pytest`, `vitest`, `python -m pytest`, `python -m pip`;
-- `make check`, `make test`, `make check-backend`, `make check-frontend`, `make check-deps`, `make format`, `make mutate`.
+- `make check`, `make test`, `make check-backend`, `make check-frontend`, `make check-deps`,
+  `make lint-backend`, `make lint-frontend`, `make test-backend`, `make test-frontend`, `make format`, `make mutate`.
 
 Wrappers such as `timeout`, `nice -n 5`, `env -u X`, `xargs` and `sudo` are skipped with their options.
 Allowed: the `.devcontainer/run` of a worktree of this repository, resolved after any literal `cd`.

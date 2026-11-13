@@ -1,10 +1,10 @@
 .DEFAULT_GOAL := help
 SHELL := /bin/bash
 
-.PHONY: help setup check-npm dev down clean-dev up check check-backend check-frontend check-deps test e2e format mutate review-agreement infra-plan infra-apply
+.PHONY: help setup check-npm dev down clean-dev up check check-backend check-frontend check-deps lint-backend lint-frontend test-backend test-frontend test-scripts test e2e format mutate review-agreement infra-plan infra-apply
 
 help: ## List targets
-	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-16s %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-16s %s\n", $$1, $$2}'
 
 setup: check-npm ## Install local dependencies and the repo git hooks
 	cd backend && uv sync --locked
@@ -12,7 +12,6 @@ setup: check-npm ## Install local dependencies and the repo git hooks
 	cd e2e && npm ci && npx playwright install chromium
 	ln -sf ../../scripts/git-hooks/pre-commit .git/hooks/pre-commit
 
-# Keep 11.10.0 equal to MIN_NPM in scripts/run_e2e.py.
 check-npm: ## Fail if npm is too old to honour min-release-age in .npmrc
 	@v=$$(npm --version); printf '%s\n' 11.10.0 "$$v" | sort -V -C || \
 		{ echo "npm $$v ignores min-release-age in .npmrc. Use Node 24 from .nvmrc (npm >= 11.10)."; exit 1; }
@@ -36,26 +35,39 @@ up: ## Run the production image locally (http://localhost:8080)
 
 check: check-backend check-frontend check-deps ## Lint, typecheck and test everything (the pre-commit gate)
 
-check-backend:
-	cd backend && uv run --locked ruff format --check . && uv run --locked ruff check . && uv run --locked pyright && uv run --locked pytest
+check-backend: lint-backend test-backend
 
-check-frontend:
-	cd frontend && npm run -s format:check && npm run -s lint && npm run -s typecheck && npm test
+check-frontend: lint-frontend test-frontend
 
-check-deps:
+lint-backend:
+	cd backend && uv run --locked ruff format --check . && uv run --locked ruff check . && uv run --locked pyright
+
+lint-frontend:
+	cd frontend && npm run -s format:check && npm run -s lint && npm run -s typecheck
+
+test-backend:
+	cd backend && uv run --locked pytest
+
+test-frontend:
+	cd frontend && npm test
+
+test-scripts:
 	python3 -I -m unittest discover -s scripts/tests
 	python3 -I -m unittest discover -s factory/tests
+
+check-deps: test-scripts
 	python3 -I scripts/check_playwright_image.py
 	python3 -I scripts/check_sessions_redacted.py
 	python3 -I scripts/check_doctoc_title.py
 	python3 -I scripts/check_release_age.py backend/uv.lock
 	python3 -I scripts/check_guard_tests.py
 
-test: check ## Alias for check
+test: test-backend test-frontend test-scripts ## Run only the tests: backend, frontend, scripts and factory (no lint, types or repository checks)
 
-# Installs what is missing and starts the production container when nothing answers on
-# :8080. With APP_URL set it tests that URL and starts nothing. See scripts/run_e2e.py.
-e2e: ## Run Playwright (starts the production container if needed; APP_URL=<url> tests a running app)
+# Runs npm ci and Playwright in the Playwright image of ci.yml (the host needs Docker and Python 3),
+# and starts the production container when nothing answers on :8080.
+# With APP_URL set it tests that URL and starts nothing. See scripts/run_e2e.py.
+e2e: ## Run Playwright in its Docker image (starts the production container if needed; APP_URL=<url> tests a running app)
 	@python3 -I scripts/run_e2e.py
 
 format: ## Format all code
