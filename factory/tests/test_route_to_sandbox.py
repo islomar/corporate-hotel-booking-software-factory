@@ -18,6 +18,7 @@ DENIED = [
     "make test-backend",
     "make test-frontend",
     "make lint-backend",
+    "make test-scripts",
     "make lint-frontend",
     "make format",
     "cd backend && uv run --locked pytest tests/test_x.py",

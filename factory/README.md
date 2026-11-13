@@ -512,7 +512,7 @@ The hook denies them on the host and names the sandbox form, `.devcontainer/run 
 
 - `uv`, `uvx`, `npm`, `npx`, `pnpm`, `yarn`, `pip`, `pip3`, `pytest`, `vitest`, `python -m pytest`, `python -m pip`;
 - `make check`, `make test`, `make check-backend`, `make check-frontend`, `make check-deps`,
-  `make lint-backend`, `make lint-frontend`, `make test-backend`, `make test-frontend`, `make format`, `make mutate`.
+  `make lint-backend`, `make lint-frontend`, `make test-backend`, `make test-frontend`, `make test-scripts`, `make format`, `make mutate`.
 
 Wrappers such as `timeout`, `nice -n 5`, `env -u X`, `xargs` and `sudo` are skipped with their options.
 Allowed: the `.devcontainer/run` of a worktree of this repository, resolved after any literal `cd`.
