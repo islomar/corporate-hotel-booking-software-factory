@@ -490,7 +490,7 @@ It denies a bare full-suite run and names the related-test form:
 - `vitest`, `npx vitest run`, `npm test` or `npm run test` without a file filter, `-t` or `--changed`;
 - `python3 -m unittest` or `python3 -m unittest discover` without `-s <folder>`, `-p <pattern>`, `-k`, a module or a file.
 
-A path of `.` counts as no filter. A number does not count as a vitest filter: it is likely the value of an option such as `--retry 2`.
+A path of `.` counts as no filter. A number does not count as a Vitest filter: it is likely the value of an option such as `--retry 2`.
 `make check` and `make test` run the full suite and stay allowed: CLAUDE.md requires `make check` before every commit.
 
 The two Bash hooks drop redirections (`2>&1`, `> file`, `2>/dev/null`) and strip `rtk`, `rtk proxy`, `factory/bin/as-agent`, `env`, `uv run`, `npx` and `python -m` before they read a command.

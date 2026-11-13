@@ -9,8 +9,13 @@
 # owned, so a PR that weakens them needs the owner.
 #
 # `pull_request_review` re-runs the check after the owner approves or a review is
-# dismissed. Both events report a check run named `supply-chain` on the head commit; the
-# latest one counts. Concurrency cancels an older run so it cannot finish last.
+# dismissed. Both events report a check run named `supply-chain` on the head commit, and a
+# failed one keeps the required check red. So a review run that passes re-runs the failed
+# runs of the same head (scripts/rerun_failed_supply_chain.py, CHB-184): the agent's App
+# cannot re-run workflows, the workflow token can. A re-run reads the live reviews, so it
+# passes only while the owner's approval stands.
+# Concurrency cancels an older run of the same event so it cannot finish last. The events
+# have separate groups: a re-run of the `pull_request` run must not cancel the review run.
 #
 # `edited` re-runs the check when the PR's base branch changes: the diff and the release-age
 # comparison depend on it. `edited` also fires on title and body edits. Those runs evaluate
@@ -27,7 +32,7 @@ on:
 permissions: {}
 
 concurrency:
-  group: supply-chain-${{ github.event.pull_request.number }}
+  group: supply-chain-${{ github.event.pull_request.number }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
@@ -37,6 +42,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read # commits and reviews of the PR
+      actions: write # re-run failed runs of the same head after an approval
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -61,3 +67,13 @@ jobs:
         run: >-
           python3 -I scripts/check_supply_chain.py
           --repo "$REPO" --pr "$PR" --base "$BASE_SHA" --head "$HEAD_SHA" --owner "$OWNER"
+      - name: Re-run the failed runs of this head (the approval makes them pass)
+        if: success() && github.event_name == 'pull_request_review'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_ID: ${{ github.run_id }}
+        run: >-
+          python3 -I scripts/rerun_failed_supply_chain.py
+          --repo "$REPO" --head "$HEAD_SHA" --run-id "$RUN_ID"
