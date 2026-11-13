@@ -232,6 +232,10 @@ Meaning: a pull request waits for review and merge.
 - Enter: the PR is open and linked from the ticket.
 - Leave to Validating: the PR is merged into `main`. CI passed and the required reviews were given.
 - Leave to In Progress: review asked for changes.
+- After each automated review with findings (a comment of `chb-factory-reviewer[bot]` on the PR), the agent runs `factory/bin/triage-review <PR>` (CHB-60).
+  It writes one line per finding, `<number> apply|discard|doubt <reason>`, and posts them with `factory/bin/triage-review <PR> --file FILE`.
+  It fixes the `apply` findings in the PR, and lists the `doubt` findings to the human in the chat. They are also in the Caveats section of the PR body.
+  The required check `triage` fails until the triage comment for that review exists. See `factory/README.md`, "Triage of review findings".
 - WIP limit: a max on the board. A full In Review blocks starting work, never opening the PR of work already started.
   The agent then reviews, fixes or closes pull requests before it starts another ticket.
 - A ticket whose PR is merged leaves In Review at once. The SessionStart sweep lists it.
