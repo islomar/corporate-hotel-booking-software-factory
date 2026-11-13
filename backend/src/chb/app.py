@@ -2,7 +2,8 @@
 
 import logging
 import os
-from collections.abc import AsyncGenerator, Mapping
+import time
+from collections.abc import AsyncGenerator, Callable, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -13,6 +14,13 @@ from pydantic import BaseModel
 from starlette.types import ASGIApp
 
 from chb.logs import configure_logging
+from chb.request_limits import (
+    BodySizeLimitMiddleware,
+    RateLimiter,
+    RateLimitMiddleware,
+    RequestLimits,
+    limits_from_env,
+)
 from chb.security_headers import DOCS_PATH, SecurityHeadersMiddleware
 from chb.telemetry import Telemetry, telemetry_from_env
 
@@ -53,7 +61,12 @@ class Health(BaseModel):
     version: str
 
 
-def create_app(static_dir: Path | None = None, telemetry: Telemetry | None = None) -> FastAPI:
+def create_app(
+    static_dir: Path | None = None,
+    telemetry: Telemetry | None = None,
+    limits: RequestLimits | None = None,
+    clock: Callable[[], float] = time.monotonic,
+) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
         yield
@@ -73,6 +86,12 @@ def create_app(static_dir: Path | None = None, telemetry: Telemetry | None = Non
         openapi_url="/api/openapi.json",
     )
 
+    limits = limits or RequestLimits()
+    limiter = RateLimiter(limits.writes_per_minute, clock, limits.max_tracked_clients)
+    app.state.rate_limiter = limiter
+    # The last middleware added is the outermost. Security headers go on the 413 and 429 too.
+    app.add_middleware(BodySizeLimitMiddleware, max_body_bytes=limits.max_body_bytes)
+    app.add_middleware(RateLimitMiddleware, limiter=limiter, hops=limits.trusted_proxy_hops)
     app.add_middleware(SecurityHeadersMiddleware)
 
     @app.get(DOCS_PATH, include_in_schema=False)
@@ -117,7 +136,9 @@ def app_from_env(env: Mapping[str, str]) -> ASGIApp:
     if telemetry is not None and telemetry.metrics_off_reason is not None:
         logger.warning(telemetry.metrics_off_reason)
     static_dir = env.get("STATIC_DIR")
-    fastapi_app = create_app(Path(static_dir) if static_dir else None, telemetry)
+    fastapi_app = create_app(
+        Path(static_dir) if static_dir else None, telemetry, limits_from_env(env)
+    )
     return telemetry.wrap(fastapi_app) if telemetry is not None else fastapi_app
 
 
