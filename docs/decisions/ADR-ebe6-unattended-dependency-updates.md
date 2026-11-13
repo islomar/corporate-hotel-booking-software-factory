@@ -9,7 +9,7 @@
     - [Release age enforced outside Dependabot](#release-age-enforced-outside-dependabot)
     - [Security fixes skip the 7-day wait (CHB-95, CHB-145)](#security-fixes-skip-the-7-day-wait-chb-95-chb-145)
     - [Supply chain checks in CI](#supply-chain-checks-in-ci)
-    - [Lockfile-only installs](#lockfile-only-installs)
+    - [Installs from the lockfile only](#installs-from-the-lockfile-only)
     - [Auto-merge (`.github/workflows/dependabot-auto-merge.yml`)](#auto-merge-githubworkflowsdependabot-auto-mergeyml)
     - [Supply-chain check instead of code-owner review (CHB-90)](#supply-chain-check-instead-of-code-owner-review-chb-90)
   - [Consequences](#consequences)
@@ -87,7 +87,7 @@ Owner decisions: npm on 2026-11-06 (CHB-95 slice 2), uv on 2026-11-10 (CHB-95 AC
 - The supply-chain check still decides the merge: patch, or minor at 1.0 or above, unattended.
 - uv limit, found 2026-11-10: Dependabot runs `uv lock --upgrade-package <name>==<version>` and uv applies `exclude-newer` from `pyproject.toml`.
   uv 0.13.7 refuses a version younger than 7 days.
-  Dependabot therefore opens no uv security PR for a fix younger than 7 days until dependabot-core#13816 ships, and the exemption has nothing to act on.
+  Dependabot therefore opens no uv security PR for a fix younger than 7 days until `dependabot-core#13816` ships, and the exemption has nothing to act on.
   An `exclude-newer-package` exemption would let it lock, but the supply-chain check sends that change to the owner.
 
 ### Supply chain checks in CI
@@ -101,7 +101,7 @@ These run as steps of the `backend`, `frontend` and `e2e` jobs, so auto-merge wa
   Each image carries a digest pin.
   Dependabot does not update these images. A Playwright bump fails this check until a person moves both images in the same PR.
 
-### Lockfile-only installs
+### Installs from the lockfile only
 
 - CI, `Dockerfile`, `compose.yaml` and `make setup` use `npm ci` and `uv sync --locked`.
 - `uv run` takes `--locked`, so it never rewrites `uv.lock`.
@@ -162,7 +162,11 @@ Every Dependabot PR therefore waited for the owner, auto-merge or not.
 - Triggers: `pull_request` and `pull_request_review` (`submitted`, `dismissed`), so an owner approval re-runs it.
   `pull_request` includes `edited`, so a change of base branch re-runs it: the diff and the release-age comparison depend on the base.
   `edited` also fires on title and body edits. Those runs evaluate in full. A job skipped with `if:` reports success to a required check, and the concurrency group would let it replace a failing run.
-  Both report a check run named `supply-chain` on the head commit. A per-PR concurrency group cancels the older run.
+  Both report a check run named `supply-chain` on the head commit. A concurrency group per PR and event cancels the older run of the same event.
+  A failed run stays red on the head commit and blocks the PR: GitHub does not replace it with the later passing run (seen on PR #103, CHB-184).
+  A `pull_request_review` run that passes re-runs the failed runs of the same head (`scripts/rerun_failed_supply_chain.py`, job permission `actions: write`).
+  The agent's App cannot re-run workflows; the workflow token can.
+  A re-run reads the live reviews, so it passes only while the owner's approval stands. A PR without that approval never reaches the re-run step.
 - The trailer is trusted data: GitHub verified the commit, and only Dependabot can write to its branches (next bullet).
 - The workflow and the script run from the PR's merge commit. Their integrity rests on CODEOWNERS: both have their own owner lines.
 - A second ruleset, `dependabot-branches` (`infra/github/ruleset.tf`), restricts creation and update of `refs/heads/dependabot/**/*`.
@@ -179,7 +183,7 @@ Consequences:
 - GitHub Actions bumps change `.github/workflows/`, which stays in CODEOWNERS. They keep needing the owner.
   Next step, after CHB-86 removes `workflows: write` from the agent App: move `/.github/workflows/` out of CODEOWNERS and add it to the script's supply-chain set.
   Without that second part, Actions pins lose all protection.
-- Unverified: that GitHub uses the latest `supply-chain` check run when the two events both report one. Test it on the first owner-approved supply-chain PR: the merge box must turn green after the approval.
+- Unverified: the re-run step on a real PR. Test it on the first owner-approved supply-chain PR after CHB-184 merges: the merge box must turn green after the approval, without a manual re-run.
 - Owner-authored PRs cannot pass through owner approval, because GitHub blocks self-approval. The ruleset's required approval blocks them anyway.
 
 ## Consequences

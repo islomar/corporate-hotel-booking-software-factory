@@ -26,3 +26,4 @@
 .npmrc                               @islomar
 /.github/workflows/supply-chain.yml  @islomar
 /scripts/check_supply_chain.py       @islomar
+/scripts/rerun_failed_supply_chain.py @islomar
