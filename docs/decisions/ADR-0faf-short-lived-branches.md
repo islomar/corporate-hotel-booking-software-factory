@@ -13,6 +13,7 @@
 
 - Status: accepted
 - Date: 2026-11-05
+- Amended 2026-11-13 (CHB-181): the Admin repository role bypasses the `main` ruleset, so the rule "applies to admins" no longer holds. See the CHB-119 amendment in ADR-d7b7 and `infra/github/ruleset.tf`.
 
 ## Context
 
