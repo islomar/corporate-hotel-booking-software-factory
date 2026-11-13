@@ -37,10 +37,11 @@
 
 A web app built from the Codurance kata [Corporate Hotel Booking](https://www.codurance.com/katas/corporate-hotel-booking), developed through an AI-agent software factory.
 
-The experiment combines two sources:
+The experiment combines two sources and borrows one related idea:
 
-- The 540 talk "Del humano en el bucle al desarrollo desatendido": skills, code workflows, an orchestrator, PR scoring, evidence per acceptance criterion.
-- eferro's post [Turning up the dial](https://www.eferro.net/2026/10/turning-up-dial-seeing-forest-while.html): small safe steps, learnings in the repo, rules as checks, `validating` before done.
+- The 540 talk "Del humano en el bucle al desarrollo desatendido" by Mikel Ros ([event page](https://luma.com/346v8275)): skills, code workflows, an orchestrator, PR scoring, evidence per acceptance criterion.
+- Eduardo Ferro (eferro), post [Turning up the dial](https://www.eferro.net/2026/10/turning-up-dial-seeing-forest-while.html): small safe steps, learnings in the repo, rules as checks, `validating` before done.
+- Related, narrower idea: Matt Pocock's [post on working with agents across repositories](https://www.linkedin.com/posts/mapocock_a-lot-of-folks-ask-me-how-do-you-work-with-share-7526692361494528000-8zh_). One home repository holds the skills, steering files and wiki for agents.
 
 **The question**: how close can delivery get to fully unattended while the results stay trustworthy? Delegation rises only as fast as the checks underneath it.
 
