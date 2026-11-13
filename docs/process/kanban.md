@@ -258,7 +258,8 @@ Meaning: the change is merged and deployed, but nobody has yet confirmed that it
   A passing plan or a green CI run is not evidence of the live result.
 - Leave to In Progress: the check fails. A new or reopened PR fixes it.
 - Some checks need time (for example a background cleanup that runs within a day). The ticket stays in Validating until then.
-- At session start, the SessionStart hook lists each "When:" line as due, check, or unmarked while its date is ahead, and the agent sweeps the due and check items first (CHB-140, `factory/hooks/validating_sweep.py`).
+- At session start, the SessionStart hook lists each "When:" line as due, check, or unmarked while its date is ahead (CHB-140, `factory/hooks/validating_sweep.py`).
+  The agent handles the swept items in that session. An explicit request from the owner may come first (owner amendment, 2026-11-10).
 - At the end of a turn, the Stop hook `factory/hooks/check_wip_minimums.py` refuses to end it once while a Validating ticket has a due item and the agent account
   has no comment on it from the current day (Europe/Madrid) (CHB-163). The reason names the ticket and each due item. The agent checks the item and comments the evidence.
   Items not yet due never block. The hook fails open when Jira is unreachable and allows the second stop for the same state.
@@ -274,9 +275,14 @@ Meaning: the work cannot continue without the owner.
   It is a numbered step-by-step procedure: what to do, where (exact URL or menu path), how (each click or command).
   It also states what not to touch, the deadline if any, and how the owner reports that it is done.
   `factory/bin/jira transition` refuses the move (exit 4) while that section is missing.
+  The section has a line "Answer:" that says where the owner answers: in the Claude Code chat, or in a comment on the ticket (CHB-171).
+  `factory/bin/jira section` refuses the section (exit 2) while that line is missing.
 - Enter (owner rule, 2026-11-10): when the owner must run something to finish a ticket (merge a PR that changes Terraform and then plan or apply, a console step, a secret),
   the agent moves the ticket to Needs human with its owner steps as soon as CI and review are green and nothing else is pending on the agent's side.
   A normal PR that waits only for a plain approval keeps its ticket where it is: In Review.
+- At session start, the SessionStart hook lists each Needs human ticket whose newest comment by anyone but the agent account is newer than the agent's newest comment,
+  as "owner answered" with the key, summary and comment time. The agent resumes those first, then comments what it did (CHB-171, `factory/hooks/validating_sweep.py`).
+  The agent does not watch Jira during a session: a comment written mid-session is picked up at the next session start.
 - Leave: the owner answers or acts. The ticket goes back to the status it came from.
 - This status is the top of every notification.
 - WIP limit: a max on the board, a hard block on entering. When the column is full, the agent leaves the ticket in its status, comments on it, tells the owner and starts nothing else.
