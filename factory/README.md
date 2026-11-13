@@ -225,7 +225,7 @@ factory/bin/jira edit-comment CHB-12 10071 --body-file comment.md   # the agent'
 factory/bin/jira link CHB-88 --blocked-by CHB-146   # a "Blocks" link: CHB-146 blocks CHB-88
 ```
 
-Text files are plain text. Blank lines separate paragraphs and URLs become links.
+Text files are Markdown: the wrapper renders headings, lists, task lists, `code`, bold and links, and links CHB keys and PR numbers (`text_to_adf` in `factory/jira.py`).
 A file that is not valid UTF-8, an empty summary or an empty comment body exits 2 before the wrapper reads 1Password.
 
 `search` reads only CHB. It sends `project = CHB AND (<jql>)`, with a trailing `ORDER BY` kept outside the parentheses.
