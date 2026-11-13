@@ -29,7 +29,16 @@ COLUMNS = (
 )
 
 
-def issue(key: str, status: str, *, kind: str = "Task", priority: str = "Medium", blocked_by: str | None = None) -> dict:
+WHY = "## Why it matters\n\nThe owner waits for the thing."
+CRITERIA = "## Acceptance criteria\n\n- A test shows the thing."
+ALL_BOXES = tuple(box.name for box in jira.DOR_BOXES)
+# A Ready ticket the start accepts (CHB-187): Why it matters, every judgment box ticked, acceptance criteria.
+COMPLETE = jira.text_to_adf(f"{WHY}\n\n## Definition of Ready\n\n{jira.checklist_markdown(ALL_BOXES)}\n\n{CRITERIA}")
+
+
+def issue(
+    key: str, status: str, *, kind: str = "Task", priority: str = "Medium", blocked_by: str | None = None, description: object = COMPLETE
+) -> dict:
     links = [{"type": {"name": "Blocks"}, "inwardIssue": {"key": blocked_by}}] if blocked_by else []
     return {
         "key": key,
@@ -38,7 +47,7 @@ def issue(key: str, status: str, *, kind: str = "Task", priority: str = "Medium"
             "issuetype": {"name": kind},
             "priority": {"name": priority},
             "issuelinks": links,
-            "description": None,
+            "description": description,
         },
     }
 
@@ -133,6 +142,49 @@ class InProgressBelowMinimum(StateCase):
     def test_epics_do_not_count_as_in_progress(self):
         issues = [issue("CHB-1", "3", kind="Epic")] + [issue(f"CHB-{n}", "2") for n in (7, 8, 9)]
         self.assertEqual(run(read=board(issues), state=self.state)[0], 2)
+
+
+class StartAcceptance(StateCase):
+    """CHB-187: the hook names only a ticket the start accepts, and lists what the others lack."""
+
+    def test_a_top_ticket_without_acceptance_criteria_is_not_named_as_startable(self):
+        bare = jira.text_to_adf(f"{WHY}\n\n## Definition of Ready\n\n{jira.checklist_markdown(ALL_BOXES)}")
+        issues = [issue("CHB-44", "2", priority="High", description=bare)] + [issue(f"CHB-{n}", "2") for n in (20, 21)]
+        code, _, err = run(read=board(issues), state=self.state)
+        self.assertEqual(code, 2)
+        self.assertNotIn("has a ticket that can start", err)
+        self.assertNotIn("Start it now", err)
+        self.assertIn("no Ready ticket can start", err)
+        self.assertIn("CHB-44 lacks acceptance criteria", err)
+
+    def test_the_second_ticket_is_not_named_while_the_top_one_has_a_gap(self):
+        """A start takes the top ticket only, so a complete ticket below a gapped one cannot start."""
+        bare = jira.text_to_adf(WHY)
+        issues = [issue("CHB-44", "2", priority="High", description=bare), issue("CHB-45", "2")] + [issue(f"CHB-{n}", "2") for n in (20, 21)]
+        _, _, err = run(read=board(issues), state=self.state)
+        self.assertNotIn("Start it now", err)
+        self.assertIn("CHB-44 lacks acceptance criteria and Definition of Ready (no section)", err)
+        self.assertNotIn("CHB-45 lacks", err)
+
+    def test_unticked_boxes_are_named(self):
+        some = jira.text_to_adf(f"{WHY}\n\n## Definition of Ready\n\n{jira.checklist_markdown(('why', 'unblocked', 'acceptance'))}\n\n{CRITERIA}")
+        issues = [issue("CHB-44", "2", priority="High", description=some)] + [issue(f"CHB-{n}", "2") for n in (20, 21)]
+        _, _, err = run(read=board(issues), state=self.state)
+        self.assertIn("CHB-44 lacks Definition of Ready (unticked: trigger, decision, small)", err)
+
+    def test_a_complete_top_ticket_is_still_named(self):
+        issues = [issue("CHB-7", "2", priority="High")] + [issue(f"CHB-{n}", "2") for n in (20, 21)]
+        code, _, err = run(read=board(issues), state=self.state)
+        self.assertEqual(code, 2)
+        self.assertIn('Start it now: factory/bin/jira transition CHB-7 "In Progress"', err)
+
+    def test_the_hook_and_the_start_agree(self):
+        """Every ticket the hook calls startable passes start_gaps, the check the start makes."""
+        for description in (COMPLETE, jira.text_to_adf(WHY), None):
+            with self.subTest(description=description):
+                issues = [issue("CHB-7", "2", description=description)]
+                top, _ = jira.startable(issues, COLUMNS)
+                self.assertEqual(top == "CHB-7", jira.start_gaps("CHB-7", description) == [])
 
 
 class ReadyBelowMinimum(StateCase):
