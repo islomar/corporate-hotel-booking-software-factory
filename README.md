@@ -190,8 +190,11 @@ The git pre-commit hook runs `make check` here too. You need Docker; the first r
 What the container gets:
 
 - No secret. No host environment variable, keyring, 1Password, Claude Code or Jira access. Commands that need a secret (`factory/bin/as-agent`, `factory/bin/jira`, `git push`) run on the host.
-- The checkout, mounted at its own path, so git worktrees work. Its git folder and `.claude/` are read-only: the container cannot plant a git hook or a Claude Code hook that the host would run.
-- `frontend/node_modules` in a Docker volume per checkout (`chb-sandbox-nm-<hash>`), apart from the host folder. `npm ci` runs there when `frontend/package-lock.json` changes.
+- The checkout, read-only, at its own path, so git worktrees work.
+  Only `backend/` and `frontend/` are writable: the container cannot change a hook, script or Makefile that the host runs.
+  Changes in those two folders show in `git status`; files git ignores there do not.
+- The frontend's installed packages in a Docker volume per checkout (`chb-sandbox-nm-<hash>`), apart from the host folder.
+  `npm ci` runs there when `frontend/package-lock.json` changes.
 - A cache volume for uv and npm (`chb-sandbox-cache`).
 - Outbound HTTPS only to the hosts in `.devcontainer/allowed-hosts.txt`.
 

@@ -31,10 +31,22 @@ DENIED = [
     "FOO=1 uv run pytest x.py",
     "echo start; npm ci",
     "git status && make check",
+    "timeout 600 npm ci",
+    "timeout -s KILL 10m make check",
+    "nice -n 5 npm ci",
+    "env -u HOME npm ci",
+    "stdbuf -oL make check",
+    "xargs -n 1 npm install < pkgs.txt",
+    "sudo -u agent npm ci",
+    "setsid uv sync",
+    "/tmp/x/.devcontainer/run npm ci",
+    "other/.devcontainer/run make check",
 ]
 
 ALLOWED = [
     ".devcontainer/run make check",
+    "./.devcontainer/run make check",
+    "timeout 900 .devcontainer/run make check",
     "/home/u/repo/.devcontainer/run bash -c 'cd frontend && npm ci && npm test'",
     "rtk .devcontainer/run uv run pytest tests/test_x.py",
     "make",
@@ -56,14 +68,17 @@ class ReasonTest(unittest.TestCase):
     def test_third_party_code_on_the_host_is_denied_with_the_sandbox_command(self):
         for command in DENIED:
             with self.subTest(command=command):
-                why = hook.reason(command)
+                why = hook.reason(command, top="/home/u/repo")
                 self.assertIsNotNone(why)
                 self.assertIn(".devcontainer/run", why)
 
     def test_the_sandbox_launcher_and_host_only_commands_are_allowed(self):
         for command in ALLOWED:
             with self.subTest(command=command):
-                self.assertIsNone(hook.reason(command))
+                self.assertIsNone(hook.reason(command, top="/home/u/repo"))
+
+    def test_an_absolute_launcher_path_needs_a_known_checkout(self):
+        self.assertIsNotNone(hook.reason("/home/u/repo/.devcontainer/run npm ci", top=None))
 
 
 class MainTest(unittest.TestCase):

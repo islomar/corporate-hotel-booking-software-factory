@@ -6,8 +6,9 @@ The container holds no secret: no host environment variable, no keyring, no 1Pas
 Its outbound network is limited to .devcontainer/allowed-hosts.txt (init-firewall.sh).
 
 - The checkout is mounted at its own host path, so a git worktree's `.git` file resolves.
-- The git folder and `.claude/` are read-only: the container cannot plant a git hook or a
-  Claude Code hook that the host would run later.
+- The checkout and the git folder are read-only; only backend/ and frontend/ are writable.
+  The container cannot change a git hook, a Claude Code hook, a script or the Makefile that
+  the host runs later.
 - frontend/node_modules is a Docker volume per checkout, apart from the host folder.
 - The image tag is a hash of the image files: a changed allow list builds a new image.
 Exit code: the command's, or 125 to 127 from Docker.
@@ -23,6 +24,9 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 IMAGE_FILES = ("Dockerfile", "allowed-hosts.txt", "egress.py", "init-firewall.sh", "entry.sh")
 CACHE_VOLUME = "chb-sandbox-cache"
+# The only folders the container may write. Everything else, including the hooks the host runs
+# (factory/, scripts/, .claude/, .devcontainer/, Makefile), is read-only.
+WRITABLE = ("backend", "frontend")
 
 
 def image_tag(context: Path = HERE) -> str:
@@ -42,9 +46,9 @@ def docker_args(top: str, git_common_dir: str, image: str, command: list[str], *
         args.append("-t")
     args += ["--cap-add", "NET_ADMIN", "--cap-add", "NET_RAW"]
     args += [
-        "--mount", f"type=bind,source={top},target={top}",
+        "--mount", f"type=bind,source={top},target={top},readonly",
         "--mount", f"type=bind,source={git_common_dir},target={git_common_dir},readonly",
-        "--mount", f"type=bind,source={top}/.claude,target={top}/.claude,readonly",
+        *[a for d in WRITABLE for a in ("--mount", f"type=bind,source={top}/{d},target={top}/{d}")],
         "--mount", f"type=volume,source={node_modules_volume(top)},target={top}/frontend/node_modules",
         "--mount", f"type=volume,source={CACHE_VOLUME},target=/home/agent/.cache",
         "--workdir", top,
@@ -52,6 +56,11 @@ def docker_args(top: str, git_common_dir: str, image: str, command: list[str], *
         *command,
     ]
     return args
+
+
+def prepare(top: str) -> None:
+    """Make the mount point of the node_modules volume as the user: Docker would make it as root."""
+    (Path(top) / "frontend" / "node_modules").mkdir(exist_ok=True)
 
 
 def _git(*args: str) -> str:
@@ -77,6 +86,7 @@ def main(argv: list[str]) -> int:
     except subprocess.CalledProcessError as error:
         print(f"run: docker build failed ({error.returncode})", file=sys.stderr)
         return 125
+    prepare(top)
     tty = sys.stdin.isatty() and sys.stdout.isatty()
     return subprocess.run(docker_args(top, common, tag, argv, tty=tty), check=False).returncode
 

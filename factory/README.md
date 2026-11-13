@@ -494,7 +494,8 @@ The hook denies them on the host and names the sandbox form, `.devcontainer/run 
 - `uv`, `uvx`, `npm`, `npx`, `pnpm`, `yarn`, `pip`, `pip3`, `pytest`, `vitest`, `python -m pytest`, `python -m pip`;
 - `make check`, `make test`, `make check-backend`, `make check-frontend`, `make check-deps`, `make format`, `make mutate`.
 
-Allowed: `.devcontainer/run ...`, other `make` targets (`dev`, `up` and `e2e` start Docker themselves), stdlib Python such as `python3 -I -m unittest`.
+Wrappers such as `timeout`, `nice -n 5`, `env -u X`, `xargs` and `sudo` are skipped with their options.
+Allowed: `.devcontainer/run ...` (relative, or the absolute path in this checkout), other `make` targets (`dev`, `up` and `e2e` start Docker themselves), stdlib Python such as `python3 -I -m unittest`.
 It does not see a tool called inside `bash -c "..."`, `eval` or a script. The sandbox container is described in README.md, "Sandbox container".
 
 The two Bash hooks drop redirections (`2>&1`, `> file`, `2>/dev/null`) and strip `rtk`, `rtk proxy`, `factory/bin/as-agent`, `env`, `uv run`, `npx` and `python -m` before they read a command.

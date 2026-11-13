@@ -34,15 +34,20 @@ class DockerArgsTest(unittest.TestCase):
     def mounts(self, args):
         return [args[i + 1] for i, word in enumerate(args) if word == "--mount"]
 
-    def test_the_checkout_is_mounted_at_its_own_path_so_git_worktree_links_resolve(self):
+    def test_the_checkout_is_mounted_read_only_at_its_own_path_so_git_worktree_links_resolve(self):
         args = self.args()
-        self.assertIn(f"type=bind,source={TOP},target={TOP}", self.mounts(args))
+        self.assertIn(f"type=bind,source={TOP},target={TOP},readonly", self.mounts(args))
         self.assertEqual(args[args.index("--workdir") + 1], TOP)
 
-    def test_git_and_claude_settings_are_read_only_so_the_container_cannot_plant_code_the_host_runs(self):
+    def test_only_backend_and_frontend_are_writable_so_the_container_cannot_change_code_the_host_runs(self):
         mounts = self.mounts(self.args())
         self.assertIn(f"type=bind,source={COMMON},target={COMMON},readonly", mounts)
-        self.assertIn(f"type=bind,source={TOP}/.claude,target={TOP}/.claude,readonly", mounts)
+        writable = [m for m in mounts if m.startswith("type=bind") and not m.endswith(",readonly")]
+        self.assertEqual(
+            writable,
+            [f"type=bind,source={TOP}/backend,target={TOP}/backend",
+             f"type=bind,source={TOP}/frontend,target={TOP}/frontend"],
+        )
 
     def test_node_modules_live_in_a_volume_of_this_checkout_not_in_the_host_folder(self):
         mounts = self.mounts(self.args())
@@ -71,6 +76,15 @@ class DockerArgsTest(unittest.TestCase):
     def test_a_terminal_gets_a_tty(self):
         self.assertIn("-t", self.args(tty=True))
         self.assertNotIn("-t", self.args(tty=False))
+
+
+class PrepareTest(unittest.TestCase):
+    def test_the_node_modules_mount_point_is_made_by_the_user_so_docker_does_not_make_it_as_root(self):
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder) / "frontend").mkdir()
+            run.prepare(folder)
+            self.assertTrue((Path(folder) / "frontend" / "node_modules").is_dir())
+            run.prepare(folder)  # an existing folder is kept
 
 
 class ImageTagTest(unittest.TestCase):
