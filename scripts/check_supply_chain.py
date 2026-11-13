@@ -463,6 +463,14 @@ def main(argv: list[str]) -> int:
         print(f"::error::supply-chain check could not run: {error}")
         return 2
     verdict = decide(evidence)
+    if verdict.ok:
+        # CHB-184: a run that passed on an approval can finish after a dismissal. Read the
+        # reviews once more as the last step, so a pass never outlives a dismissal it saw.
+        try:
+            verdict = decide(gather(args, token))
+        except (CheckError, OSError, ValueError, KeyError) as error:
+            print(f"::error::supply-chain check could not run: {error}")
+            return 2
     print(verdict.message)
     if not verdict.ok:
         print("::error::supply-chain: " + verdict.message.splitlines()[-1])

@@ -167,6 +167,7 @@ Every Dependabot PR therefore waited for the owner, auto-merge or not.
   A `pull_request_review` run that passes re-runs the failed runs of the same head (`scripts/rerun_failed_supply_chain.py`, job permission `actions: write`).
   The agent's App cannot re-run workflows; the workflow token can.
   A re-run reads the live reviews, so it passes only while the owner's approval stands. A PR without that approval never reaches the re-run step.
+  Every run that would pass reads the reviews once more as its last step, so a run that started before a dismissal fails if it finishes after it.
 - The trailer is trusted data: GitHub verified the commit, and only Dependabot can write to its branches (next bullet).
 - The workflow and the script run from the PR's merge commit. Their integrity rests on CODEOWNERS: both have their own owner lines.
 - A second ruleset, `dependabot-branches` (`infra/github/ruleset.tf`), restricts creation and update of `refs/heads/dependabot/**/*`.

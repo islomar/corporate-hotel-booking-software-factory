@@ -423,11 +423,13 @@ class DependabotUpdateTypeTest(unittest.TestCase):
 class MainTest(unittest.TestCase):
     ARGS = ("--repo", "o/r", "--pr", "7", "--base", OLD, "--head", HEAD, "--owner", OWNER)
 
-    def run_main(self, gather_result=None, error=None, token="t"):  # noqa: S107
+    def run_main(self, gather_result=None, error=None, token="t", later=()):  # noqa: S107
+        results = [gather_result, *later]
+
         def fake_gather(args, token):
             if error:
                 raise error
-            return gather_result
+            return results.pop(0) if len(results) > 1 else results[0]
 
         env = {"GH_TOKEN": token} if token else {}
         out = io.StringIO()
@@ -441,6 +443,15 @@ class MainTest(unittest.TestCase):
 
     def test_pass_exits_zero(self):
         self.assertEqual(self.run_main(evidence())[0], 0)
+
+    def test_a_dismissal_during_the_run_fails_it(self):
+        # CHB-184: a re-run that read an approval must not finish green after a dismissal.
+        approved = evidence(pr_author="someone", reviews=[review("APPROVED")])
+        dismissed = evidence(pr_author="someone", reviews=[review("APPROVED"), review("DISMISSED")])
+        self.assertEqual(self.run_main(approved)[0], 0)
+        code, out = self.run_main(approved, later=[dismissed])
+        self.assertEqual(code, 1)
+        self.assertIn("::error::supply-chain:", out)
 
     def test_failing_verdict_exits_one_with_an_error_annotation(self):
         code, out = self.run_main(evidence(pr_author="someone"))
