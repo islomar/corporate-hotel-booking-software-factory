@@ -260,6 +260,11 @@ Meaning: the change is merged and deployed, but nobody has yet confirmed that it
 - Leave to Done: each acceptance criterion is checked in the live system, and the evidence is written as a ticket comment.
   Evidence is concrete: the smoke test of the deploy, a `gcloud` or `gh api` read of the real setting, a screenshot, a log line, a metric.
   A passing plan or a green CI run is not evidence of the live result.
+- Criteria are checkboxes (CHB-185). `factory/bin/jira create` and `section` write each top-level bullet of "Acceptance criteria" and "Acceptance criteria (Validating)" as an unticked Jira checkbox.
+  The "When:", "Speed up:", "Where", "Pass", "Who" and "If it fails" lines of the Validating section stay plain.
+  After the live check, `factory/bin/jira tick CHB-<n> <number or text> --evidence-file FILE` posts the evidence as a comment, then ticks that criterion.
+  `factory/bin/jira transition CHB-<n> Done` exits 4 and names each unticked criterion. The agent moves a ticket to Done unattended only when every criterion is ticked.
+  A ticket whose criteria are plain bullets (written before CHB-185) has no checkbox to tick and is not blocked by this rule.
 - Leave to In Progress: the check fails. A new or reopened PR fixes it.
 - Some checks need time (for example a background cleanup that runs within a day). The ticket stays in Validating until then.
 - At session start, the SessionStart hook lists each "When:" line as due, check, or unmarked while its date is ahead (CHB-140, `factory/hooks/validating_sweep.py`).
