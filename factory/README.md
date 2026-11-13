@@ -298,8 +298,11 @@ It reads them again after the POST and exits 1 when `CHB-<b>` does not show as a
 A key outside CHB or a ticket linked to itself exits 2 before the wrapper reads 1Password.
 It never removes a link: the owner does that in the Jira UI.
 
-Exit codes: 0 done, 1 Jira refused or failed, 2 usage error, 3 no credential (no service account token in the keyring, or `op` failed), 4 a board rule blocks the transition.
+Exit codes: 0 done, 1 Jira refused or failed, 2 usage error, 3 no credential (no service account token in the keyring, or `op` failed), 4 a board rule blocks the transition,
+5 a WIP limit blocks the move, 6 the move is done and Ready is below its minimum (CHB-164).
 On 3 the agent stops and reports. On 4 the ticket does not move: the agent comments on it and reports.
+On 5 the ticket does not move: the agent runs the wait command that `transition` prints, in the background.
+On 6 the ticket moved: the agent refills Ready from the candidates that `transition` prints.
 
 The account is a CHB project Administrator, not a Member: Jira Free has no Member role.
 It can delete issues and change project and board settings through the REST API.
