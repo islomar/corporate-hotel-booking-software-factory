@@ -20,6 +20,8 @@
 
 - Status: accepted
 - Date: 2026-11-06
+- Amended 2026-11-13 (CHB-181): the author App keeps `workflows: write` (CHB-86, amendment in ADR-d7b7). The next step under GitHub Actions bumps, "after CHB-86 removes `workflows: write`", does not apply.
+- Amended 2026-11-13 (CHB-181): Dependabot runs daily since CHB-135 (2026-11-08), so "one per group and week" under Consequences is out of date.
 
 ## Context
 
@@ -184,7 +186,10 @@ Consequences:
 - GitHub Actions bumps change `.github/workflows/`, which stays in CODEOWNERS. They keep needing the owner.
   Next step, after CHB-86 removes `workflows: write` from the agent App: move `/.github/workflows/` out of CODEOWNERS and add it to the script's supply-chain set.
   Without that second part, Actions pins lose all protection.
-- Unverified: the re-run step on a real PR. Test it on the first owner-approved supply-chain PR after CHB-184 merges: the merge box must turn green after the approval, without a manual re-run.
+- First real run, on PR #115 itself (2026-11-13): the re-run step failed with `ModuleNotFoundError: No module named 'check_supply_chain'`.
+  `python3 -I` leaves the script's folder off `sys.path`. Fixed in the same PR, with a test that starts the script the way the workflow does.
+- Unverified: the re-run step on a real PR after that fix.
+  Test it on the first owner-approved supply-chain PR after CHB-184 merges: the merge box must turn green after the approval, without a manual re-run.
 - Owner-authored PRs cannot pass through owner approval, because GitHub blocks self-approval. The ruleset's required approval blocks them anyway.
 
 ## Consequences

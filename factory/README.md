@@ -172,14 +172,16 @@ Parallel agents that share one scratch folder overwrite each other's files (CHB-
 Why: an owner "Update branch" click makes the owner the last pusher, and the ruleset's `require_last_push_approval` then ignores the owner's approval.
 `docs/knowledge/conflicting-agent-prs-need-the-agent-not-the-owner.md` has the two cases that led to it.
 
-`factory/pr_updates.py` reads the open PRs and acts only on PRs opened by the App (a `Bot` author named `chb-factory-agent`), into `main`, from this repository:
+`factory/pr_updates.py` reads the open PRs and acts only on PRs opened by the App (a `Bot` author named `chb-factory-agent`) or by Dependabot, into `main`, from this repository.
+Every merge to `main` makes each other open PR rebase and run its checks again (ADR-2ba2):
 
 | PR state | Action |
 | --- | --- |
-| Behind `main`, mergeable, not approved | `updatePullRequestBranch` with `updateMethod: REBASE` and `expectedHeadOid` set to the head it read. A push in between makes GitHub refuse; the run logs "head moved" and goes on. |
-| Behind `main`, mergeable, approved | Nothing. `strict_required_status_checks_policy` is false, so it can merge, and a rebase would dismiss the approval. |
+| Behind `main`, mergeable | `updatePullRequestBranch` with `updateMethod: REBASE` and `expectedHeadOid` set to the head it read. A push in between makes GitHub refuse; the run logs "head moved" and goes on. |
+| Behind `main`, mergeable, approved | The same rebase. The `main` ruleset requires an up-to-date branch (`strict_required_status_checks_policy = true`, CHB-177), so an approved PR behind `main` cannot merge. The rebase dismisses the approval: the owner approves the new head, and auto-merge then goes on. |
 | Conflicting | Adds the label `needs-rebase`. No update. |
 | Labelled `needs-rebase`, mergeable again | Removes the label. |
+| Dependabot PR, behind `main`, mergeable | Comments `@dependabot rebase`, unless the agent commented it after the head commit. The `dependabot-branches` ruleset lets only Dependabot push to its branches, so the agent never rebases one itself. A conflicting Dependabot PR rebases on its own. |
 | Mergeable `UNKNOWN` | Read again up to 3 times, 5 s apart; then left alone until the next push. |
 
 The SessionStart sweep lists open agent PRs labelled `needs-rebase` as "resolve first".
@@ -225,7 +227,7 @@ factory/bin/jira edit-comment CHB-12 10071 --body-file comment.md   # the agent'
 factory/bin/jira link CHB-88 --blocked-by CHB-146   # a "Blocks" link: CHB-146 blocks CHB-88
 ```
 
-Text files are plain text. Blank lines separate paragraphs and URLs become links.
+Text files are Markdown: the wrapper renders headings, lists, task lists, `code`, bold and links, and links CHB keys and PR numbers (`text_to_adf` in `factory/jira.py`).
 A file that is not valid UTF-8, an empty summary or an empty comment body exits 2 before the wrapper reads 1Password.
 
 `search` reads only CHB. It sends `project = CHB AND (<jql>)`, with a trailing `ORDER BY` kept outside the parentheses.
@@ -298,8 +300,11 @@ It reads them again after the POST and exits 1 when `CHB-<b>` does not show as a
 A key outside CHB or a ticket linked to itself exits 2 before the wrapper reads 1Password.
 It never removes a link: the owner does that in the Jira UI.
 
-Exit codes: 0 done, 1 Jira refused or failed, 2 usage error, 3 no credential (no service account token in the keyring, or `op` failed), 4 a board rule blocks the transition.
+Exit codes: 0 done, 1 Jira refused or failed, 2 usage error, 3 no credential (no service account token in the keyring, or `op` failed), 4 a board rule blocks the transition,
+5 a WIP limit blocks the move, 6 the move is done and Ready is below its minimum (CHB-164).
 On 3 the agent stops and reports. On 4 the ticket does not move: the agent comments on it and reports.
+On 5 the ticket does not move: the agent runs the wait command that `transition` prints, in the background.
+On 6 the ticket moved: the agent refills Ready from the candidates that `transition` prints.
 
 The account is a CHB project Administrator, not a Member: Jira Free has no Member role.
 It can delete issues and change project and board settings through the REST API.
@@ -376,7 +381,7 @@ Sessions started in another directory do not load this hook.
 
 ## Hooks at a glance
 
-Ten hooks guard a Claude Code session, and each section below describes one.
+Twelve hooks guard a Claude Code session, and each section below describes one.
 The diagram puts them side by side by Claude Code event, so a denied command or a refused end of turn can be traced to its hook.
 Each node names the hook file, the tool matcher of `.claude/settings.json` and what the hook blocks or reports.
 `factory/tests/test_readme_diagrams.py` fails when a registered hook is missing from the diagram.
@@ -440,6 +445,9 @@ The hook reads the column minimums from the board and the open tickets as the ag
   (CHB-140): the earliest absolute date of a "When:" line has passed. The day is the Europe/Madrid day. The reason names each ticket and each due item.
   Items not yet due, "When:" lines without a date and tickets without the section never block. Comments are read only for tickets with a due item, through the same Jira client.
   A failed comment read prints one line and skips this check; the WIP checks still run. To pass: check the item in the live system and comment the evidence with `factory/bin/jira comment`.
+- An In Review ticket has a merged PR into `main` and no open PR (CHB-179). The PR is the one whose branch is `CHB-<n>-<slug>` or whose title starts `CHB-<n>:`.
+  The reason names the ticket, the PR and the move to Validating. A ticket with an open PR, or with no PR found, never blocks.
+  The SessionStart sweep (`validating_sweep.py`) lists the same tickets with the PR number and merge time. A failed GitHub read prints one line and skips this check.
 
 It fails open with one line on stderr when Jira or 1Password cannot be reached. It refuses once per session for the same findings: the second stop with the same findings passes
 (state in `<temp dir>/chb-wip-minimums-<uid>/`, folder override `CHB_WIP_MINIMUMS_STATE_DIR`). Like the other hooks it is a guardrail: it reads the board, not the reply text (CHB-164).
@@ -482,7 +490,7 @@ It denies a bare full-suite run and names the related-test form:
 - `vitest`, `npx vitest run`, `npm test` or `npm run test` without a file filter, `-t` or `--changed`;
 - `python3 -m unittest` or `python3 -m unittest discover` without `-s <folder>`, `-p <pattern>`, `-k`, a module or a file.
 
-A path of `.` counts as no filter. A number does not count as a vitest filter: it is likely the value of an option such as `--retry 2`.
+A path of `.` counts as no filter. A number does not count as a Vitest filter: it is likely the value of an option such as `--retry 2`.
 `make check` and `make test` run the full suite and stay allowed: CLAUDE.md requires `make check` before every commit.
 
 The two Bash hooks drop redirections (`2>&1`, `> file`, `2>/dev/null`) and strip `rtk`, `rtk proxy`, `factory/bin/as-agent`, `env`, `uv run`, `npx` and `python -m` before they read a command.
@@ -663,7 +671,8 @@ make -C ~/workspace/corporate-hotel-booking-software-factory review-agreement
 | `review/schema.json` | Output shape: five dimensions, each with a score and findings, plus a summary. |
 | `review/gate.py` | Validates the output, recomputes the scores, decides, and builds the check run. |
 | `review/resolve_pr.py` | Picks the PR to review from API data: open, not draft, into `main`, same repository, not Dependabot, head equal to the run's SHA. |
-| `review/plan.py` | Skip, carry forward or review, and which model. Holds the docs allowlist. |
+| `review/plan.py` | Skip, carry forward or review, and which model. |
+| `review/docs_list.py` | The docs allowlist, shared by `plan.py` and `ci.yml` (CHB-117). |
 | `review/agreement.py` | Counts the owner's 👍 and 👎 on review comments of merged PRs. Prints the stage 1 exit. |
 
 The gate ignores every score the model claims. Each dimension starts at 10 and loses 3 per critical finding, 2 per improvement and 0.5 per cleanup.

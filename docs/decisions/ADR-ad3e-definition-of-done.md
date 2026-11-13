@@ -12,6 +12,7 @@
 
 - Status: accepted
 - Date: 2026-11-05
+- Amended 2026-11-13 (CHB-181): the Jira workflow has Backlog, Ready, In Progress, In Review, Validating, Needs human, Done and Discarded (CHB-153). `docs/process/kanban.md` is the source.
 
 ## Decision
 

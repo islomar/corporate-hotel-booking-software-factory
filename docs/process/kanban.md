@@ -230,6 +230,8 @@ Meaning: a pull request waits for review and merge.
 - Leave to In Progress: review asked for changes.
 - WIP limit: a max on the board. A full In Review blocks starting work, never opening the PR of work already started.
   The agent then reviews, fixes or closes pull requests before it starts another ticket.
+- A ticket whose PR is merged leaves In Review at once. The SessionStart sweep lists it.
+  `check_wip_minimums.py` refuses the end of a turn once while it stays (CHB-179). An open PR or no PR found never blocks.
 
 ### Validating
 
