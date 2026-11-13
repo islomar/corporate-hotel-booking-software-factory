@@ -280,8 +280,8 @@ Meaning: the work cannot continue without the owner.
 - Enter (owner rule, 2026-11-10): when the owner must run something to finish a ticket (merge a PR that changes Terraform and then plan or apply, a console step, a secret),
   the agent moves the ticket to Needs human with its owner steps as soon as CI and review are green and nothing else is pending on the agent's side.
   A normal PR that waits only for a plain approval keeps its ticket where it is: In Review.
-- At session start, the SessionStart hook lists each Needs human ticket whose newest comment by anyone but the agent account is newer than the agent's newest comment,
-  as "owner answered" with the key, summary and comment time. The agent resumes those first, then comments what it did (CHB-171, `factory/hooks/validating_sweep.py`).
+- At session start, the SessionStart hook lists each Needs human ticket whose newest comment by the owner's account (the CHB project lead) is newer than the agent's newest comment.
+  Comments by other accounts are ignored. The line reads "owner's comment" and has the key, summary and comment time. The agent resumes those first, then comments what it did (CHB-171, `factory/hooks/validating_sweep.py`).
   The agent does not watch Jira during a session: a comment written mid-session is picked up at the next session start.
 - Leave: the owner answers or acts. The ticket goes back to the status it came from.
 - This status is the top of every notification.
