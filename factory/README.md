@@ -379,7 +379,7 @@ Sessions started in another directory do not load this hook.
 
 ## Hooks at a glance
 
-Ten hooks guard a Claude Code session, and each section below describes one.
+Twelve hooks guard a Claude Code session, and each section below describes one.
 The diagram puts them side by side by Claude Code event, so a denied command or a refused end of turn can be traced to its hook.
 Each node names the hook file, the tool matcher of `.claude/settings.json` and what the hook blocks or reports.
 `factory/tests/test_readme_diagrams.py` fails when a registered hook is missing from the diagram.
