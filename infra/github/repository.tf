@@ -22,9 +22,33 @@ import {
 
 resource "github_repository" "this" {
   name         = local.repository
-  description  = "Codurance Corporate Hotel Booking kata built by an AI-agent software factory (540 + eferro practices)"
+  description  = "Codurance Corporate Hotel Booking kata built by an AI-agent software factory: outside-in TDD, trunk-based development, continuous delivery. Practices from eferro and the 540 talk."
   homepage_url = local.variables.APP_URL
   visibility   = "public"
+
+  # GitHub allows 20 topics at most.
+  topics = [
+    "software-factory",
+    "ai-agents",
+    "agentic-coding",
+    "claude-code",
+    "ai-assisted-development",
+    "kata",
+    "code-kata",
+    "corporate-hotel-booking",
+    "codurance",
+    "tdd",
+    "outside-in-tdd",
+    "extreme-programming",
+    "continuous-delivery",
+    "trunk-based-development",
+    "fastapi",
+    "react",
+    "playwright",
+    "google-cloud-run",
+    "terraform",
+    "opentelemetry",
+  ]
 
   # Work is tracked in Jira (CHB). Docs live in the repository.
   has_issues   = false
