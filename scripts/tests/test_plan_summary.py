@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from plan_summary import MARKER, StateError, error_lines, failure_comment, main, state_variables, summarize
 
 ROOT = Path(__file__).resolve().parents[2]
-SECRET = "hunter2-SECRET-value"
+CANARY = "canary-value-9f3a"
 EMAIL = "owner@example.org"
 
 
@@ -28,16 +28,16 @@ PLAN = {
     "format_version": "1.2",
     "resource_changes": [
         change("google_project_service.run", "no-op"),
-        change("google_service_account.new", "create", after={"display_name": SECRET}),
-        change("google_cloud_run_v2_service.chb", "update", before={"x": SECRET}, after={"x": "other"}),
-        change("google_billing_budget.monthly", "delete", before={"billing_account": SECRET}),
+        change("google_service_account.new", "create", after={"display_name": CANARY}),
+        change("google_cloud_run_v2_service.chb", "update", before={"x": CANARY}, after={"x": "other"}),
+        change("google_billing_budget.monthly", "delete", before={"billing_account": CANARY}),
         change("google_monitoring_notification_channel.email", "delete", "create", before={"labels": {"e": EMAIL}}),
         change('google_project_iam_member.planner["roles/viewer"]', "create"),
         change("data.google_project.p", "read"),
     ],
-    "output_changes": {"leak": {"actions": ["create"], "after": SECRET}},
+    "output_changes": {"leak": {"actions": ["create"], "after": CANARY}},
     "variables": {"alert_email": {"value": EMAIL}},
-    "prior_state": {"values": {"root_module": {"resources": [{"values": {"billing_account": SECRET}}]}}},
+    "prior_state": {"values": {"root_module": {"resources": [{"values": {"billing_account": CANARY}}]}}},
 }
 STATE = {
     "values": {
@@ -73,7 +73,7 @@ class SummarizeTest(unittest.TestCase):
         self.assertNotIn("data.google_project.p", self.text)
 
     def test_no_value_from_the_plan_reaches_the_summary(self):
-        self.assertNotIn(SECRET, self.text)
+        self.assertNotIn(CANARY, self.text)
         self.assertNotIn(EMAIL, self.text)
         self.assertNotIn("leak", self.text)
 
@@ -163,16 +163,16 @@ class MainTest(unittest.TestCase):
             code, printed = self.run_main("summary", str(plan), str(body), "--sha", "abc1234", "--run-url", "u")
             self.assertEqual(code, 0)
             self.assertEqual(body.read_text(), printed.rstrip("\n") + "\n" if printed else "")
-            self.assertNotIn(SECRET, printed)
-            self.assertNotIn(SECRET, body.read_text())
+            self.assertNotIn(CANARY, printed)
+            self.assertNotIn(CANARY, body.read_text())
 
     def test_summary_of_unreadable_json_prints_no_content(self):
         with tempfile.TemporaryDirectory() as tmp:
             plan = Path(tmp, "plan.json")
-            plan.write_text("{" + SECRET)
+            plan.write_text("{" + CANARY)
             code, printed = self.run_main("summary", str(plan), str(Path(tmp, "b.md")), "--sha", "s", "--run-url", "u")
             self.assertEqual(code, 1)
-            self.assertNotIn(SECRET, printed)
+            self.assertNotIn(CANARY, printed)
 
     def test_state_vars_masks_each_value_and_writes_the_env_file(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -200,7 +200,7 @@ class MainTest(unittest.TestCase):
     def test_errors_prints_only_error_lines(self):
         with tempfile.TemporaryDirectory() as tmp:
             log = Path(tmp, "plan.log")
-            log.write_text(f"  + name = \"{SECRET}\"\n│ Error: nope\n")
+            log.write_text(f"  + name = \"{CANARY}\"\n│ Error: nope\n")
             code, printed = self.run_main("errors", str(log))
             self.assertEqual(code, 0)
             self.assertEqual(printed.strip(), "Error: nope")

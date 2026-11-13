@@ -90,8 +90,7 @@ jobs:
           terraform show -json > "$out/state.json" 2> "$out/state.log" || fail "reading the state failed" state
           python3 -I "$GITHUB_WORKSPACE/scripts/plan_summary.py" state-vars "$out/state.json" "$out/vars.env" || fail "the state lacks a variable the plan needs" state
           rm -f "$out/state.json"
-          # The masks are printed. Only then do the values go into the environment of this step's successors.
-          cat "$out/vars.env" >> "$GITHUB_ENV"
+          # The masks are printed first. The values live in this step's environment only.
           set -a
           while IFS='=' read -r name value; do export "$name=$value"; done < "$out/vars.env"
           set +a
