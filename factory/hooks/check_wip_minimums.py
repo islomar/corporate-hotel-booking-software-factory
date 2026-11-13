@@ -14,6 +14,9 @@ the open tickets from one search) and refuses to end the turn, exit 2 with the r
 - A Validating ticket has a due item (CHB-163, `validating_sweep.classify`) and the agent account has not commented on it today (Europe/Madrid day).
   The reason names the ticket and each due item. Items not yet due, items without a date and tickets without the section never block.
   A failed comment read prints one line and skips this check; the WIP checks still run.
+- An In Review ticket has a merged PR (CHB-179, `validating_sweep.merged_in_review`) and no open PR. The reason names the ticket,
+  the PR and the move. A ticket with an open PR, or with no PR found, never blocks. GitHub is read only when In Review holds a ticket.
+  A failed GitHub read prints one line and skips this check.
 Epics count toward no column (keys of the board, CHB-157). A column without a minimum is not checked.
 
 It fails open: when Jira or 1Password is unreachable, or anything unexpected happens, it prints one line
@@ -61,6 +64,8 @@ VALIDATING = "Validating"
 
 Read = Callable[[], "tuple[Sequence[jira.Column], list[dict[str, Any]]]"]
 ReadComments = Callable[[str], "list[datetime]"]
+ReadPulls = Callable[[], "dict[str, Any]"]
+IN_REVIEW = "In Review"
 
 
 @functools.cache
@@ -146,6 +151,24 @@ def validating_findings(
     return lines
 
 
+def in_review_findings(columns: Sequence[jira.Column], issues: list[dict[str, Any]], read_pulls: ReadPulls) -> list[str]:
+    """One line per In Review ticket whose PR is merged and that has no open PR (CHB-179).
+
+    Epics do not count. GitHub is read only when In Review holds a ticket.
+    """
+    column = next((c for c in columns if c.name == IN_REVIEW), None)
+    if column is None:
+        return []
+    keys = [
+        str(found["key"])
+        for found in issues
+        if found["fields"]["issuetype"]["name"] != "Epic" and str(found["fields"]["status"]["id"]) in column.status_ids
+    ]
+    if not keys:
+        return []
+    return validating_sweep.in_review_findings(keys, read_pulls())
+
+
 def state_dir() -> str:
     return os.environ.get(STATE_DIR_ENV) or posixpath.join(tempfile.gettempdir(), f"chb-wip-minimums-{os.getuid()}")
 
@@ -182,7 +205,7 @@ def already_refused(folder: str, session_id: str, fingerprint: str | None) -> bo
 
 
 def _reason(error: BaseException) -> str:
-    known = (jira.JiraError, jira.CredentialError, op_service_account.ServiceAccountError)
+    known = (jira.JiraError, jira.CredentialError, op_service_account.ServiceAccountError, validating_sweep.SweepError)
     text = str(error) if isinstance(error, known) else type(error).__name__
     return " ".join(text.split())[:300] or type(error).__name__
 
@@ -193,6 +216,7 @@ def main(
     state_dir: str | None = None,
     read_comments: ReadComments | None = None,
     now: datetime | None = None,
+    read_pulls: ReadPulls | None = None,
 ) -> int:
     try:
         event = json.load(stdin)
@@ -212,6 +236,10 @@ def main(
         lines += validating_findings(columns, issues, now or datetime.now(timezone.utc), read_comments or read_agent_comments)
     except BaseException as error:  # noqa: BLE001 - fail open on anything
         print(f"Validating check skipped: {_reason(error)}", file=sys.stderr)
+    try:
+        lines += in_review_findings(columns, issues, read_pulls or validating_sweep.read_pulls)
+    except BaseException as error:  # noqa: BLE001 - fail open on anything
+        print(f"In Review check skipped: {_reason(error)}", file=sys.stderr)
     fingerprint = hashlib.sha256("\n".join(lines).encode()).hexdigest() if lines else None
     try:
         repeated = already_refused(state_dir if state_dir is not None else globals()["state_dir"](), session_id, fingerprint)

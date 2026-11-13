@@ -78,11 +78,26 @@ def comments_at(*times: str):
     return read
 
 
-def run(message="Done.", read=None, state="", session="s1", active=False, read_comments=None, now=NOW):
+NO_PULLS = {"data": {"repository": {"merged": {"nodes": []}, "open": {"nodes": []}}}}
+
+
+def pulls(merged=(), opened=()):
+    """read_pulls seam: merged PRs as (number, branch) and open PRs as (number, branch)."""
+    return lambda: {
+        "data": {
+            "repository": {
+                "merged": {"nodes": [{"number": n, "title": f"PR {n}", "headRefName": b, "mergedAt": "2026-11-11T09:00:00Z"} for n, b in merged]},
+                "open": {"nodes": [{"number": n, "title": f"PR {n}", "headRefName": b} for n, b in opened]},
+            }
+        }
+    }
+
+
+def run(message="Done.", read=None, state="", session="s1", active=False, read_comments=None, now=NOW, read_pulls=lambda: NO_PULLS):
     event = {"last_assistant_message": message, "session_id": session, "stop_hook_active": active}
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-        code = hook.main(io.StringIO(json.dumps(event)), read=read, state_dir=state, read_comments=read_comments, now=now)
+        code = hook.main(io.StringIO(json.dumps(event)), read=read, state_dir=state, read_comments=read_comments, now=now, read_pulls=read_pulls)
     return code, out.getvalue(), err.getvalue()
 
 
@@ -344,6 +359,59 @@ class ValidatingDue(StateCase):
         self.assertEqual(code, 2)
         self.assertIn("Ready is below its minimum", err)
         self.assertIn("CHB-140", err)
+
+
+class InReviewMerged(StateCase):
+    """CHB-179: an In Review ticket whose PR is merged blocks the stop once."""
+
+    BASE = [issue("CHB-1", "3")] + [issue(f"CHB-{n}", "2") for n in (7, 8, 9)]
+
+    def test_refuses_and_names_the_ticket_and_the_pr(self):
+        issues = self.BASE + [issue("CHB-170", "4")]
+        code, _, err = run(read=board(issues), read_pulls=pulls(merged=[(105, "CHB-170-contributing")]), state=self.state)
+        self.assertEqual(code, 2)
+        self.assertIn("CHB-170 is in In Review but PR #105 merged into main", err)
+        self.assertIn('factory/bin/jira transition CHB-170 "Validating"', err)
+
+    def test_the_second_stop_is_allowed(self):
+        issues = self.BASE + [issue("CHB-170", "4")]
+        read_pulls = pulls(merged=[(105, "CHB-170-contributing")])
+        self.assertEqual(run(read=board(issues), read_pulls=read_pulls, state=self.state)[0], 2)
+        code, _, err = run(read=board(issues), read_pulls=read_pulls, state=self.state)
+        self.assertEqual(code, 0)
+        self.assertIn("allowing the stop", err)
+
+    def test_an_open_pr_never_blocks(self):
+        issues = self.BASE + [issue("CHB-170", "4")]
+        read_pulls = pulls(merged=[(105, "CHB-170-a")], opened=[(110, "CHB-170-b")])
+        self.assertEqual(run(read=board(issues), read_pulls=read_pulls, state=self.state)[0], 0)
+
+    def test_no_pr_found_never_blocks(self):
+        issues = self.BASE + [issue("CHB-170", "4")]
+        self.assertEqual(run(read=board(issues), state=self.state)[0], 0)
+
+    def test_a_merged_pr_of_a_ticket_in_another_column_never_blocks(self):
+        issues = self.BASE + [issue("CHB-170", "5")]
+        self.assertEqual(run(read=board(issues), read_pulls=pulls(merged=[(105, "CHB-170-a")]), state=self.state)[0], 0)
+
+    def test_an_epic_in_review_is_ignored(self):
+        issues = self.BASE + [issue("CHB-170", "4", kind="Epic")]
+        self.assertEqual(run(read=board(issues), read_pulls=pulls(merged=[(105, "CHB-170-a")]), state=self.state)[0], 0)
+
+    def test_github_is_not_read_without_an_in_review_ticket(self):
+        def boom():
+            raise AssertionError("GitHub must not be read")
+
+        self.assertEqual(run(read=board(self.BASE), read_pulls=boom, state=self.state)[0], 0)
+
+    def test_a_github_failure_prints_one_line_and_allows(self):
+        def fail():
+            raise hook.validating_sweep.SweepError("gh exited 4")
+
+        issues = self.BASE + [issue("CHB-170", "4")]
+        code, _, err = run(read=board(issues), read_pulls=fail, state=self.state)
+        self.assertEqual(code, 0)
+        self.assertIn("In Review check skipped: gh exited 4", err)
 
 
 class AgentCommentTimes(unittest.TestCase):
