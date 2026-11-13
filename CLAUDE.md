@@ -54,7 +54,8 @@ All work is tracked in Jira space `CHB` (see `TODO.md`). Move tickets only as `d
   A Stop hook (`factory/hooks/check_owner_commands.py`) checks the shell blocks of every reply. See CHB-126.
 - When work waits on a schedule, a run, a person or a limit, tell the owner how to speed it up or unblock it, with the exact step.
   In an "Acceptance criteria (Validating)" section this is the "Speed up:" line. `factory/bin/jira section` refuses a "When:" line without one.
-- Run `make check` before every commit. Gates read exit codes, not output text.
+- Run `.devcontainer/run make check` before every commit. Gates read exit codes, not output text.
+  Package installs, linters and tests run in the sandbox container (`.devcontainer/run <command>`); a hook denies them on the host. See README.md, "Sandbox container".
 - One Jira ticket per branch: `CHB-<n>-<slug>`. Every change reaches `main` through a squash-merged PR: the `main` ruleset applies to everyone (`infra/github/ruleset.tf`).
 - Kata design rules: services stay stateless, no circular dependencies between services, data in repositories, packages follow actors and areas.
 - Do not edit `.claude/`, `factory/` or `.github/` as part of a feature ticket.

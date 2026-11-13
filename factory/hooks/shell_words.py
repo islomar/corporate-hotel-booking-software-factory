@@ -98,7 +98,7 @@ def strip_launchers(words: list[str]) -> list[str]:
     while i < len(words):
         word, prog = words[i], name(words[i])
         nxt = words[i + 1] if i + 1 < len(words) else ""
-        if ASSIGNMENT.match(word):
+        if ASSIGNMENT.match(word) or word.endswith(".devcontainer/run"):  # the sandbox launcher (CHB-31)
             i += 1
         elif (prog, nxt) in RUN_LAUNCHERS:
             i = _skip_options(words, i + 2, LAUNCHER_VALUE_OPTIONS)

@@ -48,6 +48,8 @@ class SimpleCommandsTest(unittest.TestCase):
             "A=1 pytest": ["pytest"],
             "uv run --locked --project backend pytest -q": ["pytest", "-q"],
             "npx --yes vitest run": ["vitest", "run"],
+            ".devcontainer/run uv run pytest": ["pytest"],
+            "/r/.devcontainer/run npm test": ["npm", "test"],
             "python3 -I -m pytest -k x": ["pytest", "-k", "x"],
             "timeout 30 pytest": ["pytest"],
             "timeout -s KILL 30 pytest": ["pytest"],

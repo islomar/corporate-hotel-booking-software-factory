@@ -9,6 +9,7 @@
     - [Local: Grafana](#local-grafana)
     - [Production: Google Cloud console](#production-google-cloud-console)
     - [How export works on Cloud Run](#how-export-works-on-cloud-run)
+  - [Sandbox container](#sandbox-container)
   - [Layout](#layout)
   - [Process](#process)
 
@@ -53,7 +54,7 @@ make dev     # backend and frontend with hot reload: http://localhost:5173
              # Grafana with the app's traces, metrics and logs: http://localhost:3000
 make down    # stop the containers
 make clean-dev  # remove this checkout's containers and volumes (run it when done with make dev in a worktree)
-make check   # lint, typecheck and tests (the pre-commit gate)
+make check   # lint, typecheck and tests (the pre-commit gate); agents: .devcontainer/run make check
 make up      # production image: http://localhost:8080
 make e2e     # Playwright against the production image
 make help    # all targets
@@ -173,10 +174,57 @@ If telemetry setup fails at startup, the app logs one warning and runs without e
 The backend decides sampling itself: health checks (`/api/health`) get request metrics but no traces and no access log line, every other request is traced.
 The sampled flag in an incoming `traceparent` header is ignored; its trace ID is kept.
 
+## Sandbox container
+
+Package installs, linters and tests run code from npm and PyPI.
+`.devcontainer/run <command>` runs such a command in a container, so that code never runs on the host:
+
+```sh
+.devcontainer/run make check
+.devcontainer/run bash -c 'cd backend && uv run --locked pytest tests/test_health.py'
+```
+
+A Claude Code hook (`factory/hooks/route_to_sandbox.py`) denies these commands on the host and names this form.
+The git pre-commit hook runs `make check` here too. You need Docker; the first run builds the image (about a minute).
+
+What the container gets:
+
+- No secret. No host environment variable, keyring, 1Password, Claude Code or Jira access. Commands that need a secret (`factory/bin/as-agent`, `factory/bin/jira`, `git push`) run on the host.
+- The checkout, read-only, at its own path, so git worktrees work.
+  Only `backend/` and `frontend/` are writable: the container cannot change a hook, script or Makefile that the host runs.
+  Changes in those two folders show in `git status`; files git ignores there do not.
+  An existing `backend/.venv` on the host is hidden behind an empty folder.
+  If the container makes `backend/.venv`, or a `.git` or bare repository in either folder, the launcher stops with exit code 3: the host could run code from it.
+- The frontend's installed packages in a Docker volume per checkout (`chb-sandbox-nm-<hash>`), apart from the host folder.
+  `npm ci` runs there when `frontend/package-lock.json` changes.
+- A cache volume for uv and npm (`chb-sandbox-cache`).
+- Outbound HTTPS only to the hosts in `.devcontainer/allowed-hosts.txt`.
+
+At every start, `init-firewall.sh` (as root) resolves the listed hosts, adds GitHub's published address ranges and rejects any other outbound traffic.
+If any step fails, it blocks all traffic but loopback and the command does not run.
+Then `entry.sh` runs the command as user `agent`, with no capabilities and no sudo, so it cannot change the rules.
+To test the firewall: `.devcontainer/run python3 -I /usr/local/share/devcontainer/egress.py check`.
+
+Change the allow list:
+
+1. Add one bare host name per line to `.devcontainer/allowed-hosts.txt`, with a comment that names the command that needs it. No scheme, port, path or wildcard.
+2. Run `python3 -I -m unittest discover -s scripts/tests -p 'test_devcontainer_*.py'`.
+3. The next `.devcontainer/run` builds a new image: the image tag is a hash of the files in `.devcontainer/`.
+
+Limits:
+
+- DNS is open: code in the container can resolve any name, and a DNS query can carry data out.
+- The list holds IP addresses. A site that shares a CDN address with a listed host is reachable too (`www.python.org` shares one with `files.pythonhosted.org`).
+- These gaps can leak only what the container holds: the public repository, without secrets.
+- The agent session itself runs on the host with full network. Claude Code's permission rules and auto mode classifier guard it, not this container.
+- `make dev`, `make up` and `make e2e` start their own containers and stay on the host.
+- Remove the volumes of a deleted checkout: `docker volume ls --filter name=chb-sandbox-nm-`, then `docker volume rm <name>`.
+
 ## Layout
 
 | Path | Content |
 |---|---|
+| `.devcontainer/` | Sandbox container for third-party code, egress allow list |
 | `backend/` | FastAPI app, Python 3.15, uv |
 | `frontend/` | React + TypeScript, Vite |
 | `e2e/` | Playwright tests against the production container |

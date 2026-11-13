@@ -54,10 +54,10 @@ UNITTEST_FILTERS = ("-k", "-p", "--pattern")
 
 REASON = (
     "Blocked: `{run}` runs the full suite. While iterating, run the related tests only: "
-    "`uv run pytest tests/test_x.py` or `uv run pytest -k name`, "
-    "`npx vitest run src/x.test.ts` or `npm test -- src/x.test.ts`, "
+    "`.devcontainer/run bash -c 'cd backend && uv run pytest tests/test_x.py'` or `... uv run pytest -k name`, "
+    "`.devcontainer/run bash -c 'cd frontend && npx vitest run src/x.test.ts'`, "
     "`python3 -I -m unittest discover -s factory/tests -p 'test_x.py'`. "
-    "`make check` runs the full suite before every commit (CLAUDE.md)."
+    "`.devcontainer/run make check` runs the full suite before every commit (CLAUDE.md)."
 )
 
 

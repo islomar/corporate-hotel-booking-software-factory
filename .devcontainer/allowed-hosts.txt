@@ -1,0 +1,24 @@
+# Hosts the sandbox container may reach on port 443 (CHB-31). One bare host name per line.
+# init-firewall.sh rejects every other destination. Add a host with a comment that names
+# the command that needs it. README.md, "Sandbox container", says how to apply and test a change.
+# The container holds no secret, so services that need one (Anthropic, Atlassian, 1Password,
+# Google Cloud) are not listed: the commands that call them run on the host.
+
+# npm: `npm ci` in frontend/, scripts/check_release_age.py
+registry.npmjs.org
+
+# Python: `uv sync --locked` in backend/ (index and wheel files)
+pypi.org
+files.pythonhosted.org
+
+# Terraform: `terraform init` in make check-deps (scripts/check_guard_tests.py)
+registry.terraform.io
+releases.hashicorp.com
+
+# GitHub: scripts/check_release_age.py, scripts/check_doctoc_title.py, provider downloads
+github.com
+api.github.com
+codeload.github.com
+objects.githubusercontent.com
+release-assets.githubusercontent.com
+raw.githubusercontent.com
