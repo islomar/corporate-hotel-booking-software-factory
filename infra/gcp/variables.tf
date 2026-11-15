@@ -40,7 +40,7 @@ variable "alert_email" {
 variable "planner_project_roles" {
   description = "Project roles of the read-only planner. guards.tf allows read-only roles only."
   type        = set(string)
-  default     = ["roles/viewer", "roles/iam.securityReviewer"]
+  default     = ["roles/viewer", "roles/iam.securityReviewer", "roles/serviceusage.serviceUsageConsumer"]
 }
 
 variable "planner_state_roles" {

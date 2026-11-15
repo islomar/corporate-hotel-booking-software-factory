@@ -6,6 +6,7 @@ locals {
   planner_role_allowlist = toset([
     "roles/viewer",
     "roles/iam.securityReviewer",
+    "roles/serviceusage.serviceUsageConsumer",
     "roles/storage.objectViewer",
   ])
   planner_roles = setunion(

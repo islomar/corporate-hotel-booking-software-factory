@@ -16,6 +16,9 @@
 
 - Status: accepted
 - Date: 2026-11-10
+- Amended 2026-11-15 (CHB-13): the planner also holds `roles/serviceusage.serviceUsageConsumer`, with the owner's approval.
+  The first real plan on PR #125 failed with a 403 on `serviceusage.services.use`, because the provider bills API calls to the project (`user_project_override`).
+  The role holds `get`, `list` and `test` permissions plus `serviceusage.services.use`. It cannot enable or disable an API or change a resource.
 
 ## Context
 
@@ -31,7 +34,7 @@ A pull request run executes code from a branch that an agent can edit, so its cr
 - The pool is separate from `github`. The deployer binding trusts `attribute.repository` of the whole `github` pool.
   A second provider in that pool, with the same mapping, would let pull request runs impersonate the deployer.
 - A service account `github-planner`, impersonated by that pool only.
-- Its roles: `roles/viewer` and `roles/iam.securityReviewer` on the project, `roles/storage.objectViewer` on the state bucket.
+- Its roles: `roles/viewer`, `roles/iam.securityReviewer` and `roles/serviceusage.serviceUsageConsumer` on the project, `roles/storage.objectViewer` on the state bucket.
 - `infra/gcp/guards.tf` fails the plan when:
   - the planner holds a role outside that allowlist;
   - the deployer's condition is not exactly this repository on `refs/heads/main`;
