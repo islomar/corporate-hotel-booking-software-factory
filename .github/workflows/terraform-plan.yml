@@ -91,9 +91,7 @@ jobs:
           python3 -I "$GITHUB_WORKSPACE/scripts/plan_summary.py" state-vars "$out/state.json" "$out/vars.env" || fail "the state lacks a variable the plan needs" state
           rm -f "$out/state.json"
           # The masks are printed first. The values live in this step's environment only.
-          set -a
           while IFS='=' read -r name value; do export "$name=$value"; done < "$out/vars.env"
-          set +a
           rm -f "$out/vars.env"
           terraform plan -lock=false -no-color -out="$out/plan.tfplan" > "$out/plan.log" 2>&1 || fail "terraform plan failed" plan
           terraform show -json "$out/plan.tfplan" > "$out/plan.json" 2> "$out/show.log" || fail "reading the plan failed" show

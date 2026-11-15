@@ -162,7 +162,8 @@ class MainTest(unittest.TestCase):
             body = Path(tmp, "body.md")
             code, printed = self.run_main("summary", str(plan), str(body), "--sha", "abc1234", "--run-url", "u")
             self.assertEqual(code, 0)
-            self.assertEqual(body.read_text(), printed.rstrip("\n") + "\n" if printed else "")
+            self.assertTrue(printed.strip())
+            self.assertEqual(body.read_text(), printed.rstrip("\n") + "\n")
             self.assertNotIn(CANARY, printed)
             self.assertNotIn(CANARY, body.read_text())
 
