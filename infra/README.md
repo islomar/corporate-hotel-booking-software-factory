@@ -127,6 +127,9 @@ It hides everything else, because the repository is public:
 `scripts/plan_summary.py` reads the plan JSON and keeps only counts, addresses and actions. `scripts/tests/test_plan_summary.py` feeds it a plan with a sensitive value and checks that the value is absent.
 
 A failed plan fails the job. The log shows the `Error:` lines of Terraform and nothing else, and the comment says the plan failed.
+The `Error:` lines appear as Terraform writes them, cut to 400 characters, in a public log.
+They can name resource IDs, for example a service account email or a bucket name. The job masks only `billing_account` and `alert_email`.
+The owner accepted this risk on 2026-11-15 (review of PR #125, finding 3): resource names are not secrets, and debugging a failure needs the full text.
 
 The plan needs `billing_account` and `alert_email`. The job reads both from the state, masks them in the log, and passes them as `TF_VAR_*`. No repository secret holds them.
 Limit: a pull request that changes one of the two values shows no change for it, because the plan compares against the applied value.
