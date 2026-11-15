@@ -99,6 +99,13 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(len(groups), 1)
         self.assertEqual(set(groups[0]["matcher"].split("|")), {"Write", "Edit", "MultiEdit", "NotebookEdit"})
 
+    def test_project_settings_turn_auto_memory_off(self) -> None:
+        # CHB-198: with auto memory on, Claude Code loads its memory instructions at session start,
+        # reads the memory folder, and a Bash write slips past this hook. The hook stays as a second guard.
+        settings = json.loads((ROOT / ".claude" / "settings.json").read_text())
+
+        self.assertIs(settings.get("autoMemoryEnabled"), False)
+
 
 if __name__ == "__main__":
     unittest.main()
