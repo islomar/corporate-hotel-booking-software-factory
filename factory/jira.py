@@ -10,6 +10,7 @@ Usage:
                                                           (priority Highest, straight in In Progress; CHB-157)
   factory/bin/jira transition CHB-12 "In Review"
   factory/bin/jira tick CHB-12 why|trigger|decision|small   (ticks one box of the Definition of Ready)
+  factory/bin/jira tick CHB-12 2|TEXT --evidence-file FILE  (ticks one acceptance criterion and posts the evidence; Done needs all ticked)
   factory/bin/jira ready CHB-12 --trigger TEXT            (Backlog to Ready: checks the Definition of Ready)
   factory/bin/jira checklist CHB-12 [CHB-13 ...] | --open  (adds the Definition of Ready where it is missing)
   factory/bin/jira comment CHB-12 --body-file FILE      (FILE "-" reads stdin)
@@ -101,7 +102,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from collections.abc import Callable, Collection, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -173,7 +174,7 @@ ACCEPTANCE_PATTERN = re.compile(
 OPEN_JQL = "statusCategory != Done ORDER BY Rank ASC"
 OPEN_FIELDS = ("status", "issuetype", "description", "issuelinks", "priority")
 # The fields before_transition and ready read of the moving ticket.
-ISSUE_FIELDS = "status,description,issuelinks,issuetype"
+ISSUE_FIELDS = "status,description,issuelinks,issuetype,assignee"
 # Dependencies are Jira "Blocks" links (CHB-151): inward "is blocked by", outward "blocks". In an issue's
 # issuelinks, an entry of this type with an inwardIssue means "this issue is blocked by inwardIssue".
 BLOCKS = "Blocks"
@@ -235,6 +236,8 @@ class Move:
     columns: tuple[Column, ...] = ()
     comment: str | None = None  # the trigger comment to post after the move (check_trigger, CHB-153)
     epic: bool = False  # an epic counts toward no column limit (CHB-157)
+    starts: bool = False  # a start from the pull list that passed every check: the agent becomes the assignee (CHB-187)
+    assignee: str | None = None  # the account id the ticket had when the start was checked
 
 
 @dataclass(frozen=True)
@@ -272,6 +275,7 @@ DOR_BOXES = (
     Box("small", "Small", "Small: one PR, about a day of agent work; otherwise split first. (agent ticks)"),
 )
 VERIFIED_BOXES = ("acceptance", "unblocked")  # `ready` checks and ticks them; `tick` refuses them
+DOR_BOX_NAMES = tuple(box.name for box in DOR_BOXES)
 JUDGMENT_BOXES = tuple(box.name for box in DOR_BOXES if box.name not in VERIFIED_BOXES)
 
 
@@ -618,7 +622,7 @@ def replace_section(description: dict[str, Any] | None, heading: str, body: str,
     content: list[Any] = list(doc.get("content", [])) if doc else []
     new = [
         {"type": "heading", "attrs": {"level": 2}, "content": [{"type": "text", "text": heading}]},
-        *text_to_adf(body)["content"],
+        *text_to_adf(acceptance_checkboxes(heading, body))["content"],
     ]
     starts = [i for i, node in enumerate(content) if _is_heading(node) and _heading_text(node) == heading]
     if len(starts) > 1:
@@ -1014,7 +1018,7 @@ class Jira:
                     "issuetype": {"name": "Task"},
                     "parent": {"key": parent},
                     "summary": summary.strip(),
-                    "description": with_checklist(text_to_adf(description)),
+                    "description": with_checklist(text_to_adf(acceptance_checkboxes_in(description))),
                     "priority": {"name": priority},
                 }
             },
@@ -1045,6 +1049,8 @@ class Jira:
         comment = move.comment
         if prepare is not None:
             prepare()
+        if move.starts:
+            self.assign_agent_for_start(key, move)
         self.request("POST", f"/rest/api/3/issue/{key}/transitions", {"transition": {"id": matches[0]["id"]}}, empty_ok=True)
         if comment:
             try:
@@ -1055,6 +1061,16 @@ class Jira:
                     f"Post it: factory/bin/jira comment {key} --body-file FILE with the line {comment!r}"
                 ) from None
         return target, after_transition(self, key, move)
+
+    def assign_agent_for_start(self, key: str, move: Move) -> None:
+        """Assign the agent account to a ticket the start has accepted, unless it is assigned to it already (CHB-187).
+
+        Runs after every start check and before the move, so a refused start assigns nobody. A failure
+        here is a JiraError before the move: the ticket stays in the pull list.
+        """
+        me = str(self.myself()["accountId"])
+        if move.assignee != me:
+            self.assign(key, me)
 
     def place_created(self, key: str) -> Column | None:
         """Put a ticket just created in Backlog (CHB-153). Return its column. `ready` moves it on (CHB-154).
@@ -1130,6 +1146,22 @@ class Jira:
             return False
         self.request("PUT", f"/rest/api/3/issue/{key}", {"fields": {"description": tick_boxes(current, {box})}}, empty_ok=True)
         return True
+
+    def tick_criterion(self, key: str, target: str, evidence: str) -> tuple[int, str, bool]:
+        """Tick one acceptance criterion and post its evidence (CHB-185). Return (number, text, changed).
+
+        The evidence comment goes first: a failed comment leaves the box open, and a second run is safe.
+        A criterion that is ticked already writes nothing.
+        """
+        current = self.request("GET", f"/rest/api/3/issue/{check_key(key)}?fields=description")["fields"].get("description")
+        number, text, done = find_criterion(current, target)
+        if done:
+            return number, text, False
+        self.comment(key, f"Criterion {number} checked: {text}\n\nEvidence: {evidence.strip()}")
+        fresh = self.request("GET", f"/rest/api/3/issue/{key}?fields=description")["fields"].get("description")
+        number, _, _ = find_criterion(fresh, str(number))
+        self.request("PUT", f"/rest/api/3/issue/{key}", {"fields": {"description": tick_criterion(fresh, number)}}, empty_ok=True)
+        return number, text, True
 
     def checklist(self, key: str) -> str:
         """Add the Definition of Ready to one ticket, from a fresh read. Return "added", "already there" or
@@ -1469,6 +1501,13 @@ def before_transition(jira: Jira, key: str, status: str, *, status_id: str, trig
             f'Write it first: factory/bin/jira section {key} --heading "{heading}" --body-file FILE '
             "(docs/process/kanban.md)."
         )
+    open_criteria = open_criteria_of(issue.get("description")) if status.casefold() == "done" else []
+    if open_criteria:
+        raise BlockedError(
+            f"{key} cannot move to {status}: {len(open_criteria)} acceptance criteria are not ticked: "
+            + "; ".join(f"{n}. {text}" for n, text in open_criteria)
+            + f". Check each one, then: factory/bin/jira tick {key} <number> --evidence-file FILE (docs/process/kanban.md, Validating)."
+        )
     columns = jira.board_columns()
     source = _column_of(columns, current_id)
     target = _column_of(columns, status_id)
@@ -1511,6 +1550,8 @@ def before_transition(jira: Jira, key: str, status: str, *, status_id: str, trig
         )
     if target.name == IN_PROGRESS and source is not None and source == pull:
         check_top_of_to_do(jira, key, issue, columns)
+        assignee = issue.get("assignee")
+        return replace(move, starts=True, assignee=str(assignee["accountId"]) if isinstance(assignee, dict) and assignee.get("accountId") else None)
     return move
 
 
@@ -1590,19 +1631,78 @@ def check_top_of_to_do(jira: Jira, key: str, fields: dict[str, Any], columns: li
             f"rank it above {top} (factory/bin/jira rank {key} --before {top}), and try again. "
             f"Every start sorts {name} by priority, so a rank across priorities does not hold (docs/process/kanban.md, Ready)."
         )
+    gaps = start_gaps(key, description)
+    if gaps:
+        raise BlockedError(gaps[0].message)
+
+
+@dataclass(frozen=True)
+class StartGap:
+    """Something a ticket in the pull list lacks before a start accepts it (CHB-187)."""
+
+    label: str  # what it needs, in a few words, for a notice
+    message: str  # the refusal text of the start
+
+
+def dor_gap(description: Any) -> tuple[str, list[str]] | None:
+    """What the Definition of Ready of a ticket in the pull list still lacks, or None when it holds (CHB-187).
+
+    The judgment boxes must be ticked. `ready` ticks the two verified boxes (acceptance criteria, not blocked) and
+    the start checks them itself, so their ticks do not count: ticking cannot replace checking (CHB-154).
+    Returns a short detail and the `tick` box names to run; the names are empty when the section is missing or doubled.
+    """
+    count = checklist_count(description)
+    if count == 0:
+        return "no section", []
+    if count > 1:
+        return f"{count} sections", []
+    states = box_states(description) or {}
+    open_boxes = [box.name for box in DOR_BOXES if box.name in JUDGMENT_BOXES and states.get(box.name) != "DONE"]
+    return (f"unticked: {', '.join(open_boxes)}", open_boxes) if open_boxes else None
+
+
+def start_gaps(key: str, description: Any) -> list[StartGap]:
+    """Every gap in the ticket's own description that makes a start refuse it, in the order the start reports them (CHB-187).
+
+    The start (check_top_of_to_do) and the Stop hook (check_wip_minimums) both read this, so the hook
+    names only tickets the start accepts. Order and blockers are the callers' business.
+    """
+    gaps = []
     problem = why_problem(description)
     if problem:
-        raise BlockedError(
-            f"{key} cannot start: its description {problem}. Write it first: "
-            f'factory/bin/jira section {key} --heading "{WHY_HEADING}" --first --body-file FILE '
-            "(2 to 5 plain sentences: the pain, who feels it and the value of solving it; docs/process/kanban.md, Ready)."
+        gaps.append(
+            StartGap(
+                WHY_HEADING,
+                f"{key} cannot start: its description {problem}. Write it first: "
+                f'factory/bin/jira section {key} --heading "{WHY_HEADING}" --first --body-file FILE '
+                "(2 to 5 plain sentences: the pain, who feels it and the value of solving it; docs/process/kanban.md, Ready).",
+            )
         )
     if not has_acceptance_criteria(description):
-        raise BlockedError(
-            f"{key} has no acceptance criteria. Write them first: "
-            f'factory/bin/jira section {key} --heading "Acceptance criteria" --body-file FILE '
-            "(derive them from the ticket, its epic and the ADRs; ask the owner only for decisions that are the owner's)."
+        gaps.append(
+            StartGap(
+                "acceptance criteria",
+                f"{key} has no acceptance criteria. Write them first: "
+                f'factory/bin/jira section {key} --heading "Acceptance criteria" --body-file FILE '
+                "(derive them from the ticket, its epic and the ADRs; ask the owner only for decisions that are the owner's).",
+            )
         )
+    dor = dor_gap(description)
+    if dor is not None:
+        detail, boxes = dor
+        fix = (
+            f"tick the boxes you have checked, {'; '.join(f'factory/bin/jira tick {key} {name}' for name in boxes)}"
+            if boxes
+            else f"add or fix it: factory/bin/jira checklist {key}"
+        )
+        gaps.append(
+            StartGap(
+                f"{DOR_HEADING} ({detail})",
+                f"{key} cannot start: its {DOR_HEADING} is not complete ({detail}). Fix it: {fix}. "
+                f"A start needs every judgment box ticked (docs/process/kanban.md, Backlog).",
+            )
+        )
+    return gaps
 
 
 def top_queue(
@@ -1750,6 +1850,85 @@ def apply_todo_order(
     return order, len(steps)
 
 
+CRITERIA_HEADING = "acceptance criteria"  # a section heading that starts with it holds criteria, with or without "(Validating)"
+# A top-level bullet of a Validating section that labels part of a criterion; it stays a plain line (CHB-185).
+CRITERION_LABEL = re.compile(r"^- (?:\*\*)?(?:when|speed[ -]up|where|pass|who|if it fails)\b", re.IGNORECASE)
+
+
+def acceptance_checkboxes(heading: str, body: str) -> str:
+    """The body of an "Acceptance criteria" section with each top-level bullet as an unticked checkbox (CHB-185).
+
+    Other headings, numbered lists, indented lines, ticked boxes and the label lines of the Validating section
+    (When, Speed up, Where, Pass, Who, If it fails) stay as they are.
+    """
+    if not heading.strip().casefold().startswith(CRITERIA_HEADING):
+        return body
+    return "\n".join(
+        f"- [ ] {line[2:]}" if BULLET_PATTERN.match(line) and not TASK_PATTERN.match(line) and not CRITERION_LABEL.match(line) else line
+        for line in body.split("\n")
+    )
+
+
+def acceptance_checkboxes_in(markdown: str) -> str:
+    """`acceptance_checkboxes` for every section of a whole description (`create`, CHB-185)."""
+    heading, out = "", []
+    for line in markdown.split("\n"):
+        found = HEADING_PATTERN.fullmatch(line)
+        if found:
+            heading = found.group(2)
+        out.append(acceptance_checkboxes(heading, line))
+    return "\n".join(out)
+
+
+def _criteria_items(description: Any) -> list[dict[str, Any]]:
+    """The task items of every top-level "Acceptance criteria" section, in order (the nodes themselves)."""
+    content = _content(description)
+    items: list[dict[str, Any]] = []
+    for start, node in enumerate(content):
+        if not (_is_heading(node) and _heading_text(node).casefold().startswith(CRITERIA_HEADING)):
+            continue
+        for inner in content[start + 1 : _section_end(content, start)]:
+            if isinstance(inner, dict) and inner.get("type") == "taskList":
+                items.extend(i for i in inner.get("content", []) if isinstance(i, dict) and i.get("type") == "taskItem")
+    return items
+
+
+def _item_text(item: dict[str, Any]) -> str:
+    return "".join(adf_to_text(child) for child in item.get("content", [])).strip()
+
+
+def open_criteria_of(description: Any) -> list[tuple[int, str]]:
+    """(number, text) of each unticked criterion checkbox. A ticket whose criteria are plain text has none (CHB-185)."""
+    return [(n, _item_text(i)) for n, i in enumerate(_criteria_items(description), 1) if (i.get("attrs") or {}).get("state") != "DONE"]
+
+
+def find_criterion(description: Any, target: str) -> tuple[int, str, bool]:
+    """(number, text, already ticked) of the criterion `target` names: its number, or a text that only one
+    criterion contains (case ignored). Raises JiraError when none or several match (CHB-185)."""
+    items = _criteria_items(description)
+    if not items:
+        raise JiraError('the description has no acceptance criteria checkboxes; write them: factory/bin/jira section CHB-<n> --heading "Acceptance criteria" --body-file FILE')
+    wanted = target.strip()
+    if wanted.isdigit():
+        hits = [n for n in range(1, len(items) + 1) if n == int(wanted)]
+    else:
+        hits = [n for n, i in enumerate(items, 1) if wanted.casefold() in _item_text(i).casefold()]
+    if len(hits) != 1:
+        listing = "; ".join(f"{n}. {_item_text(i)}" for n, i in enumerate(items, 1))
+        why = "matches no criterion" if not hits else f"matches {len(hits)} criteria"
+        raise JiraError(f"{target!r} {why}. Criteria: {listing}")
+    item = items[hits[0] - 1]
+    return hits[0], _item_text(item), (item.get("attrs") or {}).get("state") == "DONE"
+
+
+def tick_criterion(description: dict[str, Any], number: int) -> dict[str, Any]:
+    """A copy of the description with criterion `number` ticked. Only its state changes."""
+    result = copy.deepcopy(description)
+    item = _criteria_items(result)[number - 1]
+    item["attrs"] = {**(item.get("attrs") or {}), "state": "DONE"}
+    return result
+
+
 def has_acceptance_criteria(description: Any) -> bool:
     """True when an "Acceptance criteria" heading or label line has a non-blank line under it.
 
@@ -1858,9 +2037,26 @@ def _free_slot_notice(jira: Jira, key: str, move: Move) -> list[str]:
 
 
 def _with_missing_sections(key: str, description: Any) -> str:
-    """`CHB-7`, or `CHB-7 (needs Why it matters and acceptance criteria)` for what a start would refuse."""
-    missing = [name for name, gap in ((WHY_HEADING, why_problem(description)), ("acceptance criteria", not has_acceptance_criteria(description))) if gap]
-    return f"{key} (needs {' and '.join(missing)})" if missing else key
+    """`CHB-7`, or `CHB-7 (needs Why it matters and acceptance criteria)` for what a start would refuse (start_gaps)."""
+    missing = [gap.label for gap in start_gaps(key, description)]
+    if not missing:
+        return key
+    return f"{key} (needs {', '.join(missing[:-1])} and {missing[-1]})" if len(missing) > 1 else f"{key} (needs {missing[0]})"
+
+
+def startable(issues: list[dict[str, Any]], columns: Sequence[Column]) -> tuple[str | None, list[tuple[str, list[StartGap]]]]:
+    """The ticket a start would accept now, and the pull-list tickets it would refuse for a gap (CHB-187).
+
+    A start takes only the top ticket (todo_order(...).ready, the order check_top_of_to_do uses), so that is the
+    only candidate. It is None when the top ticket has a gap (start_gaps). The second item lists every ticket
+    of the queue with its gaps, in queue order: what the agent must write or tick, starting with the top ticket.
+    `issues` is the whole of open_issues().
+    """
+    by_key = {str(issue["key"]): issue for issue in issues}
+    queue = todo_order(issues, columns).ready
+    refused = [(key, gaps) for key in queue if (gaps := start_gaps(key, by_key[key]["fields"].get("description")))]
+    top = queue[0] if queue and not any(key == queue[0] for key, _ in refused) else None
+    return top, refused
 
 
 def has_section(description: Any, heading: str) -> bool:
@@ -2017,7 +2213,11 @@ def _parser() -> argparse.ArgumentParser:
 
     tick = commands.add_parser("tick", help="tick one judgment box of the Definition of Ready")
     tick.add_argument("key")
-    tick.add_argument("box", help=f"one of: {', '.join(JUDGMENT_BOXES)}")
+    tick.add_argument(
+        "box",
+        help=f"a Definition of Ready box ({', '.join(JUDGMENT_BOXES)}); with --evidence-file an acceptance criterion: its number, or a text only it contains",
+    )
+    tick.add_argument("--evidence-file", help='criterion only: what you checked and what it showed, posted as a comment (FILE "-" reads stdin)')
 
     checklist = commands.add_parser("checklist", help="add the Definition of Ready to tickets that lack it")
     checklist.add_argument("keys", nargs="*", metavar="key")
@@ -2130,6 +2330,9 @@ def run(args: argparse.Namespace, jira: Jira) -> int:
         return EXIT_REFILL if _print_move(args.key, *jira.transition(args.key, args.status)) else 0
     elif args.command == "ready":
         return EXIT_REFILL if _print_move(args.key, *jira.ready(args.key, args.trigger)) else 0
+    elif args.command == "tick" and args.evidence_file is not None:
+        number, text, changed = jira.tick_criterion(args.key, args.box, args.evidence)
+        print(f"{args.key} criterion {number} {'ticked' if changed else 'unchanged'}: {text}")
     elif args.command == "tick":
         changed = jira.tick(args.key, args.box)
         print(f"{args.key} box {args.box!r} {'ticked' if changed else 'unchanged'}")
@@ -2194,8 +2397,14 @@ def main(
                 f'transition takes no --trigger: factory/bin/jira ready {args.key} --trigger "<which trigger and its evidence>" '
                 f"moves a ticket from {BACKLOG} to {READY} once its {DOR_HEADING} holds"
             )
-        if args.command == "tick":
+        if args.command == "tick" and args.evidence_file is None:
+            if args.box not in DOR_BOX_NAMES:
+                raise UsageError(f"{args.box!r} is not a box of the {DOR_HEADING}; to tick an acceptance criterion add --evidence-file FILE")
             check_box(args.box)
+        elif args.command == "tick":
+            args.evidence = _read_text(args.evidence_file)
+            if not args.evidence.strip():
+                raise UsageError("the evidence is empty: say what you checked and what it showed")
         if args.command == "checklist" and bool(args.keys) == args.open:
             raise UsageError("checklist takes issue keys or --open, not both")
         if args.command == "create" and args.expedite is not None:

@@ -1,0 +1,48 @@
+# Re-run the `Triage` workflow when a review or a triage comment appears (CHB-60).
+#
+# triage.yml runs on `pull_request`, so it cannot see a comment posted later. GitHub does not replace
+# a check run of the head commit with the run of another workflow, so this workflow re-runs the
+# completed `Triage` runs of the PR head. They read the live comments and flip in place.
+# A run still in progress is left alone: it reads the comments itself.
+#
+# Trust (GitHub Security Lab, "Preventing pwn requests"): `issue_comment` runs from the default branch.
+# This job checks out main only, never the PR head, uses no secret and runs nothing from the PR.
+# The PR number comes from GitHub's event payload as an integer. The comment text is not used.
+# Any commenter can start a run, so the job only re-runs the same read-only check.
+name: Triage rerun
+
+on:
+  issue_comment:
+    types: [created, edited, deleted]
+
+permissions: {}
+
+# One re-run at a time per PR. A queued run replaces a waiting one: each reads the live state.
+concurrency:
+  group: triage-rerun-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  rerun:
+    # Cheap filter on fields GitHub sets. The re-run changes nothing the script does not decide itself.
+    if: >-
+      github.event.issue.pull_request &&
+      (github.event.comment.user.login == 'chb-factory-reviewer[bot]' ||
+      github.event.comment.user.login == 'chb-factory-agent[bot]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: write # re-run the Triage runs of the PR head
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Re-run the Triage runs of the PR head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.issue.number }}
+        run: python3 -I factory/triage_review.py --rerun "$PR" --repo "$REPO"

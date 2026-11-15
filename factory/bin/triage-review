@@ -1,0 +1,3 @@
+#!/bin/sh
+# Triage the findings of the automated PR review. See factory/triage_review.py.
+exec python3 -I "$(dirname "$0")/../triage_review.py" "$@"

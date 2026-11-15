@@ -4,7 +4,7 @@ locals {
   github_actions_app_id = 15368
   # Dependabot, from `gh api /apps/dependabot --jq .id`.
   dependabot_app_id = 29110
-  required_checks   = ["backend", "frontend", "e2e", "supply-chain"]
+  required_checks   = ["backend", "frontend", "e2e", "supply-chain", "triage"]
 
   variables = {
     APP_URL          = "https://chb-1027266991110.europe-west1.run.app"

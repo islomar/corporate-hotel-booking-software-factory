@@ -102,13 +102,21 @@ def findings(columns: Sequence[jira.Column], issues: list[dict[str, Any]]) -> li
             (column := by_name.get(name)) is not None and column.max is not None and counts[name] >= column.max
             for name in jira.STARTED_WORK
         )
-        startable = jira.todo_order(issues, columns).ready
-        if startable and not full:
-            top = startable[0]
+        top, refused = jira.startable(issues, columns)
+        where = pull.name if pull else jira.TO_DO
+        if not full and top is not None:
             lines.append(
                 f"{in_progress.name} is below its minimum ({counts[in_progress.name]}/{in_progress.min}) and "
-                f"{pull.name if pull else jira.TO_DO} has a ticket that can start: {top}. "
+                f"{where} has a ticket that can start: {top}. "
                 f'Start it now: factory/bin/jira transition {top} "{jira.IN_PROGRESS}".'
+            )
+        elif not full and refused:
+            listed = "; ".join(f"{key} lacks {' and '.join(gap.label for gap in gaps)}" for key, gaps in refused)
+            lines.append(
+                f"{in_progress.name} is below its minimum ({counts[in_progress.name]}/{in_progress.min}) and "
+                f"no {where} ticket can start: a start refuses the top ticket until it is complete. {listed}. "
+                f"Fix the first one ({refused[0][0]}), then start it: "
+                f'factory/bin/jira transition {refused[0][0]} "{jira.IN_PROGRESS}" (docs/process/kanban.md, Ready).'
             )
     if pull is not None and pull.min is not None and counts[pull.name] < pull.min:
         lines.append("\n".join(jira.refill_lines(pull, counts[pull.name], issues, columns)))

@@ -26,6 +26,7 @@
   - [Hook: what to finish first, at session start](#hook-what-to-finish-first-at-session-start)
   - [Hook: rules health check is due](#hook-rules-health-check-is-due)
   - [Automated PR review (shadow mode)](#automated-pr-review-shadow-mode)
+  - [Triage of review findings](#triage-of-review-findings)
   - [Workflow output schemas and routing](#workflow-output-schemas-and-routing)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -212,6 +213,7 @@ factory/bin/jira search 'status = "In Review"'   # sent as project = CHB AND (<j
 factory/bin/jira create --parent CHB-27 --summary "Short title" --description-file description.txt --priority Medium
 factory/bin/jira transition CHB-12 "In Review"
 factory/bin/jira tick CHB-12 small   # one box of the Definition of Ready: why, trigger, decision or small
+factory/bin/jira tick CHB-12 2 --evidence-file FILE   # one acceptance criterion (number or unique text): posts the evidence, ticks it; `transition ... Done` exits 4 while one is open (CHB-185)
 factory/bin/jira ready CHB-12 --trigger "2. the owner asked for it on 2026-11-10"   # Backlog to Ready
 factory/bin/jira checklist CHB-12   # or --open: adds the Definition of Ready where it is missing
 factory/bin/jira comment CHB-12 --body-file comment.txt   # "-" reads stdin
@@ -333,7 +335,10 @@ The 1Password service account narrows who can read it to processes that can read
   This covers `ready` and a move back into Ready. The check runs before `ready` ticks any box.
   The message names the tickets in Ready and the command that moves one back to Backlog to make room;
 - the move starts work from the pull list, passes the limits, and the ticket is not the top ticket of the pull list,
-  or is the top ticket without a "Why it matters" first section or without acceptance criteria (CHB-125, CHB-148).
+  or is the top ticket without a "Why it matters" first section, without acceptance criteria or with a judgment box of its Definition of Ready unticked (CHB-125, CHB-148, CHB-187).
+  `start_gaps` holds these three checks. The Stop hook and the `next:` line read it too, so none names a ticket the start refuses.
+  A start that passes every check assigns the ticket to the agent account before the move (CHB-187): `PUT /rest/api/3/issue/<key>/assignee` with the account of `GET /rest/api/3/myself`.
+  A ticket already assigned to the agent gets no write. A refused start writes nothing. A move back into In Progress assigns nobody.
   The top ticket and acceptance criteria are defined in `docs/process/kanban.md`, Ready.
   One search, `statusCategory != Done ORDER BY Rank ASC`, gives the rank order and the open tickets.
   The search also returns each ticket's `issuelinks`. A ticket is blocked by every ticket on an "is blocked by" link of type "Blocks" that is still open (`open_blockers`, CHB-151).
@@ -438,7 +443,9 @@ On 2026-11-10 the agent ended its turn four times with the wrapper's "below its 
 
 The hook reads the column minimums from the board and the open tickets as the agent account (one 1Password read, two Jira reads). It exits 2 with a reason when:
 
-- In Progress is below its minimum and Ready has a ticket that can start. The reason names the top ticket and the `transition` command.
+- In Progress is below its minimum and Ready has a ticket that a start accepts (`jira.startable`, CHB-187). The reason names the top ticket and the `transition` command.
+  A start takes only the top ticket, so when it lacks a section or a ticked Definition of Ready box, the reason says no Ready ticket can start
+  and lists each Ready ticket that no blocker holds back but that has a gap, with what it lacks, as `CHB-44 lacks acceptance criteria`.
   It stays quiet while In Progress, In Review or Validating is at its max.
 - Ready is below its minimum (CHB-164). No reply text passes this; the reason lists the refill candidates, as `transition` does.
 - A Validating ticket has a due item and the agent account has no comment on it from the current day (CHB-163). "Due" is as `validating_sweep.py` defines it
@@ -491,7 +498,7 @@ It denies a bare full-suite run and names the related-test form:
 - `python3 -m unittest` or `python3 -m unittest discover` without `-s <folder>`, `-p <pattern>`, `-k`, a module or a file.
 
 A path of `.` counts as no filter. A number does not count as a Vitest filter: it is likely the value of an option such as `--retry 2`.
-`make check` and `make test` run the full suite and stay allowed: CLAUDE.md requires `make check` before every commit.
+`make check` (everything) and `make test` (only the tests) run the full suite and stay allowed: CLAUDE.md requires `make check` before every commit.
 
 The two Bash hooks drop redirections (`2>&1`, `> file`, `2>/dev/null`) and strip `rtk`, `rtk proxy`, `factory/bin/as-agent`, `env`, `uv run`, `npx` and `python -m` before they read a command.
 Like the Jira hook, they read the command text only, deny on unreadable input or an internal error, and let the command run if `python3` cannot start.
@@ -504,7 +511,8 @@ Package installs, linters and test runners run code from npm and PyPI. On the ho
 The hook denies them on the host and names the sandbox form, `.devcontainer/run <command>`:
 
 - `uv`, `uvx`, `npm`, `npx`, `pnpm`, `yarn`, `pip`, `pip3`, `pytest`, `vitest`, `python -m pytest`, `python -m pip`;
-- `make check`, `make test`, `make check-backend`, `make check-frontend`, `make check-deps`, `make format`, `make mutate`.
+- `make check`, `make test`, `make check-backend`, `make check-frontend`, `make check-deps`,
+  `make lint-backend`, `make lint-frontend`, `make test-backend`, `make test-frontend`, `make test-scripts`, `make format`, `make mutate`.
 
 Wrappers such as `timeout`, `nice -n 5`, `env -u X`, `xargs` and `sudo` are skipped with their options.
 Allowed: the `.devcontainer/run` of a worktree of this repository, resolved after any literal `cd`.
@@ -693,6 +701,42 @@ Run the gate on a saved result:
 python3 -I factory/review/gate.py --result result.json --claude-exit-code 0 --schema factory/review/schema.json \
   --changed-files names.z --prior-runs runs.json --app-slug chb-factory-reviewer --head-sha HEAD_SHA --out check-run.json
 ```
+
+## Triage of review findings
+
+A review lists findings. Without a step in between, the agent applies all of them or drops some alone, and the human cannot see which (CHB-60, ADR-ea8c decision 5).
+`factory/bin/triage-review` sorts each finding into `apply`, `discard` or `doubt`, with a one-line reason, and posts the result.
+
+```sh
+factory/bin/triage-review 123                  # the findings of the latest review, numbered
+factory/bin/triage-review 123 --file triage.txt
+```
+
+The review is the last comment of `chb-factory-reviewer[bot]` with the marker `chb-review reviewed:<sha>`.
+The file has one line per finding, for example `2 doubt the test client may rewrite the header`.
+The script refuses a file that misses a finding or a reason, names what is missing and posts nothing.
+Otherwise it replaces the "Caveats" section of the PR body with the doubts, then posts the comment "Triage of review `<sha>`" through `as-agent`: a table of finding, decision and reason.
+After the comment, the agent fixes the `apply` findings in the PR and lists the doubts to the human in the chat.
+
+The required check `triage` (`.github/workflows/triage.yml`) fails while the latest review comment has findings and the PR has no triage comment for the same SHA from `chb-factory-agent[bot]`.
+It passes when the review has no findings, or there is no review comment. A comment from any other account does not count. Tests: `factory/tests/test_triage_review.py`.
+
+How the check stays current:
+
+- `triage.yml` runs on `pull_request` (each push). It reads the comments through the API, with a read-only token and no secret.
+- A review or triage comment arrives after that run. `triage-rerun.yml` runs on `issue_comment`, from `main`, for comments of the reviewer App and the agent.
+  It re-runs the completed `Triage` runs of the PR head.
+  A re-run reads the live comments and replaces the result in place. Same pattern as `supply-chain` (CHB-184).
+- Both workflows read comments as data. They never run or expand comment text, and the re-run job checks out `main`, not the PR.
+
+Limits:
+
+- Only the latest review comment counts. A push that gets no review comment (docs-only, or the reviewer secrets are missing) keeps the earlier review's result.
+- The re-run path rests on the workflow token being able to re-run `pull_request` runs, as `supply-chain` does (CHB-184). It is untested until a PR with findings gets its triage.
+  If the check stays red after the triage comment, the human re-runs it: Actions, Triage, the run for the PR head, "Re-run jobs". The agent App cannot re-run workflows.
+- After a push, `triage` can pass on the previous review's triage until the new review comment arrives. The `review` check is not required yet (shadow mode), so a merge can land inside that gap.
+- The check proves that a triage comment exists, not that the decisions are right. The human reads the doubts.
+- A run in progress is not re-run. It reads the comments when it starts its read step, so a comment that lands within seconds of that read can wait for the next event.
 
 ## Workflow output schemas and routing
 

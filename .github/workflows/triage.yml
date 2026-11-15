@@ -1,0 +1,44 @@
+# Required check `triage`: a review with findings needs the agent's triage (CHB-60, ADR-ea8c decision 5).
+#
+# The latest review comment of the reviewer App (marker `chb-review reviewed:<sha>`) lists
+# findings. While it has findings and no comment "Triage of review <sha>" from the agent's
+# account (marker `chb-triage reviewed:<sha>`), this check fails. A comment from any other
+# account does not count. Logic and tests: factory/triage_review.py, factory/tests/test_triage_review.py.
+#
+# When it runs: on every push (`pull_request`). A new review comment or a triage comment arrives
+# later, so triage-rerun.yml (issue_comment, from main) re-runs this workflow for the PR head. The run
+# reads the live comments, so a re-run flips the result in place. A run that only reads comments
+# needs no secret and a read-only token, so Dependabot PRs run it too (they have no review: it passes).
+#
+# Trust: the comments are data. The script reads them through the API, never runs or expands them,
+# and the workflow puts no comment text in a shell. The workflow and script run from the PR's
+# merge commit, as supply-chain.yml does: CODEOWNERS owns .github/ and factory/.
+name: Triage
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions: {}
+
+concurrency:
+  group: triage-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read # the comments of the PR
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The latest review with findings has a triage from the agent
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: python3 -I factory/triage_review.py --check "$PR" --repo "$REPO"
