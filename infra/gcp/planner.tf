@@ -52,7 +52,8 @@ resource "google_service_account_iam_member" "github_pr_impersonates_planner" {
 locals {
   # Every role the planner holds. Add one only if it is in `local.planner_role_allowlist` (guards.tf).
   # viewer reads resources. securityReviewer reads IAM policies, which the refresh of the
-  # `*_iam_member` resources needs.
+  # `*_iam_member` resources needs. serviceUsageConsumer grants serviceusage.services.use: the provider
+  # bills API calls to the project (`user_project_override`, versions.tf), and every call of the plan needs it.
   planner_project_roles = var.planner_project_roles
   # Reads the state file. `plan -lock=false` takes no lock, so it needs no write access.
   planner_state_roles = var.planner_state_roles

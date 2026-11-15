@@ -79,6 +79,17 @@ run "planner_with_write_on_the_state_bucket_fails_the_plan" {
   expect_failures = [terraform_data.guards]
 }
 
+run "planner_with_service_usage_admin_fails_the_plan" {
+  command = plan
+
+  # serviceUsageConsumer is allowed (ADR-3c1f, amended 2026-11-15); the admin role can enable APIs.
+  variables {
+    planner_project_roles = ["roles/viewer", "roles/serviceusage.serviceUsageAdmin"]
+  }
+
+  expect_failures = [terraform_data.guards]
+}
+
 run "planner_with_fewer_roles_passes" {
   command = plan
 

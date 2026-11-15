@@ -98,7 +98,7 @@ Pull request runs plan with a separate identity (CHB-81, ADR-3c1f), used by CHB-
 |---|---|
 | Pool and provider | `github-pr` / `github-pr`, trust `pull_request` runs of this repository only |
 | Service account | `github-planner@<project>.iam.gserviceaccount.com` |
-| Roles | `roles/viewer`, `roles/iam.securityReviewer`, `roles/storage.objectViewer` on the state bucket |
+| Roles | `roles/viewer`, `roles/iam.securityReviewer`, `roles/serviceusage.serviceUsageConsumer`, `roles/storage.objectViewer` on the state bucket |
 
 It reads and cannot write. It plans with `terraform plan -lock=false`, because the state lock is a write to the state bucket.
 Its pool is separate from the deployer's: the deployer binding trusts the whole `github` pool.
