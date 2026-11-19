@@ -494,18 +494,20 @@ class TerraformTest(unittest.TestCase):
         )
         self.assertFalse(verdict.ok)
 
-    def test_an_agent_edit_of_versions_tf_needs_the_owner_on_the_head_commit(self):
+    def test_an_agent_edit_of_a_terraform_pin_needs_the_owner_on_the_head_commit(self):
         agent = "chb-factory-agent[bot]"
-        values = {
-            "changed_files": ["infra/gcp/versions.tf"],
-            "pr_author": agent,
-            "pr_head_ref": "CHB-999-backend-bucket",
-            "commits": [dependabot_commit() | {"author": {"login": agent}}],
-        }
-        self.assertFalse(decide(evidence(**values)).ok)
-        stale = [review("APPROVED", commit_id=OLD)]
-        self.assertFalse(decide(evidence(**values, reviews=stale)).ok)
-        self.assertTrue(decide(evidence(**values, reviews=[review("APPROVED")])).ok)
+        for path in PR134_FILES:
+            values = {
+                "changed_files": [path],
+                "pr_author": agent,
+                "pr_head_ref": "CHB-999-provider-pin",
+                "commits": [dependabot_commit() | {"author": {"login": agent}}],
+            }
+            with self.subTest(path=path):
+                self.assertFalse(decide(evidence(**values)).ok)
+                stale = [review("APPROVED", commit_id=OLD)]
+                self.assertFalse(decide(evidence(**values, reviews=stale)).ok)
+                self.assertTrue(decide(evidence(**values, reviews=[review("APPROVED")])).ok)
 
 
 class MainTest(unittest.TestCase):

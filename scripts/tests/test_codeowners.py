@@ -98,8 +98,9 @@ def non_pin_lines(text: str) -> list[str]:
 
     Allowed: one top-level `terraform` block holding `required_version` and a
     `required_providers` block. Anything else (a `cloud` or `backend` block,
-    `provider_meta`, a resource, an import) is reported. `#` and `//` comments are
-    ignored.
+    `provider_meta`, a resource, an import) is reported. Text after `#` or `//` is
+    dropped as a comment, also inside a quoted string: the rest of that line is not
+    checked.
 
     A line-based heuristic, not an HCL parser: it expects one statement per line, as
     `terraform fmt` writes. It fails closed on what it cannot read line by line: a
