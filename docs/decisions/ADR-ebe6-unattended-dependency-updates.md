@@ -201,6 +201,7 @@ Consequences:
 ## Consequences
 
 - Fewer PRs: one per group and week, plus majors and 0.x updates.
+  Since CHB-206, ruff and uvicorn get their own PRs only because they stay out of groups (CHB-210), not because they need a human.
 - Most backend updates needed a human, because fastapi, uvicorn and ruff are 0.x. Since CHB-206 their minors and patches merge when CI passes.
 - Adding `exclude-newer` re-locked the backend to versions at least 7 days old. Nine packages moved back one release, and the ruff floor moved from 0.17.4 to 0.17.3.
 - A Dependabot security fix younger than 7 days passes the release-age check when it is exactly the first patched version of an open alert.
