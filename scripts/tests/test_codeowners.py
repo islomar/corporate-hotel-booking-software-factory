@@ -98,13 +98,21 @@ def non_pin_lines(text: str) -> list[str]:
 
     Allowed: one top-level `terraform` block holding `required_version` and a
     `required_providers` block. Anything else (a `cloud` or `backend` block,
-    `provider_meta`, a resource, an import) is reported. Comments are ignored.
+    `provider_meta`, a resource, an import) is reported. `#` and `//` comments are
+    ignored.
+
+    A line-based heuristic, not an HCL parser: it expects one statement per line, as
+    `terraform fmt` writes. It fails closed on what it cannot read line by line: a
+    `/* */` comment, or more than one brace on a line. The `supply-chain` check still
+    asks the owner to approve any change to versions.tf that Dependabot did not make.
     """
     found = []
     depth = 0
     terraform_blocks = 0
     for raw in text.splitlines():
         line = re.sub(r"(#|//).*", "", raw).strip()
+        if "/*" in raw or line.count("{") + line.count("}") > 1:
+            found.append(raw.strip())
         if not line:
             continue
         if depth == 0:
@@ -193,6 +201,11 @@ class VersionPinsTest(unittest.TestCase):
             "import": self.PINS + "import {\n  to = a.b\n  id = \"x\"\n}\n",
             "variable": self.PINS + 'variable "x" {}\n',
             "second terraform block": self.PINS + 'terraform {\n  required_version = "1"\n}\n',
+            "block comment": self.PINS + "/* note */\n",
+            "two blocks on one line": self.PINS.replace(
+                "  required_providers {\n", "  required_providers { } \n  cloud {\n"
+            ),
+            "one-line block": self.PINS + 'variable "x" { }\n',
         }.items():
             with self.subTest(name):
                 self.assertNotEqual(non_pin_lines(text), [])
