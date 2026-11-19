@@ -57,12 +57,12 @@ format: ## Format all code
 	cd backend && uv run --locked ruff format . && uv run --locked ruff check --fix .
 	cd frontend && npm run -s format
 
-test: test-backend test-frontend test-scripts ## Run al the tests: backend, frontend, scripts and factory (no lint, types or repository checks)
+test: test-backend test-frontend test-scripts ## Run all the tests: backend, frontend, scripts and factory (no lint, types or repository checks)
 
 test-backend: ## Run backend tests (no lint or types)
 	cd backend && uv run --locked pytest
 
-test-frontend: ##
+test-frontend: ## Run frontend tests (no lint or types)
 	cd frontend && npm test
 
 test-scripts: ## Run the scripts and factory tests (no lint or types)
