@@ -290,14 +290,6 @@ def head_sha(gh: Gh, repo: str, pr: str) -> str:
     return gh(["api", f"repos/{repo}/pulls/{pr}", "--jq", ".head.sha"]).strip()
 
 
-def unpushed_fixes(decisions: Sequence[Decision], reviewed: str, head: str) -> list[Decision]:
-    """The `apply` decisions whose fixes cannot be on the PR yet: the head is still the reviewed commit.
-
-    The triage comment turns `triage` green, and auto-merge then merges at once (CHB-212).
-    """
-    return [d for d in decisions if d.decision == "apply"] if head == reviewed else []
-
-
 def rerun(gh: Gh, repo: str, pr: str) -> int:
     head = head_sha(gh, repo, pr)
     if not SHA_RE.fullmatch(head):
@@ -385,16 +377,18 @@ def main(argv: Sequence[str], gh: Gh | None = None) -> int:
             for problem in problems:
                 print(f"- {problem}", file=sys.stderr)
             return 2
-        if any(d.decision == "apply" for d in decisions):
+        # The triage comment turns `triage` green, and auto-merge then merges at once (CHB-212):
+        # an `apply` fix must be on the PR first, so the head must have moved past the review.
+        applied = [d for d in decisions if d.decision == "apply"]
+        if applied:
             head = head_sha(gh, args.repo, args.pr)
             if not SHA_RE.fullmatch(head):
                 print(f"PR {args.pr} has no readable head sha. Nothing was posted.", file=sys.stderr)
                 return 2
-            pending = unpushed_fixes(decisions, sha, head)
-            if pending:
-                names = ", ".join(f"finding {d.number}" for d in pending)
+            if head == sha:
+                names = ", ".join(f"finding {d.number}" for d in applied)
                 print(
-                    f"Refused: {names} is marked apply, and the PR head is still the reviewed commit {sha}. "
+                    f"Refused: marked apply: {names}. The PR head is still the reviewed commit {sha}. "
                     "Nothing was posted. The triage comment turns `triage` green, and auto-merge would merge "
                     "without the fixes. Push the fix commits first, then post the triage again.",
                     file=sys.stderr,

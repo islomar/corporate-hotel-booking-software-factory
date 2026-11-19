@@ -366,7 +366,9 @@ class CommandTest(unittest.TestCase):
         gh = FakeGh([review()], head="")
         code, _, err = run(["7", "--file", self.decisions_file("1 apply a\n2 discard b\n3 doubt c\n")], gh)
         self.assertEqual(code, 2)
+        self.assertNotIn("pr edit", gh.verbs())
         self.assertNotIn("pr comment", gh.verbs())
+        self.assertEqual(gh.bodies, [])
         self.assertIn("head", err.lower())
 
     def test_check_mode_exit_codes(self) -> None:
