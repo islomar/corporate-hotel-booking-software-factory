@@ -34,7 +34,7 @@
   `scripts/tests/test_codeowners.py` fails if either file gets a code owner again.
   `versions.tf` holds only version pins: `required_version` and `required_providers`. A change to it outside Dependabot still needs the owner's approval on the head commit, through `supply-chain`.
   The state backend moved to `infra/gcp/backend.tf` and the `google` provider block to `infra/gcp/providers.tf`. Both stay code-owned under `/infra/`.
-  The same test fails if a `versions.tf` under `infra/` holds a `provider`, `backend`, `module`, `resource`, `data` or `locals` block.
+  The same test fails if a `versions.tf` under `infra/` holds anything but one `terraform` block with `required_version` and `required_providers`.
   `.terraform-version` (the Terraform binary pin) stays owned under `/infra/` on purpose: Dependabot does not update it, so a change to it is always a person's or the agent's.
 
 ## Context

@@ -21,8 +21,7 @@ from check_supply_chain import is_supply_chain_file
 
 ROOT = Path(__file__).resolve().parents[2]
 CODEOWNERS = ROOT / ".github" / "CODEOWNERS"
-
-
+# Pattern syntax GitHub does not support; the matcher raises instead of guessing.
 UNSUPPORTED = ("\\", "[", "]", "!")
 
 
@@ -94,6 +93,34 @@ def owners_of(path: str, rules: list[tuple[re.Pattern[str], list[str]]]) -> list
     return found
 
 
+def non_pin_lines(text: str) -> list[str]:
+    """Lines of a versions.tf that are not version pins. An empty list means only pins.
+
+    Allowed: one top-level `terraform` block holding `required_version` and a
+    `required_providers` block. Anything else (a `cloud` or `backend` block,
+    `provider_meta`, a resource, an import) is reported. Comments are ignored.
+    """
+    found = []
+    depth = 0
+    terraform_blocks = 0
+    for raw in text.splitlines():
+        line = re.sub(r"(#|//).*", "", raw).strip()
+        if not line:
+            continue
+        if depth == 0:
+            if re.fullmatch(r"terraform\s*\{", line):
+                terraform_blocks += 1
+            else:
+                found.append(line)
+        elif depth == 1 and line != "}":
+            if not re.match(r"(required_version\s*=|required_providers\s*\{)", line):
+                found.append(line)
+        depth += line.count("{") - line.count("}")
+    if terraform_blocks > 1:
+        found.append("more than one terraform block")
+    return found
+
+
 class MatcherTest(unittest.TestCase):
     """The examples of GitHub's "About code owners" page."""
 
@@ -136,11 +163,48 @@ class MatcherTest(unittest.TestCase):
         self.assertIsNone(owners_of("other/infra/x.tf", rules))
 
 
+class VersionPinsTest(unittest.TestCase):
+    PINS = (
+        "# comment\n"
+        "terraform {\n"
+        '  required_version = "~> 1.17.0"\n'
+        "\n"
+        "  required_providers {\n"
+        "    google = {\n"
+        '      source  = "hashicorp/google"\n'
+        '      version = "~> 8.11.0"  # pinned\n'
+        "    }\n"
+        "  }\n"
+        "}\n"
+    )
+
+    def test_only_version_pins_pass(self):
+        self.assertEqual(non_pin_lines(self.PINS), [])
+
+    def test_anything_else_is_reported(self):
+        inside = '  backend "gcs" {\n    bucket = "b"\n  }\n'
+        for name, text in {
+            "backend": self.PINS.replace("\n  required_providers", f"\n{inside}  required_providers"),
+            "cloud": self.PINS.replace("\n  required_providers", "\n  cloud {\n  }\n  required_providers"),
+            "provider_meta": self.PINS.replace(
+                "\n  required_providers", '\n  provider_meta "google" {\n  }\n  required_providers'
+            ),
+            "provider": self.PINS + 'provider "google" {\n  project = "p"\n}\n',
+            "import": self.PINS + "import {\n  to = a.b\n  id = \"x\"\n}\n",
+            "variable": self.PINS + 'variable "x" {}\n',
+            "second terraform block": self.PINS + 'terraform {\n  required_version = "1"\n}\n',
+        }.items():
+            with self.subTest(name):
+                self.assertNotEqual(non_pin_lines(text), [])
+
+
 class RepositoryCodeownersTest(unittest.TestCase):
     def setUp(self):
         self.rules = parse(CODEOWNERS.read_text())
 
     def test_terraform_provider_pins_have_no_code_owner(self):
+        # infra/github/versions.tf does not exist yet. It is listed so a future file
+        # there gets the same treatment.
         for path in [
             "infra/gcp/.terraform.lock.hcl",
             "infra/gcp/versions.tf",
@@ -157,10 +221,8 @@ class RepositoryCodeownersTest(unittest.TestCase):
         files = sorted((ROOT / "infra").glob("**/versions.tf"))
         self.assertTrue(files)
         for path in files:
-            text = path.read_text()
-            for block in ("provider", "backend", "module", "resource", "data", "locals"):
-                with self.subTest(path=str(path.relative_to(ROOT)), block=block):
-                    self.assertIsNone(re.search(rf"^\s*{block}\b", text, re.MULTILINE))
+            with self.subTest(path=str(path.relative_to(ROOT))):
+                self.assertEqual(non_pin_lines(path.read_text()), [])
 
     def test_other_infrastructure_files_keep_the_owner(self):
         for path in [
