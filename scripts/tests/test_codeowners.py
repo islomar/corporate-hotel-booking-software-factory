@@ -23,8 +23,19 @@ ROOT = Path(__file__).resolve().parents[2]
 CODEOWNERS = ROOT / ".github" / "CODEOWNERS"
 
 
+UNSUPPORTED = ("\\", "[", "]", "!")
+
+
 def _pattern_regex(pattern: str) -> re.Pattern[str]:
-    """A regex for the repository-relative paths a CODEOWNERS pattern matches."""
+    """A regex for the repository-relative paths a CODEOWNERS pattern matches.
+
+    Supported: a leading `/` (anchored), a trailing `/` (directory), `*`, `?` and `**`.
+    A wildcard in the last segment does not reach nested files (GitHub's `docs/*`
+    example). Escapes, `!` and `[ ]` raise: GitHub does not support them, and this
+    matcher does not guess.
+    """
+    if any(char in pattern for char in UNSUPPORTED):
+        raise ValueError(f"CODEOWNERS pattern this test cannot model: {pattern}")
     directory = pattern.endswith("/")
     body = pattern.strip("/")
     # gitignore: a slash at the start or in the middle anchors the pattern at the root.
@@ -113,6 +124,11 @@ class MatcherTest(unittest.TestCase):
         self.assertEqual(owners_of(".npmrc", rules), ["@islomar"])
         self.assertIsNone(owners_of("frontend/.npmrc.bak", rules))
 
+    def test_patterns_it_cannot_model_raise(self):
+        for pattern in ["\\#file", "!/infra/gcp/state.tf", "/infra/[ab].tf"]:
+            with self.subTest(pattern=pattern), self.assertRaises(ValueError):
+                parse(f"{pattern} @islomar\n")
+
     def test_a_trailing_slash_matches_only_below_the_directory(self):
         rules = parse("/infra/ @islomar\n")
         self.assertEqual(owners_of("infra/gcp/state.tf", rules), ["@islomar"])
@@ -135,8 +151,25 @@ class RepositoryCodeownersTest(unittest.TestCase):
                 self.assertTrue(is_supply_chain_file(path))
                 self.assertFalse(owners_of(path, self.rules), "the supply-chain check decides")
 
+    def test_versions_tf_holds_only_version_pins(self):
+        # versions.tf has no code owner, so configuration in it would skip code-owner
+        # review. The backend and the provider live in owned files (CHB-207).
+        files = sorted((ROOT / "infra").glob("**/versions.tf"))
+        self.assertTrue(files)
+        for path in files:
+            text = path.read_text()
+            for block in ("provider", "backend", "module", "resource", "data", "locals"):
+                with self.subTest(path=str(path.relative_to(ROOT)), block=block):
+                    self.assertIsNone(re.search(rf"^\s*{block}\b", text, re.MULTILINE))
+
     def test_other_infrastructure_files_keep_the_owner(self):
-        for path in ["infra/gcp/state.tf", "infra/github/ruleset.tf", "infra/README.md"]:
+        for path in [
+            "infra/gcp/state.tf",
+            "infra/gcp/backend.tf",
+            "infra/gcp/providers.tf",
+            "infra/github/ruleset.tf",
+            "infra/README.md",
+        ]:
             with self.subTest(path=path):
                 self.assertEqual(owners_of(path, self.rules), ["@islomar"])
 

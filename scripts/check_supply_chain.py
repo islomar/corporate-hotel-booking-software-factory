@@ -73,9 +73,9 @@ SUPPLY_CHAIN_NAMES = (
     ".nvmrc",
     ".node-version",
     ".python-version",
-    # Terraform: provider lockfile and version constraints (CHB-207). `versions.tf` also
-    # holds the state backend and `required_version`: a change outside Dependabot still
-    # needs the owner, through this check instead of code-owner review.
+    # Terraform: provider lockfile and version constraints (CHB-207). `versions.tf` holds
+    # only `required_version` and `required_providers`; the backend and the provider
+    # block live in code-owned files (scripts/tests/test_codeowners.py checks it).
     ".terraform.lock.hcl",
     "versions.tf",
 )
