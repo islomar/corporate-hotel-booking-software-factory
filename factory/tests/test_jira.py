@@ -1954,6 +1954,74 @@ class PriorityTest(unittest.TestCase):
         self.assertEqual(fake.requests, [])
 
 
+class ParentTest(unittest.TestCase):
+    """CHB-211: `parent` moves a ticket to another epic."""
+
+    TICKET = "/rest/api/3/issue/CHB-1?fields=issuetype,parent"
+    EPIC = "/rest/api/3/issue/CHB-27?fields=issuetype"
+
+    def _fake(self, ticket_type: str = "Task", target_type: str = "Epic", old_parent: str | None = "CHB-19") -> FakeJira:
+        ticket: dict[str, Any] = {"issuetype": {"name": ticket_type}}
+        if old_parent is not None:
+            ticket["parent"] = {"key": old_parent}
+        return FakeJira(
+            {
+                ("GET", self.TICKET): {"key": "CHB-1", "fields": ticket},
+                ("GET", self.EPIC): {"key": "CHB-27", "fields": {"issuetype": {"name": target_type}}},
+                ("PUT", "/rest/api/3/issue/CHB-1"): None,
+            }
+        )
+
+    def test_moves_a_ticket_to_another_epic_with_one_edit_of_the_parent_field(self) -> None:
+        fake = self._fake()
+        code, out, _ = _run(["parent", "CHB-1", "CHB-27"], fake)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(out.strip(), "CHB-1 parent CHB-19 -> CHB-27")
+        self.assertEqual(fake.writes(), [("PUT", "/rest/api/3/issue/CHB-1", {"fields": {"parent": {"key": "CHB-27"}}})])
+
+    def test_a_ticket_without_a_parent_prints_none_as_the_old_parent(self) -> None:
+        fake = self._fake(old_parent=None)
+        code, out, _ = _run(["parent", "CHB-1", "CHB-27"], fake)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(out.strip(), "CHB-1 parent none -> CHB-27")
+        self.assertEqual(len(fake.writes()), 1)
+
+    def test_a_ticket_already_under_the_epic_sends_no_write(self) -> None:
+        fake = self._fake(old_parent="CHB-27")
+        code, out, _ = _run(["parent", "CHB-1", "CHB-27"], fake)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(out.strip(), "CHB-1 parent CHB-27 (unchanged)")
+        self.assertEqual(fake.writes(), [])
+
+    def test_a_target_that_is_not_an_epic_exits_1_and_sends_no_write(self) -> None:
+        fake = self._fake(target_type="Task")
+        code, _, err = _run(["parent", "CHB-1", "CHB-27"], fake)
+
+        self.assertEqual(code, 1)
+        self.assertIn("CHB-27 is a Task, not an Epic", err)
+        self.assertEqual(fake.writes(), [])
+
+    def test_a_ticket_that_is_an_epic_exits_1_and_sends_no_write(self) -> None:
+        fake = self._fake(ticket_type="Epic")
+        code, _, err = _run(["parent", "CHB-1", "CHB-27"], fake)
+
+        self.assertEqual(code, 1)
+        self.assertIn("CHB-1 is an Epic", err)
+        self.assertEqual(fake.writes(), [])
+
+    def test_keys_outside_chb_are_refused_before_1password(self) -> None:
+        for argv in (["parent", "OTHER-1", "CHB-27"], ["parent", "CHB-1", "OTHER-27"]):
+            fake = FakeJira({})
+            code, _, err = _run(argv, fake, credentials_reader=_no_credentials)
+
+            self.assertEqual(code, 1, argv)
+            self.assertIn("is not a CHB issue key", err, argv)
+            self.assertEqual(fake.requests, [], argv)
+
+
 class MarkdownHeadingTest(unittest.TestCase):
     """A description written with "## Heading" lines gets real headings, so `section` finds them."""
 
