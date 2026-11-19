@@ -143,6 +143,7 @@ class RepositoryCodeownersTest(unittest.TestCase):
     def test_the_check_itself_and_the_release_age_settings_keep_the_owner(self):
         for path in [
             "scripts/check_supply_chain.py",
+            "scripts/rerun_failed_supply_chain.py",
             ".github/workflows/supply-chain.yml",
             "frontend/.npmrc",
             ".github/CODEOWNERS",
