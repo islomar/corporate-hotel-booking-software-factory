@@ -27,6 +27,12 @@
   Accepted risk: a 0.x minor can break the contract (semver allows breaking changes below 1.0). CI is the only gate until monitoring and smoke tests exist.
   Majors, Playwright updates and updates without a known type still need a human.
   `update_risks` and the "Classify the update" step changed together.
+- Amended 2026-11-19 (CHB-207): Terraform provider pins join the supply-chain set. `.terraform.lock.hcl` and `versions.tf` match in any folder.
+  The CHB-90 change left them out, and `/infra/` in CODEOWNERS owns them.
+  Every Terraform provider PR from Dependabot waited for the owner, auto-merge or not (PR #134).
+  CODEOWNERS now has lines with no owner for `/infra/**/.terraform.lock.hcl` and `/infra/**/versions.tf`, below `/infra/`. The last matching pattern wins.
+  `scripts/tests/test_codeowners.py` fails if either file gets a code owner again.
+  `versions.tf` also holds the state backend and `required_version`. A change to it outside Dependabot still needs the owner's approval on the head commit, through `supply-chain`.
 
 ## Context
 
@@ -145,6 +151,7 @@ Every Dependabot PR therefore waited for the owner, auto-merge or not.
   Without `-z`, git C-quotes paths with non-ASCII characters, and a quoted `"dép/package.json"` would not match `package.json`.
 - The file list in the script is wider than the old CODEOWNERS list.
   It adds resolver settings (`uv.toml`, `pip.conf`, `pnpm-workspace.yaml`, `.pnpmfile.cjs`, `.yarnrc*`, `bunfig.toml`), other lockfiles and manifests, compose and Dockerfile variants, `.node-version`.
+  Since CHB-207 it also holds `.terraform.lock.hcl` and `versions.tf`.
 - Image build and compose files match in any case: `Dockerfile`, `Dockerfile.*`, `*.Dockerfile`, `Containerfile*`, `*.Containerfile`, and `compose` and `docker-compose` with `.yaml` or `.yml`.
   Docker and Podman accept any file name with `-f`, and macOS and Windows file systems ignore case.
   Other names match in exact case.

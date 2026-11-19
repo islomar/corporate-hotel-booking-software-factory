@@ -73,6 +73,11 @@ SUPPLY_CHAIN_NAMES = (
     ".nvmrc",
     ".node-version",
     ".python-version",
+    # Terraform: provider lockfile and version constraints (CHB-207). `versions.tf` also
+    # holds the state backend and `required_version`: a change outside Dependabot still
+    # needs the owner, through this check instead of code-owner review.
+    ".terraform.lock.hcl",
+    "versions.tf",
 )
 
 # Image build and compose files, matched in any case: Docker and Podman accept any name

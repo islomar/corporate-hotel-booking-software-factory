@@ -95,6 +95,31 @@ updated-dependencies:
 Signed-off-by: dependabot[bot] <support@github.com>"""
 
 
+# Commit message as Dependabot wrote it on PR #134 (2026-11-18): a Terraform provider bump.
+PR134_TERRAFORM = """Bump hashicorp/google
+
+Bumps the terraform-providers group with 1 update in the /infra/gcp directory: [hashicorp/google](https://github.com/hashicorp/terraform-provider-google).
+
+
+Updates `hashicorp/google` from 8.10.0 to 8.11.0
+- [Release notes](https://github.com/hashicorp/terraform-provider-google/releases)
+- [Changelog](https://github.com/hashicorp/terraform-provider-google/blob/main/CHANGELOG.md)
+- [Commits](https://github.com/hashicorp/terraform-provider-google/compare/v8.10.0...v8.11.0)
+
+---
+updated-dependencies:
+- dependency-name: hashicorp/google
+  dependency-version: 8.11.0
+  dependency-type: direct:production
+  update-type: version-update:semver-minor
+  dependency-group: terraform-providers
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>"""
+PR134_FILES = ["infra/gcp/.terraform.lock.hcl", "infra/gcp/versions.tf"]
+PR134_REF = "dependabot/terraform/infra/gcp/terraform-providers-6c8f9a2531"
+
+
 def dependabot_commit(sha=HEAD, message=SAFE_MINOR):
     """A commit as GitHub records it for Dependabot (PRs #1 to #4, 2026-11-05)."""
     return {
@@ -144,6 +169,11 @@ class SupplyChainFileTest(unittest.TestCase):
             "pip.conf",
             "pnpm-workspace.yaml",
             ".yarnrc.yml",
+            "infra/gcp/.terraform.lock.hcl",
+            "infra/gcp/versions.tf",
+            "infra/github/.terraform.lock.hcl",
+            "infra/github/versions.tf",
+            "modules/network/versions.tf",
         ]:
             with self.subTest(path=path):
                 self.assertTrue(is_supply_chain_file(path))
@@ -171,6 +201,9 @@ class SupplyChainFileTest(unittest.TestCase):
             ".github/workflows/ci.yml",
             "scripts/check_release_age.py",
             "docs/dockerfile-notes.md",
+            "infra/gcp/state.tf",
+            "infra/github/ruleset.tf",
+            "infra/gcp/versions.tf.bak",
         ]:
             with self.subTest(path=path):
                 self.assertFalse(is_supply_chain_file(path))
@@ -434,6 +467,45 @@ class DependabotUpdateTypeTest(unittest.TestCase):
     def test_no_commits_is_a_risk_not_a_crash(self):
         # Defensive: decide() stops at _dependabot_problems before this when commits is empty.
         self.assertEqual(pr_update_risks(evidence(commits=[])), ["no commits"])
+
+
+class TerraformTest(unittest.TestCase):
+    """CHB-207: Terraform provider pins pass through the supply-chain check, not CODEOWNERS."""
+
+    def test_pr_134_passes_unattended(self):
+        verdict = decide(
+            evidence(
+                changed_files=PR134_FILES,
+                pr_head_ref=PR134_REF,
+                commits=[dependabot_commit(message=PR134_TERRAFORM)],
+            )
+        )
+        self.assertTrue(verdict.ok, verdict.message)
+        self.assertIn("infra/gcp/versions.tf", verdict.message)
+
+    def test_a_terraform_provider_major_needs_the_owner(self):
+        message = PR134_TERRAFORM.replace("semver-minor", "semver-major")
+        verdict = decide(
+            evidence(
+                changed_files=PR134_FILES,
+                pr_head_ref=PR134_REF,
+                commits=[dependabot_commit(message=message)],
+            )
+        )
+        self.assertFalse(verdict.ok)
+
+    def test_an_agent_edit_of_versions_tf_needs_the_owner_on_the_head_commit(self):
+        agent = "chb-factory-agent[bot]"
+        values = {
+            "changed_files": ["infra/gcp/versions.tf"],
+            "pr_author": agent,
+            "pr_head_ref": "CHB-999-backend-bucket",
+            "commits": [dependabot_commit() | {"author": {"login": agent}}],
+        }
+        self.assertFalse(decide(evidence(**values)).ok)
+        stale = [review("APPROVED", commit_id=OLD)]
+        self.assertFalse(decide(evidence(**values, reviews=stale)).ok)
+        self.assertTrue(decide(evidence(**values, reviews=[review("APPROVED")])).ok)
 
 
 class MainTest(unittest.TestCase):

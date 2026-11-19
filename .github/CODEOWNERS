@@ -23,6 +23,11 @@
 # Dependabot-only PRs and otherwise needs the owner's approval on the head commit.
 # The check itself and `.npmrc` (release-age settings and exemptions) stay owned.
 # Keep the check's own lines even if the directory lines above are narrowed later.
+# Terraform provider pins sit under the owned `/infra/`, so they need lines with no
+# owner here, below it: the last matching pattern wins (CHB-207).
+# scripts/tests/test_codeowners.py fails if either file gets an owner again.
+/infra/**/.terraform.lock.hcl
+/infra/**/versions.tf
 .npmrc                               @islomar
 /.github/workflows/supply-chain.yml  @islomar
 /scripts/check_supply_chain.py       @islomar
