@@ -3,10 +3,12 @@
 import contextlib
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -56,7 +58,7 @@ def fake_gh(pulls: list[dict], comments: dict[int, list[dict]]):
 def run(gh, state_dir: str, session: str = "s1") -> tuple[int, str]:
     err = io.StringIO()
     with contextlib.redirect_stderr(err):
-        code = hook.main(io.StringIO(json.dumps({"session_id": session})), gh=gh, state_dir=state_dir)
+        code = hook.main(io.StringIO(json.dumps({"session_id": session})), run_gh=gh, state_folder=state_dir)
     return code, err.getvalue()
 
 
@@ -152,8 +154,51 @@ class UntriagedReviewsTest(unittest.TestCase):
     def test_input_that_is_not_json_allows_the_stop(self):
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
-            code = hook.main(io.StringIO("not json"), gh=fake_gh([pull(140)], {140: [review()]}), state_dir=self.state_dir)
+            code = hook.main(io.StringIO("not json"), run_gh=fake_gh([pull(140)], {140: [review()]}), state_folder=self.state_dir)
         self.assertEqual(code, 0)
+
+
+    def test_unusable_state_folder_lets_the_turn_end_with_a_warning(self):
+        blocker = Path(self.state.name) / "a-file"
+        blocker.write_text("")
+        code, err = run(fake_gh([pull(140)], {140: [review()]}), str(blocker))
+        self.assertEqual(code, 0)
+        self.assertIn("state folder unusable", err)
+
+    def test_the_env_var_sets_the_state_folder(self):
+        folder = str(Path(self.state.name) / "from-env")
+        with unittest.mock.patch.dict(os.environ, {hook.STATE_DIR_ENV: folder}):
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                code = hook.main(io.StringIO(json.dumps({"session_id": "s9"})), run_gh=fake_gh([pull(140)], {140: [review()]}))
+        self.assertEqual(code, 2)
+        self.assertTrue((Path(folder) / "s9.json").is_file())
+
+
+class DeadlineTest(unittest.TestCase):
+    def test_a_call_after_the_deadline_raises_without_running_gh(self):
+        now = [100.0]
+        gh = hook.make_gh(total=20, clock=lambda: now[0])
+        now[0] = 120.0
+        with unittest.mock.patch.object(hook.subprocess, "run") as run_mock:
+            with self.assertRaises(TimeoutError):
+                gh(["api", "x"])
+        run_mock.assert_not_called()
+
+    def test_a_call_gets_at_most_the_time_left(self):
+        now = [100.0]
+        gh = hook.make_gh(total=20, clock=lambda: now[0])
+        now[0] = 117.0
+        with unittest.mock.patch.object(hook.subprocess, "run") as run_mock:
+            run_mock.return_value.stdout = ""
+            gh(["api", "x"])
+        self.assertEqual(run_mock.call_args.kwargs["timeout"], 3.0)
+
+    def test_the_deadline_error_lets_the_turn_end(self):
+        with tempfile.TemporaryDirectory() as folder:
+            code, err = run(hook.make_gh(total=0), folder)
+        self.assertEqual(code, 0)
+        self.assertIn("TimeoutError", err)
 
 
 class SettingsTest(unittest.TestCase):

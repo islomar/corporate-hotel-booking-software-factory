@@ -13,6 +13,7 @@ commands, and exits 2 with the list on stderr.
 
 It fails open: a GitHub error (gh missing, a timeout, a failed call, output that is not JSON) or anything
 unexpected prints one line to stderr and exits 0. A network failure must not trap the session.
+Each call has a 6 s timeout and all calls share a 20 s deadline, below the 30 s hook timeout.
 
 It never loops. Like check_wip_minimums.py it remembers the findings it refused for, per session, in
 `<temp dir>/chb-untriaged-reviews-<uid>/<session id>.json` (CHB_UNTRIAGED_REVIEWS_STATE_DIR overrides the
@@ -33,7 +34,8 @@ import posixpath
 import subprocess
 import sys
 import tempfile
-from collections.abc import Mapping, Sequence
+import time
+from collections.abc import Callable, Mapping, Sequence
 from typing import TextIO
 
 HOOKS = os.path.dirname(os.path.abspath(__file__))
@@ -46,14 +48,26 @@ from check_wip_minimums import already_refused  # noqa: E402
 
 STATE_DIR_ENV = "CHB_UNTRIAGED_REVIEWS_STATE_DIR"
 CALL_TIMEOUT_SECONDS = 6
+TOTAL_SECONDS = 20  # below the 30 s timeout of the hook in .claude/settings.json
 PULLS_PATH = "repos/{repo}/pulls?state=open&per_page=100"
 
 
-def gh(args: list[str]) -> str:
-    """`gh <args>` with a short timeout. Raises on failure, like triage_review.Gh."""
-    return subprocess.run(  # noqa: S603
-        ["gh", *args], stdin=subprocess.DEVNULL, check=True, capture_output=True, text=True, timeout=CALL_TIMEOUT_SECONDS
-    ).stdout
+def make_gh(total: float = TOTAL_SECONDS, clock: Callable[[], float] = time.monotonic) -> triage_review.Gh:
+    """`gh <args>` with a short timeout per call and one deadline for all calls. Raises on failure, like triage_review.Gh.
+
+    Past the deadline it raises TimeoutError, so the hook warns and ends before Claude Code kills it.
+    """
+    deadline = clock() + total
+
+    def gh(args: list[str]) -> str:
+        left = deadline - clock()
+        if left <= 0:
+            raise TimeoutError(f"GitHub reads took more than {total:g} s")
+        return subprocess.run(  # noqa: S603
+            ["gh", *args], stdin=subprocess.DEVNULL, check=True, capture_output=True, text=True, timeout=min(CALL_TIMEOUT_SECONDS, left)
+        ).stdout
+
+    return gh
 
 
 def _login(item: Mapping[str, object]) -> object:
@@ -95,7 +109,7 @@ def _reason(error: BaseException) -> str:
     return " ".join(text.split())[:300]
 
 
-def main(stdin: TextIO = sys.stdin, gh: triage_review.Gh | None = None, state_dir: str | None = None) -> int:
+def main(stdin: TextIO = sys.stdin, run_gh: triage_review.Gh | None = None, state_folder: str | None = None) -> int:
     try:
         event = json.load(stdin)
     except ValueError:
@@ -105,13 +119,13 @@ def main(stdin: TextIO = sys.stdin, gh: triage_review.Gh | None = None, state_di
     session_id = event.get("session_id")
     session_id = session_id if isinstance(session_id, str) else ""
     try:
-        lines = findings(gh or globals()["gh"])
+        lines = findings(run_gh or make_gh())
     except BaseException as error:  # noqa: BLE001 - fail open on anything
         print(f"Untriaged review check skipped: {_reason(error)}", file=sys.stderr)
         return 0
     fingerprint = hashlib.sha256("\n".join(lines).encode()).hexdigest() if lines else None
     try:
-        repeated = already_refused(state_dir if state_dir is not None else globals()["state_dir"](), session_id, fingerprint)
+        repeated = already_refused(state_folder if state_folder is not None else state_dir(), session_id, fingerprint)
     except OSError as error:
         print(f"Untriaged review check skipped: state folder unusable ({type(error).__name__})", file=sys.stderr)
         return 0

@@ -481,6 +481,7 @@ The reason names each PR and the commands `factory/bin/triage-review <PR>` and `
 A review with no findings, a PR of another author and a closed PR never block.
 
 It fails open: a GitHub error (no `gh`, a 6-second timeout, a failed call, output that is not JSON) prints one line to stderr and lets the turn end.
+All calls share a 20-second deadline, below the 30-second hook timeout, so the hook warns before Claude Code would kill it.
 It refuses once per session for the same findings, and a new review refuses again
 (state in `<temp dir>/chb-untriaged-reviews-<uid>/`, folder override `CHB_UNTRIAGED_REVIEWS_STATE_DIR`). Tests: `factory/tests/test_check_untriaged_reviews.py`.
 
