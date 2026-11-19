@@ -2388,7 +2388,10 @@ def run(args: argparse.Namespace, jira: Jira) -> int:
         print(f"{args.key} priority {args.priority}")
     elif args.command == "parent":
         old, changed = jira.set_parent(args.key, args.epic)
-        print(f"{args.key} parent {args.epic} (unchanged)" if not changed else f"{args.key} parent {old or 'none'} -> {args.epic}")
+        if changed:
+            print(f"{args.key} parent {old or 'none'} -> {args.epic}")
+        else:
+            print(f"{args.key} parent {args.epic} (unchanged)")
     return 0
 
 

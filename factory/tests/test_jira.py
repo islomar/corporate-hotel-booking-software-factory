@@ -2010,7 +2010,7 @@ class ParentTest(unittest.TestCase):
 
         self.assertEqual(code, 1)
         self.assertIn("CHB-1 is an Epic", err)
-        self.assertEqual(fake.writes(), [])
+        self.assertEqual([(m, p) for m, p, _, _ in fake.requests], [("GET", self.TICKET)])
 
     def test_keys_outside_chb_are_refused_before_1password(self) -> None:
         for argv in (["parent", "OTHER-1", "CHB-27"], ["parent", "CHB-1", "OTHER-27"]):
