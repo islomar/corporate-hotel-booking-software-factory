@@ -1285,7 +1285,7 @@ class Jira:
     def set_parent(self, key: str, epic: str) -> tuple[str | None, bool]:
         """Move a ticket under another epic. Return the old parent key and whether a write was sent.
 
-        Both checks run before the write: the target must be an Epic, the ticket must not be one.
+        Both checks run before the write: the ticket must not be an Epic, the target must be one.
         """
         fields = self.request("GET", f"/rest/api/3/issue/{check_key(key)}?fields=issuetype,parent")["fields"]
         if fields["issuetype"]["name"] == "Epic":
@@ -1296,7 +1296,7 @@ class Jira:
         old = (fields.get("parent") or {}).get("key")
         if old == epic:
             return old, False
-        self.request("PUT", f"/rest/api/3/issue/{key}", {"fields": {"parent": {"key": epic}}}, empty_ok=True)
+        self.request("PUT", f"/rest/api/3/issue/{check_key(key)}", {"fields": {"parent": {"key": epic}}}, empty_ok=True)
         return old, True
 
     def edit_comment(self, key: str, comment_id: str, body: str) -> None:
