@@ -50,7 +50,7 @@ check-deps: test-scripts
 lint-backend: ## Lint and typecheck the backend (ruff and pyright)
 	cd backend && uv run --locked ruff format --check . && uv run --locked ruff check . && uv run --locked pyright
 
-lint-frontend: ## Lint and typecheck the frontend (prettier, eslint and tsc)
+lint-frontend: ## Lint and typecheck the frontend (prettier, oxlint and tsc)
 	cd frontend && npm run -s format:check && npm run -s lint && npm run -s typecheck
 
 format: ## Format all code

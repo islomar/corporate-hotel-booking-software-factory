@@ -1,5 +1,6 @@
 """CHB-191: `make help` and the README list every described target; `make test` runs only tests."""
 
+import json
 import re
 import subprocess
 import unittest
@@ -38,6 +39,16 @@ class HelpTest(unittest.TestCase):
         printed = {line.split()[0] for line in _make("help")}
 
         self.assertEqual(printed - readme_targets(), set())
+
+    def test_lint_frontend_names_the_linter_the_frontend_runs(self) -> None:
+        """CHB-202: the help and the README named eslint while `npm run lint` ran oxlint."""
+        linter = json.loads((ROOT / "frontend" / "package.json").read_text())["scripts"]["lint"].split()[0]
+        help_line = next(line for line in _make("help") if line.split()[0] == "lint-frontend")
+        readme = (ROOT / "README.md").read_text().splitlines()
+        readme_line = next(line for line in readme if line.startswith("make lint-frontend"))
+
+        self.assertIn(linter, help_line)
+        self.assertIn(linter, readme_line)
 
 
 class TestTargetTest(unittest.TestCase):
