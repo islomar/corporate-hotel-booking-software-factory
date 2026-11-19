@@ -77,7 +77,7 @@ class UntriagedReviewsTest(unittest.TestCase):
         self.assertIn("factory/bin/triage-review 140 --file FILE", err)
         self.assertIn("1 finding", err)
 
-    def test_triage_comment_for_the_head_sha_does_not_block(self):
+    def test_triage_comment_for_the_reviewed_sha_does_not_block(self):
         gh = fake_gh([pull(140)], {140: [review(), triage()]})
         self.assertEqual(run(gh, self.state_dir), (0, ""))
 

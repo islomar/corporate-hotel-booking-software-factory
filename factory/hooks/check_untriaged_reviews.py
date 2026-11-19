@@ -99,8 +99,14 @@ def state_dir() -> str:
 
 
 def _reason(error: BaseException) -> str:
-    detail = getattr(error, "stderr", None) if isinstance(error, subprocess.CalledProcessError) else None
-    text = f"{type(error).__name__}: {detail or error}" if isinstance(error, (subprocess.SubprocessError, OSError, ValueError)) else type(error).__name__
+    """The type name, plus the text of a known error: gh's stderr for a failed call. An unexpected error gives only its type."""
+    name = type(error).__name__
+    if isinstance(error, subprocess.CalledProcessError):
+        text = f"{name}: {error.stderr or error}"
+    elif isinstance(error, (subprocess.SubprocessError, OSError, ValueError)):
+        text = f"{name}: {error}"
+    else:
+        text = name
     return " ".join(text.split())[:300]
 
 
