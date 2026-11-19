@@ -16,6 +16,7 @@
   - [Hooks at a glance](#hooks-at-a-glance)
   - [Hook: commands for the owner work from any folder](#hook-commands-for-the-owner-work-from-any-folder)
   - [Hook: act on the WIP minimums](#hook-act-on-the-wip-minimums)
+  - [Hook: triage review findings of agent PRs](#hook-triage-review-findings-of-agent-prs)
   - [Hook: no personal agent memory](#hook-no-personal-agent-memory)
   - [Hook: branch names follow the ticket key](#hook-branch-names-follow-the-ticket-key)
   - [Hook: related tests only while iterating](#hook-related-tests-only-while-iterating)
@@ -415,6 +416,7 @@ flowchart TD
     subgraph STOP["Stop: refuses the end of the turn"]
         CO["check_owner_commands.py<br/>matcher: none<br/>flags owner commands that depend on the current folder"]
         CW["check_wip_minimums.py<br/>matcher: none<br/>refuses while a board column is below its minimum"]
+        CT["check_untriaged_reviews.py<br/>matcher: none<br/>refuses while an agent PR has untriaged review findings"]
     end
     SS --> PRE
     PRE --> POST
@@ -466,6 +468,21 @@ It fails open with one line on stderr when Jira or 1Password cannot be reached. 
 a bash loop that retries the move every 120 seconds while the exit code is 5. It ends at once on any other code (0 moved; 4 not the top ticket, a missing section or a blocked ticket, printed),
 and after 60 minutes it prints that the slot is still full and exits 1. The agent runs it in the background.
 `transition` and `ready` exit 6 when the move is done and Ready is below its minimum (CHB-164). It is not a refusal: nothing waits for it, and the wait command passes it on as the exit of a finished move.
+
+## Hook: triage review findings of agent PRs
+
+`.claude/settings.json` runs `factory/hooks/check_untriaged_reviews.py` when the agent finishes a reply (Stop hook, CHB-209).
+On 2026-11-19 PRs #139 and #140 sat blocked after the owner's approval: the agent had not triaged the review, so the required `triage` check stayed red.
+
+The hook lists the open PRs of `chb-factory-agent[bot]` and reads the comments of each with `gh` (read only, by repository path).
+It calls `triage_review.evaluate`, the function of the required `triage` check, so the hook and the check agree on what "untriaged" means.
+It exits 2 when the latest review comment of a PR has findings and no triage comment for the reviewed SHA.
+The reason names each PR and the commands `factory/bin/triage-review <PR>` and `factory/bin/triage-review <PR> --file FILE`.
+A review with no findings, a PR of another author and a closed PR never block.
+
+It fails open: a GitHub error (no `gh`, a 6-second timeout, a failed call, output that is not JSON) prints one line to stderr and lets the turn end.
+It refuses once per session for the same findings, and a new review refuses again
+(state in `<temp dir>/chb-untriaged-reviews-<uid>/`, folder override `CHB_UNTRIAGED_REVIEWS_STATE_DIR`). Tests: `factory/tests/test_check_untriaged_reviews.py`.
 
 ## Hook: no personal agent memory
 
@@ -740,6 +757,8 @@ A triage with no `apply` finding posts on the reviewed head. The agent lists the
 
 The required check `triage` (`.github/workflows/triage.yml`) fails while the latest review comment has findings and the PR has no triage comment for the same SHA from `chb-factory-agent[bot]`.
 It passes when the review has no findings, or there is no review comment. A comment from any other account does not count. Tests: `factory/tests/test_triage_review.py`.
+The Stop hook `factory/hooks/check_untriaged_reviews.py` (CHB-209) runs the same check on every open agent PR and refuses to end the turn while one fails.
+See [Hook: triage review findings of agent PRs](#hook-triage-review-findings-of-agent-prs).
 
 How the check stays current:
 

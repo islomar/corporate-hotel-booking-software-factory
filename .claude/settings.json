@@ -118,6 +118,11 @@
             "type": "command",
             "command": "python3 -I \"${CLAUDE_PROJECT_DIR}/factory/hooks/check_wip_minimums.py\"",
             "timeout": 20
+          },
+          {
+            "type": "command",
+            "command": "python3 -I \"${CLAUDE_PROJECT_DIR}/factory/hooks/check_untriaged_reviews.py\"",
+            "timeout": 30
           }
         ]
       }
