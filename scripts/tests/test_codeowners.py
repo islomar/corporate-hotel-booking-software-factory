@@ -99,22 +99,23 @@ def non_pin_lines(text: str) -> list[str]:
     Allowed: one top-level `terraform` block holding `required_version` and a
     `required_providers` block. Anything else (a `cloud` or `backend` block,
     `provider_meta`, a resource, an import) is reported. Text after `#` or `//` is
-    dropped as a comment, also inside a quoted string: the rest of that line is not
-    checked.
+    dropped as a comment.
 
     A line-based heuristic, not an HCL parser: it expects one statement per line, as
     `terraform fmt` writes. It fails closed on what it cannot read line by line: a
-    `/* */` comment, or more than one brace on a line. It does not inspect the
-    contents of `required_providers`: Terraform accepts only provider requirement maps
-    there. The `supply-chain` check still
-    asks the owner to approve any change to versions.tf that Dependabot did not make.
+    `/* */` comment, more than one brace on a line, or a `#` or `//` inside a quoted
+    string (an odd number of quotes before it). It does not inspect the contents of
+    `required_providers`: Terraform accepts only provider requirement maps there.
+    The `supply-chain` check still asks the owner to approve any change to
+    versions.tf that Dependabot did not make.
     """
     found = []
     depth = 0
     terraform_blocks = 0
     for raw in text.splitlines():
         line = re.sub(r"(#|//).*", "", raw).strip()
-        if "/*" in raw or line.count("{") + line.count("}") > 1:
+        in_string = line.count('"') % 2 == 1
+        if "/*" in raw or in_string or line.count("{") + line.count("}") > 1:
             found.append(raw.strip())
         if not line:
             continue
@@ -209,6 +210,7 @@ class VersionPinsTest(unittest.TestCase):
                 "  required_providers {\n", "  required_providers { } \n  cloud {\n"
             ),
             "one-line block": self.PINS + 'variable "x" { }\n',
+            "comment marker in a string": self.PINS.replace('"~> 1.17.0"', '"~> 1.17.0 # x"'),
         }.items():
             with self.subTest(name):
                 self.assertNotEqual(non_pin_lines(text), [])
