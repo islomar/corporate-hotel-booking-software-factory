@@ -255,7 +255,7 @@ class FakeGh:
             return "\n".join(json.dumps(c) for c in self.comments)
         if args[:2] == ["pr", "view"]:
             return self.body
-        if args[:1] == ["api"] and args[1].endswith("/pulls/7"):
+        if args[:1] == ["api"] and args[1] in (f"repos/{tr.REPOSITORY}/pulls/7", "repos/owner/repo/pulls/7"):
             return self.head
         if args[:1] == ["api"] and "actions/workflows/triage.yml/runs" in args[1]:
             return json.dumps({"workflow_runs": self.runs})

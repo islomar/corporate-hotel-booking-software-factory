@@ -378,7 +378,8 @@ def main(argv: Sequence[str], gh: Gh | None = None) -> int:
                 print(f"- {problem}", file=sys.stderr)
             return 2
         # The triage comment turns `triage` green, and auto-merge then merges at once (CHB-212):
-        # an `apply` fix must be on the PR first, so the head must have moved past the review.
+        # an `apply` fix must be on the PR first, so the head must differ from the reviewed commit.
+        # Equality only: a push without a fix also passes, and its own review follows.
         applied = [d for d in decisions if d.decision == "apply"]
         if applied:
             head = head_sha(gh, args.repo, args.pr)

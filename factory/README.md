@@ -719,7 +719,7 @@ Otherwise it replaces the "Caveats" section of the PR body with the doubts, then
 The order matters: push the commits that fix the `apply` findings first, then post the triage.
 The triage comment turns the required `triage` check green, so an approved PR with auto-merge merges at once, and a fix pushed later misses the merge (CHB-212).
 The script enforces this: while a finding is `apply` and the PR head is still the reviewed commit, it names those findings, posts nothing and exits 1.
-When the head is newer, it posts. The new head gets its own review, which the agent triages the same way.
+When the head differs from the reviewed commit, it posts. It checks only that the SHAs differ, so a push without a fix also passes. The new head gets its own review, which the agent triages the same way.
 A triage with no `apply` finding posts on the reviewed head. The agent lists the doubts to the human in the chat.
 
 The required check `triage` (`.github/workflows/triage.yml`) fails while the latest review comment has findings and the PR has no triage comment for the same SHA from `chb-factory-agent[bot]`.
