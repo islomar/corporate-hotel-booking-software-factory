@@ -58,6 +58,11 @@ make down    # stop the containers
 make clean-dev  # remove this checkout's containers and volumes (run it when done with make dev in a worktree)
 make check   # lint, typecheck and tests (the pre-commit gate); agents: .devcontainer/run make check
 make test    # only the tests: backend, frontend, scripts and factory
+make test-backend   # only the backend tests
+make test-frontend  # only the frontend tests
+make test-scripts   # only the scripts and factory tests
+make lint-backend   # lint and typecheck the backend: ruff and pyright
+make lint-frontend  # lint and typecheck the frontend: prettier, eslint and tsc
 make format  # format all code
 make mutate  # mutation testing for the backend
 make check-npm  # fail if npm is too old to honour min-release-age (make setup runs it)
