@@ -103,7 +103,9 @@ def non_pin_lines(text: str) -> list[str]:
 
     A line-based heuristic, not an HCL parser: it expects one statement per line, as
     `terraform fmt` writes. It fails closed on what it cannot read line by line: a
-    `/* */` comment, or more than one brace on a line. The `supply-chain` check still
+    `/* */` comment, or more than one brace on a line. It does not inspect the
+    contents of `required_providers`: Terraform accepts only provider requirement maps
+    there. The `supply-chain` check still
     asks the owner to approve any change to versions.tf that Dependabot did not make.
     """
     found = []
