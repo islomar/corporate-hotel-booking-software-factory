@@ -12,7 +12,7 @@
 
 # Ideas from the 540 talk
 
-Source: the talk "Del humano en el bucle al desarrollo desatendido" and 46 slide screenshots, reviewed on 2026-11-06.
+Source: the talk "Del humano en el bucle al desarrollo desatendido" ("From human in the loop to unattended development") and 46 slide screenshots, reviewed on 2026-11-06.
 Each idea has a verdict and the Jira ticket that carries it.
 
 ## Their delivery cycle

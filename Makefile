@@ -23,6 +23,9 @@ dev: ## Run backend and frontend with hot reload (http://localhost:5173), Grafan
 	mkdir -p frontend/node_modules
 	docker compose up --build backend frontend lgtm
 
+up: ## Run the production image locally (http://localhost:8080)
+	docker compose --profile prod up --build app
+
 down: ## Stop all containers
 	docker compose --profile prod down
 
@@ -31,30 +34,11 @@ clean-dev: ## Remove this checkout's containers and volumes, and loop-detector s
 	docker compose --profile prod down --volumes --remove-orphans
 	python3 -I factory/hooks/warn_edit_loops.py --prune
 
-up: ## Run the production image locally (http://localhost:8080)
-	docker compose --profile prod up --build app
-
 check: check-backend check-frontend check-deps ## Lint, typecheck and test everything (the pre-commit gate)
 
 check-backend: lint-backend test-backend
 
 check-frontend: lint-frontend test-frontend
-
-lint-backend:
-	cd backend && uv run --locked ruff format --check . && uv run --locked ruff check . && uv run --locked pyright
-
-lint-frontend:
-	cd frontend && npm run -s format:check && npm run -s lint && npm run -s typecheck
-
-test-backend:
-	cd backend && uv run --locked pytest
-
-test-frontend:
-	cd frontend && npm test
-
-test-scripts:
-	python3 -I -m unittest discover -s scripts/tests
-	python3 -I -m unittest discover -s factory/tests
 
 check-deps: test-scripts
 	python3 -I scripts/check_playwright_image.py
@@ -63,16 +47,32 @@ check-deps: test-scripts
 	python3 -I scripts/check_release_age.py backend/uv.lock
 	python3 -I scripts/check_guard_tests.py
 
-test: test-backend test-frontend test-scripts ## Run only the tests: backend, frontend, scripts and factory (no lint, types or repository checks)
+lint-backend: ## Lint and typecheck the backend (ruff and pyright)
+	cd backend && uv run --locked ruff format --check . && uv run --locked ruff check . && uv run --locked pyright
+
+lint-frontend: ## Lint and typecheck the frontend (prettier, eslint and tsc)
+	cd frontend && npm run -s format:check && npm run -s lint && npm run -s typecheck
+
+format: ## Format all code
+	cd backend && uv run --locked ruff format . && uv run --locked ruff check --fix .
+	cd frontend && npm run -s format
+
+test: test-backend test-frontend test-scripts ## Run al the tests: backend, frontend, scripts and factory (no lint, types or repository checks)
+
+test-backend: ## Run backend tests (no lint or types)
+	cd backend && uv run --locked pytest
+
+test-frontend: ##
+	cd frontend && npm test
+
+test-scripts: ## Run the scripts and factory tests (no lint or types)
+	python3 -I -m unittest discover -s scripts/tests
+	python3 -I -m unittest discover -s factory/tests
 
 # Installs what is missing and starts the production container when nothing answers on
 # :8080. With APP_URL set it tests that URL and starts nothing. See scripts/run_e2e.py.
 e2e: ## Run Playwright (starts the production container if needed; APP_URL=<url> tests a running app)
 	@python3 -I scripts/run_e2e.py
-
-format: ## Format all code
-	cd backend && uv run --locked ruff format . && uv run --locked ruff check --fix .
-	cd frontend && npm run -s format
 
 mutate: ## Mutation testing for the backend
 	cd backend && uv run --locked mutmut run
