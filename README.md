@@ -43,6 +43,7 @@ The experiment combines two sources and borrows one related idea:
 - Eduardo Ferro (eferro), post [Turning up the dial](https://www.eferro.net/2026/10/turning-up-dial-seeing-forest-while.html): small safe steps, learnings in the repo, rules as checks, `validating` before done.
 - Related, narrower idea: Matt Pocock's [post on working with agents across repositories](https://www.linkedin.com/posts/mapocock_a-lot-of-folks-ask-me-how-do-you-work-with-share-7526692361494528000-8zh_). One home repository holds the skills, steering files and wiki for agents.
   - [The Home Repo: The effortless multi-repo agent setup](https://www.youtube.com/watch?v=hWe-j78vNpc)
+  - [The Home Repo Pattern](https://www.aihero.dev/the-home-repo-pattern)
 
 **The question**: how close can delivery get to fully unattended while the results stay trustworthy? Delegation rises only as fast as the checks underneath it.
 
