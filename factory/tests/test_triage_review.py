@@ -240,9 +240,15 @@ class FakeGh:
     """Records `gh` calls. `comments` is what the comments endpoint returns."""
 
     def __init__(
-        self, comments: list[dict], body: str = "## What\n\nx\n", runs: list[dict] | None = None, head: str = SHA
+        self,
+        comments: list[dict],
+        body: str = "## What\n\nx\n",
+        runs: list[dict] | None = None,
+        head: str = SHA,
+        repo: str = tr.REPOSITORY,
     ) -> None:
         self.comments = comments
+        self.repo = repo
         self.head = head
         self.body = body
         self.runs = runs or []
@@ -255,7 +261,7 @@ class FakeGh:
             return "\n".join(json.dumps(c) for c in self.comments)
         if args[:2] == ["pr", "view"]:
             return self.body
-        if args[:1] == ["api"] and args[1] in (f"repos/{tr.REPOSITORY}/pulls/7", "repos/owner/repo/pulls/7"):
+        if args[:1] == ["api"] and args[1] == f"repos/{self.repo}/pulls/7":
             return self.head
         if args[:1] == ["api"] and "actions/workflows/triage.yml/runs" in args[1]:
             return json.dumps({"workflow_runs": self.runs})
@@ -397,7 +403,7 @@ class RerunTest(unittest.TestCase):
         self.assertEqual(tr.runs_to_rerun(self.RUNS, SHA), [1, 2])
 
     def test_rerun_mode_asks_for_the_head_and_reruns_each_run(self) -> None:
-        gh = FakeGh([], runs=self.RUNS)
+        gh = FakeGh([], runs=self.RUNS, repo=REPO)
         code, _, _ = run(["--rerun", "7", "--repo", REPO], gh)
         self.assertEqual(code, 0)
         reruns = [c for c in gh.calls if c[:2] == ["run", "rerun"]]
