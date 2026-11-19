@@ -63,7 +63,7 @@ make test-backend   # only the backend tests
 make test-frontend  # only the frontend tests
 make test-scripts   # only the scripts and factory tests
 make lint-backend   # lint and typecheck the backend: ruff and pyright
-make lint-frontend  # lint and typecheck the frontend: prettier, eslint and tsc
+make lint-frontend  # lint and typecheck the frontend: prettier, oxlint and tsc
 make format  # format all code
 make mutate  # mutation testing for the backend
 make check-npm  # fail if npm is too old to honour min-release-age (make setup runs it)
