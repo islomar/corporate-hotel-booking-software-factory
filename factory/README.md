@@ -716,7 +716,11 @@ The review is the last comment of `chb-factory-reviewer[bot]` with the marker `c
 The file has one line per finding, for example `2 doubt the test client may rewrite the header`.
 The script refuses a file that misses a finding or a reason, names what is missing and posts nothing.
 Otherwise it replaces the "Caveats" section of the PR body with the doubts, then posts the comment "Triage of review `<sha>`" through `as-agent`: a table of finding, decision and reason.
-After the comment, the agent fixes the `apply` findings in the PR and lists the doubts to the human in the chat.
+The order matters: push the commits that fix the `apply` findings first, then post the triage.
+The triage comment turns the required `triage` check green, so an approved PR with auto-merge merges at once, and a fix pushed later misses the merge (CHB-212).
+The script enforces this: while a finding is `apply` and the PR head is still the reviewed commit, it names those findings, posts nothing and exits 1.
+When the head is newer, it posts. The new head gets its own review, which the agent triages the same way.
+A triage with no `apply` finding posts on the reviewed head. The agent lists the doubts to the human in the chat.
 
 The required check `triage` (`.github/workflows/triage.yml`) fails while the latest review comment has findings and the PR has no triage comment for the same SHA from `chb-factory-agent[bot]`.
 It passes when the review has no findings, or there is no review comment. A comment from any other account does not count. Tests: `factory/tests/test_triage_review.py`.

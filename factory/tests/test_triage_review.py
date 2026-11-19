@@ -22,6 +22,7 @@ import triage_review as tr
 
 SHA = "a" * 40
 OLD_SHA = "b" * 40
+NEW_SHA = "c" * 40
 REPO = "owner/repo"
 
 FINDINGS = (
@@ -238,8 +239,11 @@ class RenderTest(unittest.TestCase):
 class FakeGh:
     """Records `gh` calls. `comments` is what the comments endpoint returns."""
 
-    def __init__(self, comments: list[dict], body: str = "## What\n\nx\n", runs: list[dict] | None = None) -> None:
+    def __init__(
+        self, comments: list[dict], body: str = "## What\n\nx\n", runs: list[dict] | None = None, head: str = SHA
+    ) -> None:
         self.comments = comments
+        self.head = head
         self.body = body
         self.runs = runs or []
         self.calls: list[list[str]] = []
@@ -251,8 +255,8 @@ class FakeGh:
             return "\n".join(json.dumps(c) for c in self.comments)
         if args[:2] == ["pr", "view"]:
             return self.body
-        if args[:2] == ["api", "repos/owner/repo/pulls/7"]:
-            return SHA
+        if args[:1] == ["api"] and args[1].endswith("/pulls/7"):
+            return self.head
         if args[:1] == ["api"] and "actions/workflows/triage.yml/runs" in args[1]:
             return json.dumps({"workflow_runs": self.runs})
         if args[:2] in (["pr", "edit"], ["pr", "comment"]):
@@ -315,10 +319,10 @@ class CommandTest(unittest.TestCase):
         self.assertEqual(gh.verbs(), ["api --paginate"])
 
     def test_posts_the_caveats_then_the_comment(self) -> None:
-        gh = FakeGh([review()])
+        gh = FakeGh([review()], head=NEW_SHA)
         code, out, _ = run(["7", "--file", self.decisions_file("1 apply a\n2 discard b\n3 doubt c\n")], gh)
         self.assertEqual(code, 0, out)
-        self.assertEqual(gh.verbs(), ["api --paginate", "pr view", "pr edit", "pr comment"])
+        self.assertEqual(gh.verbs(), ["api --paginate", f"api repos/{tr.REPOSITORY}/pulls/7", "pr view", "pr edit", "pr comment"])
         edit, post = gh.bodies
         self.assertIn("## Caveats", edit)
         self.assertIn("## What\n\nx", edit)
@@ -327,10 +331,43 @@ class CommandTest(unittest.TestCase):
         self.assertIn("The assertion accepts 400 or 413", out)
 
     def test_the_posted_comment_satisfies_the_check(self) -> None:
-        gh = FakeGh([review()])
+        gh = FakeGh([review()], head=NEW_SHA)
         run(["7", "--file", self.decisions_file("1 apply a\n2 discard b\n3 apply c\n")], gh)
         posted = comment(tr.AGENT, gh.bodies[-1], 9)
         self.assertTrue(tr.evaluate([review(), posted]).ok)
+
+    def test_an_apply_finding_on_the_reviewed_head_posts_nothing(self) -> None:
+        """CHB-212: the triage turns `triage` green, so auto-merge would land before the fixes."""
+        gh = FakeGh([review()], head=SHA)
+        code, out, err = run(["7", "--file", self.decisions_file("1 apply a\n2 discard b\n3 apply c\n")], gh)
+        self.assertEqual(code, 1, out)
+        self.assertNotIn("pr edit", gh.verbs())
+        self.assertNotIn("pr comment", gh.verbs())
+        self.assertEqual(gh.bodies, [])
+        self.assertIn("finding 1", err)
+        self.assertIn("finding 3", err)
+        self.assertNotIn("finding 2", err)
+        self.assertIn("push", err.lower())
+
+    def test_an_apply_finding_on_a_newer_head_posts_the_triage(self) -> None:
+        gh = FakeGh([review()], head=NEW_SHA)
+        code, out, _ = run(["7", "--file", self.decisions_file("1 apply a\n2 discard b\n3 apply c\n")], gh)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(gh.verbs()[-2:], ["pr edit", "pr comment"])
+        self.assertTrue(gh.bodies[-1].startswith(f"Triage of review {SHA}"))
+
+    def test_only_discard_and_doubt_post_on_the_reviewed_head(self) -> None:
+        gh = FakeGh([review()], head=SHA)
+        code, out, _ = run(["7", "--file", self.decisions_file("1 discard a\n2 doubt b\n3 discard c\n")], gh)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(gh.verbs(), ["api --paginate", "pr view", "pr edit", "pr comment"])
+
+    def test_an_unreadable_head_posts_nothing(self) -> None:
+        gh = FakeGh([review()], head="")
+        code, _, err = run(["7", "--file", self.decisions_file("1 apply a\n2 discard b\n3 doubt c\n")], gh)
+        self.assertEqual(code, 2)
+        self.assertNotIn("pr comment", gh.verbs())
+        self.assertIn("head", err.lower())
 
     def test_check_mode_exit_codes(self) -> None:
         self.assertEqual(run(["--check", "7", "--repo", REPO], FakeGh([review(), triage()]))[0], 0)
