@@ -39,7 +39,6 @@ import hashlib
 import json
 import os
 import posixpath
-import re
 import sys
 import tempfile
 from collections.abc import Callable, Sequence
@@ -56,7 +55,7 @@ sys.path.insert(0, str(HOOKS))
 import jira  # noqa: E402
 import op_service_account  # noqa: E402
 import validating_sweep  # noqa: E402
-from private_folder import private_folder  # noqa: E402
+from stop_refusal import already_refused  # noqa: E402
 
 STATE_DIR_ENV = "CHB_WIP_MINIMUMS_STATE_DIR"
 
@@ -179,37 +178,6 @@ def in_review_findings(columns: Sequence[jira.Column], issues: list[dict[str, An
 
 def state_dir() -> str:
     return os.environ.get(STATE_DIR_ENV) or posixpath.join(tempfile.gettempdir(), f"chb-wip-minimums-{os.getuid()}")
-
-
-def _state_path(folder: str, session_id: str) -> str:
-    return posixpath.join(folder, re.sub(r"[^A-Za-z0-9_-]", "_", session_id or "none") + ".json")
-
-
-def already_refused(folder: str, session_id: str, fingerprint: str | None) -> bool:
-    """Record the findings of this stop. True when this session was already refused for the same findings.
-
-    None (no findings) forgets the refusal. Raises OSError when the folder cannot be used.
-    """
-    path = _state_path(folder, session_id)
-    if fingerprint is None:
-        if os.path.lexists(folder):
-            private_folder(folder)
-            try:
-                os.unlink(path)
-            except FileNotFoundError:
-                pass
-        return False
-    private_folder(folder)
-    try:
-        with open(path, encoding="utf-8") as state:
-            if json.load(state).get("refused") == fingerprint:
-                return True
-    except (FileNotFoundError, ValueError, AttributeError):
-        pass
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as state:
-        json.dump({"refused": fingerprint}, state)
-    return False
 
 
 def _reason(error: BaseException) -> str:

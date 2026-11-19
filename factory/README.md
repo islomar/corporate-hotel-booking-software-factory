@@ -423,7 +423,7 @@ flowchart TD
     POST --> STOP
 ```
 
-`shell_words.py`, `harness_bash_writes.py` and `private_folder.py` are helpers that hooks import. They are not registered.
+`shell_words.py`, `harness_bash_writes.py`, `private_folder.py` and `stop_refusal.py` are helpers that hooks import. They are not registered.
 
 ## Hook: commands for the owner work from any folder
 

@@ -15,7 +15,7 @@ It fails open: a GitHub error (gh missing, a timeout, a failed call, output that
 unexpected prints one line to stderr and exits 0. A network failure must not trap the session.
 Each call has a 6 s timeout and all calls share a 20 s deadline, below the 30 s hook timeout.
 
-It never loops. Like check_wip_minimums.py it remembers the findings it refused for, per session, in
+It never loops. Like check_wip_minimums.py (both use stop_refusal.py) it remembers the findings it refused for, per session, in
 `<temp dir>/chb-untriaged-reviews-<uid>/<session id>.json` (CHB_UNTRIAGED_REVIEWS_STATE_DIR overrides the
 folder). A second stop with the same findings passes with one line; a new review refuses again.
 
@@ -44,7 +44,7 @@ sys.path.insert(0, FACTORY)  # python3 -I does not add it
 sys.path.insert(0, HOOKS)
 
 import triage_review  # noqa: E402
-from check_wip_minimums import already_refused  # noqa: E402
+from stop_refusal import already_refused  # noqa: E402
 
 STATE_DIR_ENV = "CHB_UNTRIAGED_REVIEWS_STATE_DIR"
 CALL_TIMEOUT_SECONDS = 6
@@ -70,17 +70,12 @@ def make_gh(total: float = TOTAL_SECONDS, clock: Callable[[], float] = time.mono
     return gh
 
 
-def _login(item: Mapping[str, object]) -> object:
-    user = item.get("user")
-    return user.get("login") if isinstance(user, Mapping) else None
-
-
 def agent_pulls(pulls: Sequence[Mapping[str, object]]) -> list[int]:
     """The numbers of the open PRs of the agent's account, lowest first."""
     return sorted(
         int(str(p["number"]))
         for p in pulls
-        if p.get("state") == "open" and _login(p) == triage_review.AGENT and str(p.get("number", "")).isdigit()
+        if p.get("state") == "open" and triage_review._login(p) == triage_review.AGENT and str(p.get("number", "")).isdigit()  # noqa: SLF001
     )
 
 

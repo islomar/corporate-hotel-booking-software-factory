@@ -158,6 +158,17 @@ class UntriagedReviewsTest(unittest.TestCase):
         self.assertEqual(code, 0)
 
 
+    def test_review_without_a_readable_sha_blocks_like_the_check(self):
+        unreadable = {"id": 1, "user": {"login": tr.REVIEWER}, "body": f"{FINDING}<!-- chb-review reviewed:not-a-sha -->"}
+        code, err = run(fake_gh([pull(140)], {140: [unreadable]}), self.state_dir)
+        self.assertEqual(code, 2)
+        self.assertIn("no readable reviewed sha", err)
+
+    def test_refuse_then_triage_then_new_findings_refuses_again(self):
+        self.assertEqual(run(fake_gh([pull(140)], {140: [review()]}), self.state_dir)[0], 2)
+        self.assertEqual(run(fake_gh([pull(140)], {140: [review(), triage()]}), self.state_dir), (0, ""))
+        self.assertEqual(run(fake_gh([pull(140)], {140: [review()]}), self.state_dir)[0], 2)
+
     def test_unusable_state_folder_lets_the_turn_end_with_a_warning(self):
         blocker = Path(self.state.name) / "a-file"
         blocker.write_text("")
