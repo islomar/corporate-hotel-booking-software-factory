@@ -372,11 +372,18 @@ class UpdateRisksTest(unittest.TestCase):
     def test_a_patch_of_a_zero_x_version_is_safe(self):
         self.assertEqual(update_risks([self.entry("patch", "0.54.1")], "uv"), [])
 
-    def test_majors_zero_x_minors_playwright_and_unknown_types_need_a_human(self):
+    def test_a_minor_of_a_zero_x_version_is_safe(self):
+        # Owner decision 2026-11-19 (CHB-206): CI is the gate for 0.x minors.
+        self.assertEqual(update_risks([self.entry("minor", "0.55.0")], "uv"), [])
+
+    def test_majors_playwright_and_unknown_types_need_a_human(self):
+        unknown = {**self.entry("minor"), "update-type": "version-update:semver-other"}
         cases = {
             "major": [self.entry("major")],
-            "0.x minor": [self.entry("minor", "0.55.0")],
+            "zero-x major": [self.entry("major", "1.0.0")],
+            "zero-x playwright minor": [self.entry("minor", "0.55.0", name="@playwright/test")],
             "playwright": [self.entry("patch", name="@playwright/test")],
+            "unknown update type": [unknown],
             "no update type": parse_updated_dependencies(PR2_REQUIREMENT_UPDATE),
             "real major": parse_updated_dependencies(PR3_MAJOR),
             "no dependencies": [],
@@ -414,6 +421,15 @@ class DependabotUpdateTypeTest(unittest.TestCase):
         self.assertFalse(decide(evidence(commits=[actions])).ok)
         ref = "dependabot/github_actions/actions/checkout-7.1.0"
         self.assertTrue(decide(evidence(commits=[actions], pr_head_ref=ref)).ok)
+
+    def test_a_dependabot_zero_x_minor_passes(self):
+        message = PR2_REQUIREMENT_UPDATE.replace(
+            "  dependency-type: direct:production\n",
+            "  dependency-type: direct:production\n  update-type: version-update:semver-minor\n",
+        )
+        ref = "dependabot/uv/backend/uvicorn-0.54.0"
+        verdict = decide(evidence(commits=[dependabot_commit(message=message)], pr_head_ref=ref))
+        self.assertTrue(verdict.ok, verdict.message)
 
     def test_no_commits_is_a_risk_not_a_crash(self):
         # Defensive: decide() stops at _dependabot_problems before this when commits is empty.

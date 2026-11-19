@@ -22,6 +22,11 @@
 - Date: 2026-11-06
 - Amended 2026-11-13 (CHB-181): the author App keeps `workflows: write` (CHB-86, amendment in ADR-d7b7). The next step under GitHub Actions bumps, "after CHB-86 removes `workflows: write`", does not apply.
 - Amended 2026-11-13 (CHB-181): Dependabot runs daily since CHB-135 (2026-11-08), so "one per group and week" under Consequences is out of date.
+- Amended 2026-11-19 (CHB-206): a minor update of a 0.x dependency is safe, like any other minor or patch update. The owner decided it on 2026-11-19.
+  The owner does not test these updates by hand, so the wait for a human added delay and no check.
+  Accepted risk: a 0.x minor can break the contract (semver allows breaking changes below 1.0). CI is the only gate until monitoring and smoke tests exist.
+  Majors, Playwright updates and updates without a known type still need a human.
+  `update_risks` and the "Classify the update" step changed together.
 
 ## Context
 
@@ -47,7 +52,8 @@ A release-age delay keeps those versions out.
   - Groups take minor and patch updates only.
   - A major gets its own PR, or a `-major` group for coupled packages.
   - uv does not support `groups.dependency-type`, so backend groups use name patterns.
-  - ruff and uvicorn are 0.x and stay out of groups. A 0.x minor needs a human and must not block a group.
+  - ruff and uvicorn are 0.x and stay out of groups. A 0.x minor needed a human and must not block a group.
+    Since CHB-206 a 0.x minor is safe; the grouping did not change in that ticket.
   - `@playwright/test` has its own group (see the Playwright image section below).
 - Ignore rules carry a comment with the reason and the revisit trigger.
 
@@ -112,8 +118,8 @@ These run as steps of the `backend`, `frontend` and `e2e` jobs, so auto-merge wa
 
 - Trigger: `pull_request`, not `pull_request_target`. The job runs only when the PR author is `dependabot[bot]`.
 - `dependabot/fetch-metadata` classifies every dependency in the PR:
-  - Safe: patch and minor updates from 1.0 up, and GitHub Actions commit bumps without a version.
-  - Needs a human: majors, minors of 0.x versions, Playwright, and updates without a known type.
+  - Safe: patch and minor updates, 0.x included (CHB-206), and GitHub Actions commit bumps without a version.
+  - Needs a human: majors, Playwright, and updates without a known type.
 - Safe PRs get auto-merge (squash) and an approval from a GitHub App token.
 - The workflow enables auto-merge only when the `main` ruleset requires `backend`, `frontend`, `e2e` and `supply-chain`.
   Without required checks, auto-merge would merge before CI.
@@ -148,8 +154,8 @@ Every Dependabot PR therefore waited for the owner, auto-merge or not.
     GitHub records Dependabot commits this way (PRs #1 to #4). The committer is `web-flow`, not `dependabot[bot]`.
   - the API lists every commit of the PR (`pulls/{n}/commits` stops at 250);
   - the update is safe. `update_risks` classifies it from the `updated-dependencies` trailer Dependabot writes in each commit message.
-    Every commit must carry the same trailer. Safe: patch, minor from 1.0, and GitHub Actions bumps without an update type (ecosystem from the `dependabot/<ecosystem>/` branch name).
-    Needs the owner: majors, 0.x minors, Playwright, an unknown or missing update type, a trailer that does not parse.
+    Every commit must carry the same trailer. Safe: patch, minor (0.x included, CHB-206), and GitHub Actions bumps without an update type (ecosystem from the `dependabot/<ecosystem>/` branch name).
+    Needs the owner: majors, Playwright, an unknown or missing update type, a trailer that does not parse.
     The rules mirror `dependabot-auto-merge.yml`. Without this, a major would merge with one approval from anyone, because the label is advisory.
     Dependabot omits `update-type` for requirement-range updates (PR #2), so those need the owner.
     CHB-95 (security updates) reuses `update_risks`: a security fix merges unattended only if it is safe by these rules.
@@ -195,7 +201,7 @@ Consequences:
 ## Consequences
 
 - Fewer PRs: one per group and week, plus majors and 0.x updates.
-- Most backend updates need a human, because fastapi, uvicorn and ruff are 0.x.
+- Most backend updates needed a human, because fastapi, uvicorn and ruff are 0.x. Since CHB-206 their minors and patches merge when CI passes.
 - Adding `exclude-newer` re-locked the backend to versions at least 7 days old. Nine packages moved back one release, and the ruff floor moved from 0.17.4 to 0.17.3.
 - A Dependabot security fix younger than 7 days passes the release-age check when it is exactly the first patched version of an open alert.
   Any other entry younger than 7 days fails until a person adds an exemption.

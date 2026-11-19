@@ -9,8 +9,8 @@ place for them (ADR-ebe6). A PR passes when:
 - the owner's latest review is an approval of the current head commit; or
 - the PR author is `dependabot[bot]`, every commit is Dependabot's (author
   `dependabot[bot]`, committer `web-flow`, a signature GitHub verified: GitHub records
-  Dependabot commits this way), and the update is safe: patch, or minor from 1.0, read
-  from the commits' `updated-dependencies` trailer (see update_risks). A release-age
+  Dependabot commits this way), and the update is safe: patch or minor, read from the
+  commits' `updated-dependencies` trailer (see update_risks). A release-age
   change (`min-release-age*` in `.npmrc`, `exclude-newer*` in `uv.toml` or
   `pyproject.toml`, any change to `pnpm-workspace.yaml`, `.yarnrc.yml` or
   `bunfig.toml`) rules this path out. The `dependabot-branches` ruleset lets only
@@ -254,8 +254,8 @@ def update_risks(dependencies: list[dict[str, str]] | None, ecosystem: str) -> l
     """Reasons an update needs a human. An empty list means safe.
 
     Mirrors the `decide` step of .github/workflows/dependabot-auto-merge.yml: safe are
-    patch updates, minor updates from 1.0, and GitHub Actions bumps without an update type.
-    A minor update keeps the major version, so the new version tells a 0.x minor apart.
+    patch and minor updates, 0.x included (owner decision 2026-11-19, CHB-206), and
+    GitHub Actions bumps without an update type.
     """
     if not dependencies:
         return ["no dependency metadata"]
@@ -264,13 +264,10 @@ def update_risks(dependencies: list[dict[str, str]] | None, ecosystem: str) -> l
         name = dependency.get("dependency-name", "?")
         version = dependency.get("dependency-version", "")
         update_type = dependency.get("update-type", "")
-        major = re.sub(r"^[^0-9]*", "", version).split(".")[0]
         if "playwright" in name:
             reasons.append(f"{name}: the Playwright image in deploy.yml must move in the same PR")
         elif update_type == "version-update:semver-major":
             reasons.append(f"{name}: major update to {version}")
-        elif update_type == "version-update:semver-minor" and major == "0":
-            reasons.append(f"{name}: 0.x minor update to {version}")
         elif update_type in ("version-update:semver-minor", "version-update:semver-patch") or (
             not update_type and ecosystem == "github_actions"
         ):
