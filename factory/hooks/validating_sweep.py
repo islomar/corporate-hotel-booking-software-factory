@@ -309,8 +309,8 @@ def _rest_comment(node: dict[str, Any]) -> dict[str, Any]:
 
 def review_lines(answer: dict[str, Any]) -> list[str]:
     connection = _pull_requests(answer)
-    human = (answer["data"]["repository"].get("owner") or {}).get("login")
-    if not isinstance(human, str) or not human:
+    human_login = (answer["data"]["repository"].get("owner") or {}).get("login")
+    if not isinstance(human_login, str) or not human_login:
         raise SweepError("GitHub GraphQL answer has no repository owner")
     merged = [
         pr for pr in connection.get("nodes") or [] if isinstance(pr.get("mergedAt"), str) and pr["mergedAt"] >= agreement.START
@@ -320,8 +320,8 @@ def review_lines(answer: dict[str, Any]) -> list[str]:
         {**pr, "number": int(pr["number"]), "comments": [_rest_comment(c) for c in (pr.get("comments") or {}).get("nodes") or []]}
         for pr in merged
     ]
-    lines = [f"Review agreement: {agreement.report(agreement.tally(prs, human))}"]
-    unanswered = [pr for pr in prs if agreement.answer(pr, human) == "no answer"][:MAX_UNANSWERED]
+    lines = [f"Review agreement: {agreement.report(agreement.tally(prs, human_login))}"]
+    unanswered = [pr for pr in prs if agreement.answer(pr, human_login) == "no answer"][:MAX_UNANSWERED]
     if not unanswered:
         lines.append("Every reviewed PR has a human reaction.")
         return lines
@@ -458,7 +458,7 @@ def _created(comment: dict[str, Any], key: str) -> datetime:
     return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
 
 
-def owner_answered(issues: Sequence[dict[str, Any]], agent_id: str, owner_id: str) -> list[tuple[str, str, str]]:
+def owner_answered(issues: Sequence[dict[str, Any]], agent_id: str, human_id: str) -> list[tuple[str, str, str]]:
     """(key, summary, time of the human's newest comment) for each ticket whose newest comment by the human account
     is newer than the agent's newest comment, or the agent has none. Comments by any other account are ignored:
     anyone with access to the site could write text there. Sorted by ticket number."""
@@ -468,15 +468,15 @@ def owner_answered(issues: Sequence[dict[str, Any]], agent_id: str, owner_id: st
         fields = issue.get("fields") or {}
         comments = (fields.get("comment") or {}).get("comments") or []
         agent = [_created(c, key) for c in comments if (c.get("author") or {}).get("accountId") == agent_id]
-        human = [(_created(c, key), str(c["created"])) for c in comments if (c.get("author") or {}).get("accountId") == owner_id]
+        human = [(_created(c, key), str(c["created"])) for c in comments if (c.get("author") or {}).get("accountId") == human_id]
         if human and (not agent or max(human)[0] > max(agent)):
             found.append((key, str(fields.get("summary", "")), max(human)[1]))
     return found
 
 
-def owner_answered_lines(issues: Sequence[dict[str, Any]], agent_id: str, owner_id: str) -> list[str]:
+def owner_answered_lines(issues: Sequence[dict[str, Any]], agent_id: str, human_id: str) -> list[str]:
     """Session start lines; nothing when no Needs human ticket has a newer human comment."""
-    found = owner_answered(issues, agent_id, owner_id)
+    found = owner_answered(issues, agent_id, human_id)
     if not found:
         return []
     lines = [
@@ -488,8 +488,8 @@ def owner_answered_lines(issues: Sequence[dict[str, Any]], agent_id: str, owner_
 
 
 def _needs_human_lines(read: Callable[[], NeedsHuman]) -> list[str]:
-    agent_id, owner_id, issues = read()
-    return owner_answered_lines(issues, agent_id, owner_id)
+    agent_id, human_id, issues = read()
+    return owner_answered_lines(issues, agent_id, human_id)
 
 
 # Hook

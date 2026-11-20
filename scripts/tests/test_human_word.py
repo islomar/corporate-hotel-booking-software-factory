@@ -92,6 +92,14 @@ class RepositoryTest(unittest.TestCase):
         for path in IN_FILE:
             self.assertTrue((ROOT / path).is_file(), path)
 
+    def test_every_file_entry_still_matches_a_line(self) -> None:
+        lines: dict[str, list[str]] = {}
+        for path, _, line in grep():
+            lines.setdefault(path, []).append(line)
+        for path, patterns in IN_FILE.items():
+            for pattern in patterns:
+                self.assertTrue(any(re.search(pattern, line) for line in lines.get(path, [])), f"{path}: {pattern} matches no line; remove it")
+
 
 class ProblemsTest(unittest.TestCase):
     def test_refuses_the_person(self) -> None:
