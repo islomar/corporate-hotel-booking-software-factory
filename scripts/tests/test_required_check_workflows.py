@@ -151,7 +151,7 @@ class RequiredCheckWorkflowsTest(unittest.TestCase):
     def test_no_other_workflow_has_a_job_named_like_a_required_check(self):
         # The ruleset matches required checks by name. A second check run with that name, even a
         # skipped one, hides which one failed and can stand in for the real check (CHB-234).
-        for path in sorted(WORKFLOWS.glob("*.yml")):
+        for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]):  # GitHub runs both
             clashes = {check for check in check_run_names(path.read_text(encoding="utf-8")) & set(CHECK_WORKFLOWS) if CHECK_WORKFLOWS[check] != path.name}
             with self.subTest(workflow=path.name):
                 self.assertEqual(clashes, set())
