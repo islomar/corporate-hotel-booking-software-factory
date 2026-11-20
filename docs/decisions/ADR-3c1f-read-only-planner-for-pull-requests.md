@@ -30,8 +30,9 @@ A pull request run executes code from a branch that an agent can edit, so its cr
 ## Decision
 
 - A second Workload Identity pool `github-pr` with one provider `github-pr` (`infra/gcp/planner.tf`).
-  Its condition is `assertion.repository=='<repo>' && assertion.event_name=='pull_request'`.
-- The pool is separate from `github`. The deployer binding trusts `attribute.repository` of the whole `github` pool.
+  Its condition is `assertion.repository_id=='<repository ID>' && assertion.event_name=='pull_request'`.
+  Amended 2026-11-20 (CHB-220): the condition names the repository ID instead of the name; a transfer is expected to keep the ID, and CHB-221 checks it.
+- The pool is separate from `github`. The deployer bindings trust `attribute.repository` and `attribute.repository_id` of the whole `github` pool.
   A second provider in that pool, with the same mapping, would let pull request runs impersonate the deployer.
 - A service account `github-planner`, impersonated by that pool only.
 - Its roles: `roles/viewer`, `roles/iam.securityReviewer` and `roles/serviceusage.serviceUsageConsumer` on the project, `roles/storage.objectViewer` on the state bucket.

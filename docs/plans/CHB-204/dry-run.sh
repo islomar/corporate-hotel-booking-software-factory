@@ -79,21 +79,25 @@ guard_of() { # the repository guard of a workflow, as `field==value`, or `none`
   if [ -z "$g" ]; then echo none; return; fi
   g=${g//github./}; g=${g// == /==}; g=${g//\'/}; echo "$g"
 }
-gcp_condition() { # attribute_condition of a provider file, with var.github_repository resolved
-  local file=$1 var cond
-  var=$(awk '/variable "github_repository"/{f=1} f&&/default/{gsub(/.*= *"|".*/,"");print;exit}' \
-    "$REPO_DIR/infra/gcp/variables.tf")
+tf_default() { # default of an infra/gcp variable, or empty
+  awk -v v="variable \"$1\"" 'index($0, v){f=1} f&&/default/{gsub(/.*= *"|".*/,"");print;exit}' "$REPO_DIR/infra/gcp/variables.tf"
+}
+gcp_condition() { # attribute_condition of a provider file, with var.github_repository(_id) resolved
+  local file=$1 var id cond
+  var=$(tf_default github_repository)
+  id=$(tf_default github_repository_id)
   cond=$(grep -m1 'attribute_condition' "$file" | sed -E 's/.*= *"(.*)"$/\1/')
+  cond=${cond//\$\{var.github_repository_id\}/$id}
   cond=${cond//\$\{var.github_repository\}/$var}
   cond=${cond//\$\{var.deployer_ref\}/refs/heads/main}
   cond=${cond//\$\{var.planner_event_name\}/pull_request}
   echo "$cond"
 }
 gcp_binding() { # attribute/value of the principalSet bindings in a file
-  local var
-  var=$(awk '/variable "github_repository"/{f=1} f&&/default/{gsub(/.*= *"|".*/,"");print;exit}' \
-    "$REPO_DIR/infra/gcp/variables.tf")
-  grep -oE 'attribute\.repository(_id)?/[^"]+' "$1" | sed "s#\${var.github_repository}#$var#" | sed 's/^attribute\.//' | tr '\n' ' '
+  local var id
+  var=$(tf_default github_repository)
+  id=$(tf_default github_repository_id)
+  grep -oE 'attribute\.repository(_id)?/[^"]+' "$1" | sed "s#\${var.github_repository_id}#$id#; s#\${var.github_repository}#$var#" | sed 's/^attribute\.//' | tr '\n' ' '
 }
 SEED_DEPLOY_COND=$(gcp_condition "$REPO_DIR/infra/gcp/identities.tf")
 SEED_PLAN_COND=$(gcp_condition "$REPO_DIR/infra/gcp/planner.tf")
@@ -292,6 +296,11 @@ step() {
     INFRA_PLAN_NOW) check_tf_owner ;;
     REUSE_OLD_NAME) S[old_name_reused]=yes ;;
     UNDO_A1) S[supply_owner]=repository_owner; S[agreement_owner]=repository_owner ;;
+    UNDO_A5) S[deploy_cond]="assertion.repository=='$OLD_OWNER/$NAME' && assertion.ref=='refs/heads/main'"
+        S[plan_cond]="assertion.repository=='$OLD_OWNER/$NAME' && assertion.event_name=='pull_request'"
+        S[deploy_bind]=$(echo "${S[deploy_bind]}" | xargs -n1 | grep -v '^repository_id/' | xargs)
+        S[plan_bind]=$(echo "${S[plan_bind]}" | xargs -n1 | grep -v '^repository_id/' | xargs)
+        S[mapping]=$(echo "${S[mapping]}" | xargs -n1 | grep -v '^repository_id$' | xargs) ;;
     *) echo "unknown step $s"; exit 2 ;;
   esac
 }
@@ -317,6 +326,7 @@ declare -A DESC=(
   [INFRA_PLAN_NOW]="human runs make infra-plan/apply now"
   [REUSE_OLD_NAME]="someone creates $OLD_OWNER/$NAME again"
   [UNDO_A1]="simulation only: the human login reads github.repository_owner again (A1 not done)"
+  [UNDO_A5]="simulation only: GCP trusts the repository name again (A5 not done)"
 )
 
 # run_order NAME "STEPS" "DECLARED" : DECLARED lists `step:invariant-prefix` failures allowed as a declared window
@@ -381,7 +391,7 @@ expect_break() {
   fi
 }
 TMPOUT=$(mktemp)
-expect_break "WRONG 1: transfer before GCP trusts the ID (A5 skipped)" "A1 A2 A3 A4 B0 B1 B2 B3"
+expect_break "WRONG 1: transfer before GCP trusts the ID (A5 skipped)" "UNDO_A5 A1 A2 A3 A4 B0 B1 B2 B3"
 expect_break "WRONG 2: merge queue before merge_group triggers (A3 skipped)" "A1 A2 A4 A5 B0 B1 B2 B3 D1 B5 C1 C3"
 expect_break "WRONG 3: transfer before the human login is a constant (A1 skipped)" "UNDO_A1 A2 A3 A4 A5 B0 B1 B2 B3"
 expect_break "WRONG 4: infra-plan between the transfer and C1" "A1 A2 A3 A4 A5 B0 B1 B2 B3 INFRA_PLAN_NOW"

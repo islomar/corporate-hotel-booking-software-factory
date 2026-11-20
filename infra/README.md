@@ -79,6 +79,9 @@ The list must match exactly. A missing or an extra address fails.
 `github/guards.tf` fails the plan when a setting Terraform cannot manage is off, for example CodeQL default setup.
 `github/tests/guards.tftest.hcl` checks each guard against stubbed GitHub responses. It needs no credentials.
 `gcp/guards.tf` fails the plan when the planner holds a role outside a read-only allowlist or the deployer's `refs/heads/main` condition changes (CHB-81).
+Both Workload Identity conditions trust the repository ID (`github_repository_id` in `gcp/variables.tf`), not its name (CHB-220).
+The ID is expected to stay the same when the repository moves to another account or organization, or gets a new name; no GitHub source states it, and CHB-221 checks it after the transfer.
+The bindings on the old name stay until CHB-204 removes them.
 `gcp/tests/guards.tftest.hcl` breaks each guard with a mocked Google provider.
 `make check` and the `backend` job of CI run both folders (`scripts/check_guard_tests.py`, CHB-158, CHB-166). A PR that breaks a guard shows `backend` failing.
 CI installs Terraform from releases.hashicorp.com, pinned by SHA-256 (`TERRAFORM_SHA256` in `.github/workflows/ci.yml`), and uses no third-party action and no credentials.
@@ -147,7 +150,7 @@ Pull request runs plan with a separate identity (CHB-81, ADR-3c1f), used by CHB-
 
 | Item | Value |
 |---|---|
-| Pool and provider | `github-pr` / `github-pr`, trust `pull_request` runs of this repository only |
+| Pool and provider | `github-pr` / `github-pr`, trust `pull_request` runs of this repository only, by repository ID |
 | Service account | `github-planner@<project>.iam.gserviceaccount.com` |
 | Roles | `roles/viewer`, `roles/iam.securityReviewer`, `roles/serviceusage.serviceUsageConsumer`, `roles/storage.objectViewer` on the state bucket |
 
