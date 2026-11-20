@@ -272,4 +272,5 @@ Both show as checks on the pull request, and their alerts appear in the reposito
   Checks: `Analyze (actions)`, `Analyze (javascript-typescript)`, `Analyze (python)`. Alerts: Security > Code scanning.
   `infra/github/guards.tf` fails the plan if default setup is off (CHB-134).
 - Dependency review: `.github/workflows/dependency-review.yml` fails a pull request that adds a dependency with a known vulnerability of severity high or above.
-  Check: `dependency-review`. Alerts for dependencies already on `main` come from Dependabot: Security > Dependabot.
+  Check: `dependency-review`. It blocks a merge only once `required_checks` in `infra/github/repository.tf` names it.
+  Alerts for dependencies already on `main` come from Dependabot: Security > Dependabot.

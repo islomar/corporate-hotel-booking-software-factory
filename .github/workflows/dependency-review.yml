@@ -4,8 +4,8 @@
 # CodeQL runs as GitHub's default setup, not as a workflow (CHB-134, guarded in
 # infra/github/guards.tf): default setup disables a CodeQL workflow file.
 #
-# Pinned to v5.0.0, not v5.0.1: v5.0.1 (2026-11-17) is younger than the 7-day cooldown of
-# .github/dependabot.yml (ADR-ebe6). Dependabot proposes it once the cooldown passes.
+# Dependabot bumps the pinned SHA once a release is older than the 7-day cooldown of
+# .github/dependabot.yml (ADR-ebe6).
 # Structure tests: scripts/tests/test_dependency_review_workflow.py.
 name: Dependency review
 
