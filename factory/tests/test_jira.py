@@ -1917,18 +1917,18 @@ class SectionCommandTest(unittest.TestCase):
             self.assertIn("Answer:", err)
             self.assertEqual(fake.requests, [])
 
-    def test_the_old_needs_human_heading_needs_an_answer_line_too(self) -> None:
-        """CHB-194: an open ticket may still carry "Needs human: owner steps"."""
+    def test_writing_the_old_needs_human_heading_is_refused_naming_the_new_one(self) -> None:
+        """CHB-194: an old-heading write could add a second section next to "Needs human: steps"."""
         fake = FakeJira({})
         with tempfile.NamedTemporaryFile("w") as handle:
-            handle.write("1. Click Merge.")
+            handle.write("1. Click Merge.\n- Answer: in the chat")
             handle.flush()
             argv = ["section", "CHB-12", "--heading", "Needs human: owner steps", "--body-file", handle.name]
             code, _, err = _run(argv, fake, credentials_reader=mock.Mock(side_effect=AssertionError("read credentials")))
 
         self.assertEqual(code, 2)
-        self.assertIn("Answer:", err)
-        self.assertNotIn("owner", err)
+        self.assertIn("write 'Needs human: steps'", err)
+        self.assertEqual(fake.requests, [])
 
     def test_needs_human_with_an_answer_line_is_accepted(self) -> None:
         bodies = (

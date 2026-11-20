@@ -164,7 +164,7 @@ REQUIRED_SECTIONS = {
     "needs human": "Needs human: steps",
 }
 # Headings written before CHB-194 called the person "owner". Open tickets may still carry them, so the
-# checks read them too; the wrapper only asks for and writes the new ones.
+# checks read them and `section` replaces them; `section` refuses to write an old name.
 OLD_HEADINGS = {"Needs human: steps": ("Needs human: owner steps",)}
 # The top ticket of the pull list (CHB-125, docs/process/kanban.md, Ready) is the highest-ranked non-epic
 # ticket that no open ticket blocks (open_blockers). It starts once it has acceptance criteria: a
@@ -785,6 +785,9 @@ def check_section_input(heading: str, body: str) -> str:
         raise UsageError("heading must be one non-empty line")
     if not body.strip():
         raise UsageError("section body is empty")
+    new = next((name for name, old in OLD_HEADINGS.items() if heading in old), None)
+    if new is not None:
+        raise UsageError(f"{heading!r} is the old name of the heading; write {new!r} (CHB-194)")
     return heading
 
 
