@@ -6,6 +6,7 @@
   - [Use](#use)
     - [Destroy and replace](#destroy-and-replace)
     - [Guard tests](#guard-tests)
+    - [Move the `github` state to the bucket](#move-the-github-state-to-the-bucket)
   - [Planner identity](#planner-identity)
     - [Plan on pull requests](#plan-on-pull-requests)
   - [Rules](#rules)
@@ -89,6 +90,56 @@ Run it alone:
 ```sh
 python3 -I ~/workspace/corporate-hotel-booking-software-factory/scripts/check_guard_tests.py
 ```
+
+### Move the `github` state to the bucket
+
+`github/backend.tf` keeps the state in `gs://chb-factory-a92932-tfstate/github` (CHB-216).
+Before it, the state was the local file `infra/github/terraform.tfstate`, git-ignored, in the owner's main checkout only.
+Run these steps once, in that checkout, after the CHB-216 PR merges.
+Do not run `make infra-plan` or `make infra-apply` until step 4 passes: their `github` init cannot copy the local state.
+`make infra-apply` also refuses without a plan saved from the current `main`.
+Never run `init -reconfigure` here: it starts an empty state in the bucket and leaves the real one behind.
+
+1. Update `main` and back up the local state outside the repository:
+
+   ```sh
+   git -C ~/workspace/corporate-hotel-booking-software-factory switch main
+   git -C ~/workspace/corporate-hotel-booking-software-factory pull --ff-only
+   cp -p ~/workspace/corporate-hotel-booking-software-factory/infra/github/terraform.tfstate ~/chb-github-terraform.tfstate.pre-gcs
+   ```
+
+2. Copy the state to the bucket. Answer `yes` when Terraform asks to copy the existing state:
+
+   ```sh
+   export GOOGLE_OAUTH_ACCESS_TOKEN="$(CLOUDSDK_ACTIVE_CONFIG_NAME=chb gcloud auth print-access-token)"
+   cd ~/workspace/corporate-hotel-booking-software-factory && terraform -chdir=infra/github init -migrate-state
+   ```
+
+3. Check that the bucket holds the state. The list shows `gs://chb-factory-a92932-tfstate/github/default.tfstate`:
+
+   ```sh
+   CLOUDSDK_ACTIVE_CONFIG_NAME=chb gcloud storage ls gs://chb-factory-a92932-tfstate/github/
+   ```
+
+4. Check that Terraform reads it. The plan must say `No changes.`:
+
+   ```sh
+   export GOOGLE_OAUTH_ACCESS_TOKEN="$(CLOUDSDK_ACTIVE_CONFIG_NAME=chb gcloud auth print-access-token)"
+   export GITHUB_TOKEN="$(gh auth token)"
+   cd ~/workspace/corporate-hotel-booking-software-factory && terraform -chdir=infra/github plan
+   ```
+
+5. Only when steps 3 and 4 pass, delete the local copies.
+   Delete these three files and nothing else. Leave every file under `infra/gcp/` alone:
+
+   ```sh
+   rm -f ~/workspace/corporate-hotel-booking-software-factory/infra/github/terraform.tfstate
+   rm -f ~/workspace/corporate-hotel-booking-software-factory/infra/github/terraform.tfstate.backup
+   rm ~/chb-github-terraform.tfstate.pre-gcs
+   ```
+
+If step 3 or 4 fails, keep every file and report the output.
+After step 5 the bucket is the only copy. It keeps every older version of a state object (versioning) and a deleted object for 7 days (soft delete).
 
 ## Planner identity
 
