@@ -45,6 +45,8 @@ def check_run_names(text: str) -> set[str]:
     """The check run names of a workflow's jobs: the job-level `name:` when set, otherwise the job id."""
     jobs = text.split("\njobs:\n", 1)
     names = re.findall(r"^    name: ['\"]?([^'\"\n]+?)['\"]?\s*$", jobs[1], re.MULTILINE) if len(jobs) == 2 else []
+    for name in names:
+        assert "${{" not in name, f"unsupported job name {name!r}: an expression hides the check run name"
     return set(job_ids(text)) | set(names)
 
 
@@ -230,6 +232,13 @@ class ExpressionReaderTest(unittest.TestCase):
     def test_reads_a_job_name_as_its_check_run_name(self):
         text = "on:\n  push:\njobs:\n  build:\n    name: triage\n    steps:\n      - name: not a job\n"
         self.assertEqual(check_run_names(text), {"build", "triage"})
+
+    def test_reads_a_job_id_as_its_check_run_name(self):
+        self.assertEqual(check_run_names("on:\n  push:\njobs:\n  triage:\n    steps:\n"), {"triage"})
+
+    def test_rejects_a_job_name_with_an_expression(self):
+        with self.assertRaises(AssertionError):
+            check_run_names("on:\n  push:\njobs:\n  build:\n    name: e2e (${{ matrix.x }})\n")
 
     def test_the_fixture_tells_heads_apart(self):
         # The group tests above would pass by construction if run() ignored the head.
