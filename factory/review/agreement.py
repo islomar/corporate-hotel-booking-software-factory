@@ -26,6 +26,8 @@ from dataclasses import dataclass, field
 
 REVIEWER = "chb-factory-reviewer[bot]"
 MARKER = "<!-- chb-review reviewed:"  # gate.py: COMMENT_MARKER + REVIEWED + sha
+# The human whose reactions count. Not the repository owner: an organization after CHB-204 (CHB-218).
+HUMAN_LOGIN = "islomar"
 START = "2026-11-10"  # CHB-141: review comments with the reaction line start here.
 NEEDED = 20
 MAX_DISAGREE = 2
@@ -147,14 +149,12 @@ def main(argv: list[str]) -> int:
         return 2
     try:
         repo = args.repo or _gh_text("repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner")
-        # The human is the GitHub account that owns the repository: count that login's reactions.
-        human_login = _gh_text("repo", "view", repo, "--json", "owner", "--jq", ".owner.login")
         prs = fetch_prs(gh_api, repo, args.since)
     except (OSError, subprocess.CalledProcessError, ValueError) as error:
         print(f"cannot read GitHub: {error}", file=sys.stderr)
         return 1
-    print(f"Merged into main since {args.since} in {repo}; human {human_login}.")
-    print(report(tally(prs, human_login)))
+    print(f"Merged into main since {args.since} in {repo}; human {HUMAN_LOGIN}.")
+    print(report(tally(prs, HUMAN_LOGIN)))
     return 0
 
 

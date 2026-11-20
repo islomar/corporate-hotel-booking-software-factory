@@ -183,7 +183,7 @@ def _pr(number: int, merged: str, *comments: dict) -> dict:
 
 
 def _graphql(*prs: dict) -> dict:
-    return {"data": {"repository": {"owner": {"login": "islomar"}, "pullRequests": {"nodes": list(prs)}}}}
+    return {"data": {"repository": {"pullRequests": {"nodes": list(prs)}}}}
 
 
 FIXTURE = _graphql(
@@ -238,11 +238,22 @@ class ReviewLinesTest(unittest.TestCase):
         with self.assertRaises(sweep.SweepError):
             sweep.review_lines({"data": {"repository": None}})
 
-    def test_an_answer_without_an_owner_is_a_failure(self) -> None:
-        answer = _graphql()
-        answer["data"]["repository"]["owner"] = None
-        with self.assertRaisesRegex(sweep.SweepError, "owner"):
-            sweep.review_lines(answer)
+    def test_the_human_reactions_count_under_an_organization_owner(self) -> None:
+        # CHB-218: after CHB-204 the repository owner is the organization, not the human.
+        answer = _graphql(FIXTURE["data"]["repository"]["pullRequests"]["nodes"][1])
+        answer["data"]["repository"]["owner"] = {"login": "islomar-software-garden"}
+
+        self.assertTrue(sweep.review_lines(answer)[0].startswith("Review agreement: PRs reviewed: 1; agree 0, disagree 1,"))
+
+    def test_a_reaction_by_the_organization_is_not_the_human_answer(self) -> None:
+        # CHB-218 review: agreement.HUMAN_LOGIN, not the repository owner, selects the reactions that count.
+        pr = _pr(92, "2026-11-10T14:00:00Z", _comment("chb-factory-reviewer", "Bot", REVIEWER_BODY, ("THUMBS_UP", "islomar-software-garden")))
+        answer = _graphql(pr)
+        answer["data"]["repository"]["owner"] = {"login": "islomar-software-garden"}
+
+        lines = sweep.review_lines(answer)
+
+        self.assertTrue(lines[0].startswith("Review agreement: PRs reviewed: 1; agree 0, disagree 0, no answer 1."), lines[0])
 
     def test_a_pr_title_stays_on_one_line(self) -> None:
         pr = _pr(91, "2026-11-10T14:00:00Z", _comment("chb-factory-reviewer", "Bot", REVIEWER_BODY))

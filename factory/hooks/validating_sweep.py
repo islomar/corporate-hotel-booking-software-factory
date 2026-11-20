@@ -77,7 +77,6 @@ DATE = re.compile(
 QUERY = """
 query($owner: String!, $name: String!, $after: String) {
   repository(owner: $owner, name: $name) {
-    owner { login }
     pullRequests(states: MERGED, baseRefName: "main", first: 100, after: $after,
                  orderBy: {field: UPDATED_AT, direction: DESC}) {
       pageInfo { hasNextPage endCursor }
@@ -248,21 +247,19 @@ def read_reviews(gh: Callable[[list[str]], dict[str, Any]] | None = None) -> dic
     gh = gh or _gh_json
     nodes: list[Any] = []
     after: str | None = None
-    owner: Any = None
     for _ in range(PR_PAGES):
         command = ["gh", "api", "graphql", "-F", "owner={owner}", "-F", "name={repo}", "-f", f"query={QUERY}"]
         if after:
             command += ["-f", f"after={after}"]
         answer = gh(command)
         connection = _pull_requests(answer)
-        owner = answer["data"]["repository"].get("owner")
         page = connection.get("nodes") or []
         nodes.extend(page)
         info = connection.get("pageInfo") or {}
         if not info.get("hasNextPage") or not page or str(page[-1].get("updatedAt", "")) < agreement.START:
             break
         after = info.get("endCursor")
-    return {"data": {"repository": {"owner": owner, "pullRequests": {"nodes": nodes}}}}
+    return {"data": {"repository": {"pullRequests": {"nodes": nodes}}}}
 
 
 def _gh_json(command: list[str]) -> dict[str, Any]:
@@ -309,9 +306,7 @@ def _rest_comment(node: dict[str, Any]) -> dict[str, Any]:
 
 def review_lines(answer: dict[str, Any]) -> list[str]:
     connection = _pull_requests(answer)
-    human_login = (answer["data"]["repository"].get("owner") or {}).get("login")
-    if not isinstance(human_login, str) or not human_login:
-        raise SweepError("GitHub GraphQL answer has no repository owner")
+    human_login = agreement.HUMAN_LOGIN
     merged = [
         pr for pr in connection.get("nodes") or [] if isinstance(pr.get("mergedAt"), str) and pr["mergedAt"] >= agreement.START
     ]

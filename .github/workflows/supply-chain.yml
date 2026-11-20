@@ -63,7 +63,8 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          OWNER: ${{ github.repository_owner }}
+          # The human, not github.repository_owner: an organization owns the repository after CHB-204.
+          OWNER: islomar
         run: >-
           python3 -I scripts/check_supply_chain.py
           --repo "$REPO" --pr "$PR" --base "$BASE_SHA" --head "$HEAD_SHA" --owner "$OWNER"
