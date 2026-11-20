@@ -40,6 +40,8 @@ def backend_blocks(folder: Path) -> list[tuple[str, str, dict[str, str]]]:
             attributes: dict[str, str] = {}
             for inner in lines:
                 code = without_comment(inner)
+                # The first lone `}` ends the block: nested blocks are not supported. A gcs
+                # backend has none.
                 if code.strip() == "}":
                     break
                 attribute = ATTRIBUTE.match(code)
