@@ -222,7 +222,10 @@ def evaluate(comments: Sequence[Mapping[str, object]], head: str | None = None, 
 
 
 def split_review_line(text: str, sha: str) -> tuple[str, str | None]:
-    """The decision lines after the first line `review <sha>`, and the problem when that line is missing or names another sha."""
+    """The file with the line `review <sha>` and the lines before it blanked, and the problem when that line is missing or names another sha.
+
+    Blank lines keep each decision line at its line number in the file, for the refusal messages.
+    """
     lines = text.splitlines()
     for index, raw in enumerate(lines):
         line = raw.strip()
@@ -234,7 +237,7 @@ def split_review_line(text: str, sha: str) -> tuple[str, str | None]:
         if match.group(1) != sha:
             named = _flat(match.group(1), 60)
             return "", f"the file triages review {named}, but the latest review is {sha}. Write the file for review {sha}."
-        return "\n".join(lines[index + 1 :]), None
+        return "\n".join([""] * (index + 1) + lines[index + 1 :]), None
     return "", f"the first line must be `review {sha}`, the review this file triages."
 
 

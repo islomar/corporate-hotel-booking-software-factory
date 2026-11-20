@@ -571,6 +571,15 @@ class CommandTest(unittest.TestCase):
         self.assertIn(f"review {SHA}", err)
         self.assertEqual(gh.bodies, [])
 
+    def test_a_refused_line_is_named_by_its_line_in_the_file(self) -> None:
+        """Review of PR #159: the `review <sha>` line and the lines before it count in the line numbers."""
+        gh = FakeGh([review()], head=NEW_SHA)
+        path = Path(self.dir.name) / "decisions.txt"
+        path.write_text(f"# triage\n\nreview {SHA}\n1 apply a\nnonsense\n2 apply b\n3 apply c\n")
+        code, _, err = run(["7", "--file", str(path)], gh)
+        self.assertEqual(code, 2)
+        self.assertIn("line 5:", err)
+
     def test_a_file_written_for_another_review_posts_nothing(self) -> None:
         """2026-11-13, PR #126: the triage of review ef6e2e3 was posted against review 17a310a."""
         gh = FakeGh([review(SHA)], head=NEW_SHA)
