@@ -3,7 +3,9 @@
 # The latest review comment of the reviewer App (marker `chb-review reviewed:<sha>`) lists
 # findings. While it has findings and no comment "Triage of review <sha>" from the agent's
 # account (marker `chb-triage reviewed:<sha>`), this check fails. A comment from any other
-# account does not count. Logic and tests: factory/triage_review.py, factory/tests/test_triage_review.py.
+# account does not count. It also fails on a truncated review, and when the PR head is not the
+# reviewed commit and changes more than docs since it (CHB-195): the reads use the compare API.
+# Logic and tests: factory/triage_review.py, factory/tests/test_triage_review.py.
 #
 # When it runs: on every push (`pull_request`). A new review comment or a triage comment arrives
 # later, so triage-rerun.yml (issue_comment, from main) re-runs this workflow for the PR head. The run

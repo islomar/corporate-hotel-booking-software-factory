@@ -478,7 +478,8 @@ On 2026-11-19 PRs #139 and #140 sat blocked after the human's approval: the agen
 
 The hook lists the open PRs of `chb-factory-agent[bot]` and reads the comments of each with `gh` (read only, by repository path).
 It calls `triage_review.evaluate`, the function of the required `triage` check, so the hook and the check agree on what "untriaged" means.
-It exits 2 when the latest review comment of a PR has findings and no triage comment for the reviewed SHA.
+It exits 2 when the latest review comment of a PR has findings and no triage comment for the reviewed SHA, or the review is truncated.
+It does not compare the review with the PR head: a review older than the head fails the check, but the agent can only wait for the reviewer, so the hook lets the turn end (CHB-195).
 The reason names each PR and the commands `factory/bin/triage-review <PR>` and `factory/bin/triage-review <PR> --file FILE`.
 A review with no findings, a PR of another author and a closed PR never block.
 
@@ -763,17 +764,30 @@ factory/bin/triage-review 123 --file triage.txt
 ```
 
 The review is the last comment of `chb-factory-reviewer[bot]` with the marker `chb-review reviewed:<sha>`.
-The file has one line per finding, for example `2 doubt the test client may rewrite the header`.
-The script refuses a file that misses a finding or a reason, names what is missing and posts nothing.
+The file starts with the line `review <sha>`, the full SHA of the review it triages. The listing prints that line to copy.
+Then it has one line per finding, for example `2 doubt the test client may rewrite the header`.
+The script refuses a file that names another review, misses a finding or a reason, names what is wrong and posts nothing.
+On 2026-11-13 a triage written for review `ef6e2e3` was posted against review `17a310a` of PR #126, with wrong decisions (CHB-195).
+It also refuses a truncated review: `gate.py` cut its summary at the length limit (the line `(truncated)`), so its last findings are missing.
 Otherwise it replaces the "Caveats" section of the PR body with the doubts, then posts the comment "Triage of review `<sha>`" through `as-agent`: a table of finding, decision and reason.
 The order matters: push the commits that fix the `apply` findings first, then post the triage.
-The triage comment turns the required `triage` check green, so an approved PR with auto-merge merges at once, and a fix pushed later misses the merge (CHB-212).
+A triage comment can turn the required `triage` check green, so an approved PR with auto-merge merges at once, and a fix pushed later misses the merge (CHB-212).
 The script enforces this: while a finding is `apply` and the PR head is still the reviewed commit, it names those findings, posts nothing and exits 1.
-When the head differs from the reviewed commit, it posts. It checks only that the SHAs differ, so a push without a fix also passes. The new head gets its own review, which the agent triages the same way.
+When the head differs from the reviewed commit, it posts. It checks only that the SHAs differ, so a push without a fix also passes.
+The check stays red after that triage: the fixes are code the review did not see. It turns green when the review of the new head arrives and has no findings, or is triaged the same way.
 A triage with no `apply` finding posts on the reviewed head. The agent lists the doubts to the human in the chat.
 
-The required check `triage` (`.github/workflows/triage.yml`) fails while the latest review comment has findings and the PR has no triage comment for the same SHA from `chb-factory-agent[bot]`.
-It passes when the review has no findings, or there is no review comment. A comment from any other account does not count. Tests: `factory/tests/test_triage_review.py`.
+The required check `triage` (`.github/workflows/triage.yml`) fails when one of these holds:
+
+- The latest review comment is truncated.
+- The PR head is not the reviewed commit, and the files changed since that commit are not all docs (CHB-195).
+  Docs means what the reviewer carries a verdict forward for: the reviewed commit is an ancestor of the head, and every changed path passes `docs_only` of `factory/review/docs_list.py`.
+  The check reads the changed paths from the GitHub compare API. A rebase (no ancestor), an empty diff, a list of 300 or more files or an unreadable answer fail.
+  The reviewer reviews such a head again, and the check waits for that review.
+- The latest review comment has findings and the PR has no triage comment for the same SHA from `chb-factory-agent[bot]`.
+
+It passes when the review covers the head (same SHA or docs-only changes since) and has no findings or a triage, or there is no review comment.
+A comment from any other account does not count. Tests: `factory/tests/test_triage_review.py`.
 The Stop hook `factory/hooks/check_untriaged_reviews.py` (CHB-209) runs the same check on every open agent PR and refuses to end the turn while one fails.
 See [Hook: triage review findings of agent PRs](#hook-triage-review-findings-of-agent-prs).
 
@@ -787,10 +801,12 @@ How the check stays current:
 
 Limits:
 
-- Only the latest review comment counts. A push that gets no review comment (docs-only, or the reviewer secrets are missing) keeps the earlier review's result.
+- Only the latest review comment counts. A docs-only push gets no review comment and keeps the earlier review's result.
+- A code push with no review comment after it (the reviewer failed, hit a usage limit or has no secrets) keeps `triage` red. Re-run the `Review trigger` run of the head commit, or the human decides.
+- Each rebase by `PR updates` changes the head without a content change. The reviewed commit is no longer an ancestor, so the reviewer reviews again and `triage` stays red until that review is triaged.
 - The re-run path rests on the workflow token being able to re-run `pull_request` runs, as `supply-chain` does (CHB-184). It is untested until a PR with findings gets its triage.
   If the check stays red after the triage comment, the human re-runs it: Actions, Triage, the run for the PR head, "Re-run jobs". The agent App cannot re-run workflows.
-- After a push, `triage` can pass on the previous review's triage until the new review comment arrives. The `review` check is not required yet (shadow mode), so a merge can land inside that gap.
+- A PR with no review comment at all passes. The `review` check is not required yet (shadow mode), so a merge can land before the first review.
 - The check proves that a triage comment exists, not that the decisions are right. The human reads the doubts.
 - A run in progress is not re-run. It reads the comments when it starts its read step, so a comment that lands within seconds of that read can wait for the next event.
 

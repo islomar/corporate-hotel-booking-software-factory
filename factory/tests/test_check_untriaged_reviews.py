@@ -94,6 +94,19 @@ class UntriagedReviewsTest(unittest.TestCase):
         gh = fake_gh([pull(140, state="closed")], {140: [review()]})
         self.assertEqual(run(gh, self.state_dir), (0, ""))
 
+    def test_a_review_older_than_the_head_does_not_block_and_reads_no_diff(self):
+        """CHB-195: the `triage` check fails on it, but the agent cannot hurry the reviewer. The hook waits."""
+        gh = fake_gh([pull(140, sha="c" * 40)], {140: [review(), triage()]})
+        self.assertEqual(run(gh, self.state_dir), (0, ""))
+        self.assertFalse(any("/compare/" in " ".join(c) for c in gh.calls))
+
+    def test_a_truncated_review_blocks_like_the_check(self):
+        body = review()["body"].replace("<!--", f"{tr.gate.TRUNCATED}\n\n<!--")
+        gh = fake_gh([pull(140)], {140: [{"id": 1, "user": {"login": tr.REVIEWER}, "body": body}, triage()]})
+        code, err = run(gh, self.state_dir)
+        self.assertEqual(code, 2)
+        self.assertIn("truncated", err)
+
     def test_pr_without_review_does_not_block(self):
         gh = fake_gh([pull(140)], {140: []})
         self.assertEqual(run(gh, self.state_dir), (0, ""))

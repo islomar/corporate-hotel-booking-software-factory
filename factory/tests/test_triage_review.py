@@ -12,12 +12,15 @@ import re
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "factory"))
+sys.path.insert(0, str(ROOT / "factory" / "review"))
 
 import as_agent
+import gate
 import triage_review as tr
 
 SHA = "a" * 40
@@ -103,6 +106,143 @@ class CheckTest(unittest.TestCase):
     def test_the_agent_login_is_the_app_slug(self) -> None:
         self.assertEqual(tr.AGENT, f"{as_agent.APP_SLUG}[bot]")
         self.assertEqual(tr.REPOSITORY, as_agent.REPOSITORY)
+
+    def test_latest_review_is_gone_and_the_check_uses_review_comment(self) -> None:
+        """CHB-195: one function finds the review comment, agreement.review_comment."""
+        source = (ROOT / "factory/triage_review.py").read_text()
+        self.assertFalse(hasattr(tr, "latest_review"))
+        self.assertNotIn("latest_review", source)
+        self.assertIn("agreement.review_comment(", source)
+
+
+class Changes:
+    """A fake `changed(base, head)`: the paths it returns, and the calls it got."""
+
+    def __init__(self, paths: list[str] | None) -> None:
+        self.paths = paths
+        self.calls: list[tuple[str, str]] = []
+
+    def __call__(self, base: str, head: str) -> list[str] | None:
+        self.calls.append((base, head))
+        return self.paths
+
+
+class StaleHeadTest(unittest.TestCase):
+    """CHB-195, criterion 1: the review of an older commit does not vouch for a newer head with code."""
+
+    def test_same_sha_passes_and_reads_no_diff(self) -> None:
+        changed = Changes(["backend/src/chb/app.py"])
+        verdict = tr.evaluate([review(), triage()], head=SHA, changed=changed)
+        self.assertTrue(verdict.ok, verdict.message)
+        self.assertEqual(changed.calls, [])
+
+    def test_a_new_code_commit_fails_and_names_both_shas(self) -> None:
+        changed = Changes(["backend/src/chb/app.py", "docs/x.md"])
+        verdict = tr.evaluate([review(), triage()], head=NEW_SHA, changed=changed)
+        self.assertFalse(verdict.ok)
+        self.assertEqual(changed.calls, [(SHA, NEW_SHA)])
+        self.assertIn(SHA, verdict.message)
+        self.assertIn(NEW_SHA, verdict.message)
+        self.assertIn("backend/src/chb/app.py", verdict.message)
+        self.assertNotIn("Run factory/bin/triage-review", verdict.message)
+
+    def test_a_new_code_commit_fails_even_when_the_old_review_had_no_findings(self) -> None:
+        verdict = tr.evaluate([review(findings="No findings.\n")], head=NEW_SHA, changed=Changes(["factory/x.py"]))
+        self.assertFalse(verdict.ok)
+
+    def test_a_docs_only_commit_passes_with_the_triage_of_the_reviewed_sha(self) -> None:
+        changed = Changes(["docs/guide.md", "README.md", "docs/img/a.png", "docs/sessions/s.md"])
+        verdict = tr.evaluate([review(), triage()], head=NEW_SHA, changed=changed)
+        self.assertTrue(verdict.ok, verdict.message)
+
+    def test_a_docs_only_commit_still_needs_the_triage(self) -> None:
+        self.assertFalse(tr.evaluate([review()], head=NEW_SHA, changed=Changes(["docs/guide.md"])).ok)
+
+    def test_docs_are_what_the_reviewer_carries_forward(self) -> None:
+        """Governance Markdown is code for the reviewer (factory/review/docs_list.py), so it is here too."""
+        for path in ("docs/process/kanban.md", "docs/decisions/ADR-x.md", "CLAUDE.md", "factory/README.md", "docs/x.txt"):
+            with self.subTest(path=path):
+                self.assertFalse(tr.evaluate([review(), triage()], head=NEW_SHA, changed=Changes([path])).ok)
+
+    def test_an_unknown_diff_fails_closed(self) -> None:
+        """None: the reviewed commit is not an ancestor of the head (a rebase), or GitHub could not say."""
+        verdict = tr.evaluate([review(), triage()], head=NEW_SHA, changed=Changes(None))
+        self.assertFalse(verdict.ok)
+        self.assertIn(NEW_SHA, verdict.message)
+
+    def test_an_empty_diff_fails_like_the_reviewer(self) -> None:
+        """plan.py reviews again when nothing changed since the review (docs_only([]) is false)."""
+        self.assertFalse(tr.evaluate([review(), triage()], head=NEW_SHA, changed=Changes([])).ok)
+
+    def test_a_head_without_a_diff_reader_fails_closed(self) -> None:
+        self.assertFalse(tr.evaluate([review(), triage()], head=NEW_SHA).ok)
+
+
+class CompareTest(unittest.TestCase):
+    """The paths changed from the reviewed commit to the head, from GitHub's compare API."""
+
+    def answer(self, payload: object) -> list[str] | None:
+        return tr.changed_paths(lambda args: json.dumps(payload), REPO, SHA, NEW_SHA)
+
+    def test_ahead_gives_the_paths_and_both_names_of_a_rename(self) -> None:
+        files = [{"filename": "docs/a.md"}, {"filename": "docs/b.md", "previous_filename": "factory/b.py"}]
+        self.assertEqual(self.answer({"status": "ahead", "files": files}), ["docs/a.md", "docs/b.md", "factory/b.py"])
+
+    def test_a_rename_out_of_code_is_not_docs_only(self) -> None:
+        files = [{"filename": "docs/b.md", "previous_filename": "factory/b.py"}]
+        changed = lambda base, head: tr.changed_paths(lambda args: json.dumps({"status": "ahead", "files": files}), REPO, base, head)  # noqa: E731
+        self.assertFalse(tr.evaluate([review(), triage()], head=NEW_SHA, changed=changed).ok)
+
+    def test_a_rebase_or_an_older_head_is_unknown(self) -> None:
+        for status in ("diverged", "behind", "identical", None):
+            with self.subTest(status=status):
+                self.assertIsNone(self.answer({"status": status, "files": [{"filename": "docs/a.md"}]}))
+
+    def test_a_capped_file_list_is_unknown(self) -> None:
+        files = [{"filename": f"docs/{n}.md"} for n in range(tr.COMPARE_FILE_CAP)]
+        self.assertIsNone(self.answer({"status": "ahead", "files": files}))
+
+    def test_a_malformed_answer_is_unknown(self) -> None:
+        for payload in ([], {"status": "ahead"}, {"status": "ahead", "files": [{"name": "x"}]}, {"status": "ahead", "files": "x"}):
+            with self.subTest(payload=payload):
+                self.assertIsNone(self.answer(payload))
+
+    def test_it_asks_the_compare_endpoint_of_the_two_shas(self) -> None:
+        calls: list[list[str]] = []
+        tr.changed_paths(lambda args: calls.append(args) or "{}", REPO, SHA, NEW_SHA)
+        self.assertEqual(calls, [["api", f"repos/{REPO}/compare/{SHA}...{NEW_SHA}"]])
+
+
+class TruncationTest(unittest.TestCase):
+    """CHB-195, criterion 2: a review cut at its length limit lost findings, so it cannot be triaged."""
+
+    @staticmethod
+    def truncated_body(sha: str = SHA) -> str:
+        """A comment body built by gate.py itself from a summary over SUMMARY_LIMIT."""
+        verdict = gate.Verdict(passed=False, merge_safety=gate.Fraction(7), reasons=["x" * 300] * 300)
+        summary = gate.render_summary(verdict, "app", 1)
+        return str(gate.comment_body(verdict, sha, summary))
+
+    def test_the_gate_marks_a_cut_summary_with_the_shared_constant(self) -> None:
+        body = self.truncated_body()
+        self.assertIn(f"\n{gate.TRUNCATED}\n", body)
+        self.assertIn(f"reviewed:{SHA}", body)
+
+    def test_the_check_fails_on_a_review_cut_by_the_gate_and_names_it(self) -> None:
+        verdict = tr.evaluate([comment(tr.REVIEWER, self.truncated_body()), triage()], head=SHA, changed=Changes([]))
+        self.assertFalse(verdict.ok)
+        self.assertIn("truncated", verdict.message)
+        self.assertIn(SHA, verdict.message)
+
+    def test_the_check_fails_on_a_truncated_review_with_a_triage(self) -> None:
+        body = review_body().replace("Human: react", f"{gate.TRUNCATED}\n\nHuman: react")
+        verdict = tr.evaluate([comment(tr.REVIEWER, body), triage()])
+        self.assertFalse(verdict.ok)
+        self.assertIn("truncated", verdict.message)
+
+    def test_a_finding_that_mentions_truncated_is_not_the_marker(self) -> None:
+        text = "- **cleanup** (Tests) a.py:1: The log is (truncated) here. Fix: Keep it.\n"
+        self.assertTrue(tr.evaluate([review(findings=text), triage()]).ok)
 
 
 class ParseTest(unittest.TestCase):
@@ -244,6 +384,7 @@ class FakeGh:
         comments: list[dict],
         body: str = "## What\n\nx\n",
         runs: list[dict] | None = None,
+        compare: dict | None = None,
         head: str = SHA,
         repo: str = tr.REPOSITORY,
     ) -> None:
@@ -252,6 +393,7 @@ class FakeGh:
         self.head = head
         self.body = body
         self.runs = runs or []
+        self.compare = compare
         self.calls: list[list[str]] = []
         self.bodies: list[str] = []
 
@@ -263,6 +405,8 @@ class FakeGh:
             return self.body
         if args[:1] == ["api"] and args[1] == f"repos/{self.repo}/pulls/7":
             return self.head
+        if args[:1] == ["api"] and args[1].startswith(f"repos/{self.repo}/compare/"):
+            return json.dumps(self.compare)
         if args[:1] == ["api"] and "actions/workflows/triage.yml/runs" in args[1]:
             return json.dumps({"workflow_runs": self.runs})
         if args[:2] in (["pr", "edit"], ["pr", "comment"]):
@@ -272,6 +416,10 @@ class FakeGh:
 
     def verbs(self) -> list[str]:
         return [" ".join(c[:2]) for c in self.calls]
+
+
+def _fields(finding: "tr.Finding") -> tuple[str, str, str, str]:
+    return finding.kind, finding.dimension, finding.where, finding.message
 
 
 def run(argv: list[str], gh: FakeGh) -> tuple[int, str, str]:
@@ -286,9 +434,10 @@ class CommandTest(unittest.TestCase):
         self.dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.dir.cleanup)
 
-    def decisions_file(self, text: str) -> str:
+    def decisions_file(self, text: str, sha: str | None = SHA) -> str:
+        """A decisions file whose first line names the reviewed sha (CHB-195), unless sha is None."""
         path = Path(self.dir.name) / "decisions.txt"
-        path.write_text(text)
+        path.write_text((f"review {sha}\n" if sha is not None else "") + text)
         return str(path)
 
     def test_prints_the_numbered_findings_of_the_latest_review(self) -> None:
@@ -378,11 +527,80 @@ class CommandTest(unittest.TestCase):
         self.assertIn("head", err.lower())
 
     def test_check_mode_exit_codes(self) -> None:
-        self.assertEqual(run(["--check", "7", "--repo", REPO], FakeGh([review(), triage()]))[0], 0)
-        code, out, _ = run(["--check", "7", "--repo", REPO], FakeGh([review()]))
+        self.assertEqual(run(["--check", "7", "--repo", REPO], FakeGh([review(), triage()], repo=REPO))[0], 0)
+        code, out, _ = run(["--check", "7", "--repo", REPO], FakeGh([review()], repo=REPO))
         self.assertEqual(code, 1)
         self.assertIn("::error::", out)
-        self.assertEqual(run(["--check", "7", "--repo", REPO], FakeGh([review(findings="No findings.\n")]))[0], 0)
+        self.assertEqual(run(["--check", "7", "--repo", REPO], FakeGh([review(findings="No findings.\n")], repo=REPO))[0], 0)
+
+    def test_check_mode_fails_on_a_new_code_commit_and_passes_on_a_docs_only_one(self) -> None:
+        """CHB-195: --check reads the PR head and, when it moved, the files changed since the review."""
+        code_push = {"status": "ahead", "files": [{"filename": "backend/src/chb/app.py"}]}
+        gh = FakeGh([review(), triage()], head=NEW_SHA, repo=REPO, compare=code_push)
+        code, out, _ = run(["--check", "7", "--repo", REPO], gh)
+        self.assertEqual(code, 1, out)
+        self.assertIn(NEW_SHA, out)
+        self.assertIn(["api", f"repos/{REPO}/compare/{SHA}...{NEW_SHA}"], gh.calls)
+        docs_push = {"status": "ahead", "files": [{"filename": "docs/guide.md"}]}
+        gh = FakeGh([review(), triage()], head=NEW_SHA, repo=REPO, compare=docs_push)
+        self.assertEqual(run(["--check", "7", "--repo", REPO], gh)[0], 0)
+
+    def test_check_mode_fails_on_a_rebased_head(self) -> None:
+        rebase = {"status": "diverged", "files": [{"filename": "docs/guide.md"}]}
+        gh = FakeGh([review(), triage()], head=NEW_SHA, repo=REPO, compare=rebase)
+        self.assertEqual(run(["--check", "7", "--repo", REPO], gh)[0], 1)
+
+    def test_check_mode_fails_on_an_unreadable_head(self) -> None:
+        code, out, _ = run(["--check", "7", "--repo", REPO], FakeGh([review(), triage()], head="", repo=REPO))
+        self.assertEqual(code, 2, out)
+
+    def test_a_truncated_review_is_refused_when_printed_and_when_posted(self) -> None:
+        body = review_body().replace("Human: react", f"{gate.TRUNCATED}\n\nHuman: react")
+        for argv in (["7"], ["7", "--file", self.decisions_file("1 discard a\n2 discard b\n3 doubt c\n")]):
+            with self.subTest(argv=argv[1:]):
+                gh = FakeGh([comment(tr.REVIEWER, body)], head=NEW_SHA)
+                code, _, err = run(argv, gh)
+                self.assertEqual(code, 1)
+                self.assertIn("truncated", err)
+                self.assertEqual(gh.bodies, [])
+
+    def test_a_file_without_the_review_line_posts_nothing(self) -> None:
+        gh = FakeGh([review()], head=NEW_SHA)
+        code, _, err = run(["7", "--file", self.decisions_file("1 discard a\n2 discard b\n3 doubt c\n", sha=None)], gh)
+        self.assertEqual(code, 2)
+        self.assertIn(f"review {SHA}", err)
+        self.assertEqual(gh.bodies, [])
+
+    def test_a_file_written_for_another_review_posts_nothing(self) -> None:
+        """2026-11-13, PR #126: the triage of review ef6e2e3 was posted against review 17a310a."""
+        gh = FakeGh([review(SHA)], head=NEW_SHA)
+        code, _, err = run(["7", "--file", self.decisions_file("1 discard a\n2 discard b\n3 doubt c\n", sha=OLD_SHA)], gh)
+        self.assertEqual(code, 2)
+        self.assertIn(OLD_SHA, err)
+        self.assertIn(SHA, err)
+        self.assertEqual(gh.verbs(), ["api --paginate"])
+
+    def test_the_printed_findings_name_the_review_line_to_copy(self) -> None:
+        _, out, _ = run(["7"], FakeGh([review()]))
+        self.assertIn(f"review {SHA}", out)
+
+    def test_doubts_are_looked_up_by_number(self) -> None:
+        """CHB-195, criterion 3: a finding list not numbered from 1 in order still names the right finding."""
+        _, parsed = tr.parse_review(review_body())
+        found = [tr.Finding(5, *_fields(parsed[0])), tr.Finding(3, *_fields(parsed[2]))]
+        decisions = [tr.Decision(3, "doubt", "unsure"), tr.Decision(5, "apply", "fix it")]
+        lines = tr.doubt_lines(found, decisions)
+        self.assertEqual(len(lines), 1)
+        self.assertIn("Doubt, finding 3", lines[0])
+        self.assertIn("The assertion accepts 400 or 413", lines[0])
+
+    def test_the_success_output_runs_inside_the_error_handling(self) -> None:
+        gh = FakeGh([review()], head=NEW_SHA)
+        failing = unittest.mock.patch.object(tr, "doubt_lines", side_effect=KeyError(3))
+        with failing:
+            code, _, err = run(["7", "--file", self.decisions_file("1 discard a\n2 discard b\n3 doubt c\n")], gh)
+        self.assertEqual(code, 2)
+        self.assertIn("triage-review failed", err)
 
     def test_the_pr_number_must_be_digits(self) -> None:
         for bad in ("7;rm", "-1", "x", "07/../8"):
