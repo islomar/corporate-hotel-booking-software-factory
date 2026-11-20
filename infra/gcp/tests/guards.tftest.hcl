@@ -151,6 +151,17 @@ run "repository_name_in_place_of_the_id_fails_the_plan" {
   expect_failures = [var.github_repository_id]
 }
 
+run "another_repository_id_fails_the_plan" {
+  command = plan
+
+  # The guard pins the ID; an override of the variable must not change what Google trusts (CHB-220 review).
+  variables {
+    github_repository_id = "1"
+  }
+
+  expect_failures = [terraform_data.guards]
+}
+
 run "deployer_condition_moved_to_another_branch_fails_the_plan" {
   command = plan
 
