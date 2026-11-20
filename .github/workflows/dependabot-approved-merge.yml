@@ -1,0 +1,119 @@
+# The human's approval turns auto-merge on for a needs-human Dependabot update (CHB-213).
+# Design: docs/decisions/ADR-ebe6-unattended-dependency-updates.md
+#
+# dependabot-auto-merge.yml labels majors, Playwright updates and unknown update types
+# `dependencies:needs-human` and leaves auto-merge off. The human's approval of the head commit
+# is the decision. This workflow turns auto-merge (squash) on after that approval, so the PR
+# merges when every required check passes, `supply-chain` included (it needs the same approval).
+#
+# Why workflow_run: the agent App key lives in the `agent-pr-updates` environment, which admits
+# main only (infra/github/environments.tf). A `pull_request_review` job runs on refs/pull/N/merge
+# and is refused. Dependabot secrets do not help either: the human triggers the review run, and
+# GitHub gives Dependabot secrets only to runs that Dependabot triggers.
+# dependabot-approval-trigger.yml runs on the review and does nothing; when it completes, this
+# workflow runs from main.
+#
+# Trust boundaries (GitHub Security Lab, "Preventing pwn requests"):
+# - Any branch can add a workflow named "Dependabot approval trigger", so the triggering run proves
+#   nothing. `resolve` reads the head SHA from the workflow_run payload (set by GitHub) and decides
+#   from the API only (scripts/dependabot_approved_merge.py, tests in scripts/tests/): an open
+#   Dependabot PR into main from this repository, every commit Dependabot's, label
+#   `dependencies:needs-human`, head equal to that SHA, the human's latest deciding review an
+#   approval of that head, and a `main` ruleset that requires CI.
+# - The workspace is main at the commit this file came from. No PR content is checked out or run.
+# - `enable` enters the environment only after `resolve` named a PR. The App token only turns
+#   auto-merge on, and only while the PR head is still the approved SHA (--match-head-commit).
+# - No App approval: the human's approval is the required review.
+name: Dependabot approved merge
+
+on:
+  # zizmor flags workflow_run as dangerous. This workflow runs only for `pull_request_review` runs
+  # of this repository, validates the PR through the API, checks out main only and runs nothing
+  # from the PR. See the trust boundaries above.
+  workflow_run: # zizmor: ignore[dangerous-triggers]
+    workflows: [Dependabot approval trigger]
+    types: [completed]
+
+permissions: {}
+
+# Runs of the same head queue instead of cancelling: each reads the live reviews.
+concurrency:
+  group: dependabot-approved-merge-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: resolve
+    # Cheap filters on fields GitHub sets. The API checks in the script are the real control.
+    if: >-
+      github.repository_id == '1447565814' &&
+      github.event.workflow_run.event == 'pull_request_review' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.id == github.event.workflow_run.repository.id
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read # checkout of main; the ruleset of main
+      pull-requests: read # the PR, its commits and reviews
+    outputs:
+      number: ${{ steps.pr.outputs.number }}
+    steps:
+      # github.sha is the main commit this workflow file came from. Only the script runs from it.
+      - name: Check out main (decision script)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - id: pr
+        name: Find the approved needs-human Dependabot PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          # The human, not github.repository_owner: an organization owns the repository after CHB-204.
+          HUMAN: islomar
+        run: |
+          python3 -I scripts/dependabot_approved_merge.py \
+            --repo "$REPO" --head-sha "$HEAD_SHA" --human "$HUMAN" | tee "$RUNNER_TEMP/decision"
+          grep -E '^number=[0-9]+$' "$RUNNER_TEMP/decision" >> "$GITHUB_OUTPUT" || true
+
+  enable:
+    name: enable
+    needs: resolve
+    if: needs.resolve.outputs.number != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # The agent App key, limited to main (ADR-d7b7, infra/github/environments.tf). workflow_run jobs
+    # run with GITHUB_REF on main, so the environment admits this job.
+    environment: agent-pr-updates
+    permissions: {} # the writes use the App token
+    env:
+      HAS_SECRETS: >-
+        ${{ secrets.AGENT_APP_CLIENT_ID != '' &&
+        secrets.AGENT_APP_PRIVATE_KEY != '' }}
+    steps:
+      - name: Agent App secrets missing
+        if: env.HAS_SECRETS != 'true'
+        run: echo "::notice::AGENT_APP_CLIENT_ID or AGENT_APP_PRIVATE_KEY is not set in the agent-pr-updates environment. Merge by hand."
+
+      # An App token, not GITHUB_TOKEN: a merge done with GITHUB_TOKEN starts no CI or deploy on main.
+      - id: app-token
+        if: env.HAS_SECRETS == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ secrets.AGENT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Enable auto-merge (squash) on the approved head
+        if: steps.app-token.outputs.token != ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ needs.resolve.outputs.number }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          gh pr merge "$PR" --repo "$REPO" --auto --squash --match-head-commit "$HEAD_SHA"
+          gh pr edit "$PR" --repo "$REPO" --add-label "dependencies:auto-merge" || echo "::warning::label missing in the repository"

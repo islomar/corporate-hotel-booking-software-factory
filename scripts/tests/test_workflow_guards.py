@@ -11,7 +11,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github/workflows"
-GUARDED = ("pr-updates.yml", "dependabot-auto-merge.yml")
+GUARDED = ("pr-updates.yml", "dependabot-auto-merge.yml", "dependabot-approved-merge.yml")
+# Workflows that name the human in an `OWNER:` or `HUMAN:` line (CHB-213 added the approved-merge workflow).
+HUMAN_WORKFLOWS = ("supply-chain.yml", "dependabot-approved-merge.yml")
 GUARD = "github.repository_id == '1447565814'"
 
 
@@ -38,11 +40,11 @@ class CopiesAgreeTest(unittest.TestCase):
     """CHB-218 review: the human's login and the repository ID are copied across files; they must not drift."""
 
     def test_the_human_login_is_the_same_everywhere(self):
-        workflow = _one(r"^\s*OWNER:\s*(\S+)\s*$", WORKFLOWS / "supply-chain.yml")
+        workflows = {_one(r"^\s*(?:OWNER:|HUMAN:)\s*(\S+)\s*$", WORKFLOWS / name) for name in HUMAN_WORKFLOWS}
         script = _one(r'^HUMAN_LOGIN = "([^"]+)"', ROOT / "factory/review/agreement.py")
         codeowners = _one(r"@([A-Za-z0-9-]+)", ROOT / ".github/CODEOWNERS")
 
-        self.assertEqual({workflow, codeowners}, {script})
+        self.assertEqual({*workflows, codeowners}, {script})
 
     def test_the_repository_id_is_the_same_in_every_guard(self):
         ids = {_one(r"github\.repository_id == '(\d+)'", WORKFLOWS / name) for name in GUARDED}

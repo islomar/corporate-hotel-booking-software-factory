@@ -1,0 +1,30 @@
+# Trigger for dependabot-approved-merge.yml (CHB-213, ADR-ebe6).
+#
+# This workflow does nothing. Its completed run starts dependabot-approved-merge.yml through
+# `workflow_run`, which runs from main and may enter the `agent-pr-updates` environment.
+# A `pull_request_review` job cannot: it runs on refs/pull/N/merge, and that environment admits main only.
+#
+# On `pull_request_review`, GitHub runs the PR's own copy of this file. dependabot-approved-merge.yml
+# trusts nothing it reports: it reads the head SHA from the workflow_run payload and checks the PR,
+# its commits and the human's reviews through the GitHub API.
+# Keep this file empty: no secrets, no permissions, no checkout, no PR text in `run:`.
+name: Dependabot approval trigger
+
+on:
+  pull_request_review:
+    types: [submitted]
+
+permissions: {}
+
+jobs:
+  record-approval:
+    # Cheap filter: only an approval of a Dependabot PR starts the merge workflow.
+    # A skipped job ends the run as `skipped`, and the merge workflow acts only on `success`.
+    if: >-
+      github.event.review.state == 'approved' &&
+      github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Hand over to the Dependabot approved merge workflow
+        run: echo "dependabot-approved-merge.yml (workflow_run, from main) decides on auto-merge."
