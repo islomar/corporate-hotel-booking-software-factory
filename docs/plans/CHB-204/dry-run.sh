@@ -18,7 +18,7 @@ HUMAN_OWNER="islomar"
 TRANSFER_DATE="2026-11-21" # after 2026-07-15: GitHub switches `sub` to the immutable format
 SUBJECT_MAX=127
 
-# ---------- paths the script reads (checked first, owner rule) ----------
+# ---------- paths the script reads (checked first, human's rule) ----------
 PATHS=(
   "$REPO_DIR/infra/gcp/identities.tf" "$REPO_DIR/infra/gcp/planner.tf" "$REPO_DIR/infra/gcp/variables.tf"
   "$REPO_DIR/infra/github/ruleset.tf" "$REPO_DIR/infra/github/tests/guards.tftest.hcl"
@@ -36,7 +36,7 @@ if [ ! -e "$REPO_DIR/infra/github/terraform.tfstate" ]; then
   echo "  note    infra/github/terraform.tfstate is absent here (git-ignored); B0 needs the main checkout"
 fi
 if [ -e "$REPO_DIR/infra/github/versions.tf" ]; then
-  echo "  note    infra/github/versions.tf exists: re-read the provider owner before the real run"
+  echo "  note    infra/github/versions.tf exists: re-read the provider account before the real run"
 fi
 
 # ---------- read-only seeding ----------
@@ -108,11 +108,11 @@ if grep -qE '^REPOSITORY_CANDIDATES = .*islomar-software-garden' "$REPO_DIR/fact
 else
   SEED_AS_AGENT="$OLD_OWNER/$NAME"
 fi
-SEED_TF_OWNER=$(grep -rhoE 'owner *= *"[^"]+"' "$REPO_DIR"/infra/github/*.tf 2>/dev/null | head -1 | sed -E 's/.*"(.*)"/\1/')
+SEED_TF_OWNER=$(grep -rhoE '\bowner\b *= *"[^"]+"' "$REPO_DIR"/infra/github/*.tf 2>/dev/null | head -1 | sed -E 's/.*"(.*)"/\1/')
 [ -z "$SEED_TF_OWNER" ] && SEED_TF_OWNER="token-user:$HUMAN_OWNER"
 
 cat <<EOF
-  repository        $SEED_FULL id=$SEED_REPO_ID owner.type=$SEED_OWNER_TYPE
+  repository        $SEED_FULL id=$SEED_REPO_ID repo_owner_type=$SEED_OWNER_TYPE
   organization      $NEW_OWNER id=$ORG_ID installations=[${SEED_ORG_INSTALLS}]
   main ruleset      strict=$SEED_STRICT required=[$SEED_REQUIRED] merge_queue_rules=$SEED_QUEUE
   Apps public       agent=$agent_public reviewer=$reviewer_public
@@ -127,14 +127,14 @@ cat <<EOF
                     triage: $(triggers "$REPO_DIR/.github/workflows/triage.yml")
   supply-chain      --owner from: $SEED_SUPPLY_OWNER
   as_agent          REPOSITORY=$SEED_AS_AGENT
-  infra/github      provider owner: $SEED_TF_OWNER (no provider block)
+  infra/github      provider account: $SEED_TF_OWNER (no provider block)
 EOF
 
 # ---------- model ----------
 declare -A S
 reset_state() {
   S=(
-    [owner]=$OLD_OWNER [owner_type]=$SEED_OWNER_TYPE [repo_id]=$SEED_REPO_ID
+    [repo_owner]=$OLD_OWNER [repo_owner_type]=$SEED_OWNER_TYPE [repo_id]=$SEED_REPO_ID
     [deploy_cond]=$SEED_DEPLOY_COND [plan_cond]=$SEED_PLAN_COND
     [deploy_bind]=$SEED_DEPLOY_BIND [plan_bind]=$SEED_PLAN_BIND [mapping]=$SEED_MAPPING
     [guard_pr_updates]=$(guard_of "$REPO_DIR/.github/workflows/pr-updates.yml")
@@ -155,18 +155,18 @@ reset_state() {
 }
 
 # OIDC claims of a job, computed from the state
-full_name() { echo "${S[owner]}/$NAME"; }
-owner_id() { if [ "${S[owner]}" = "$NEW_OWNER" ]; then echo "$ORG_ID"; else echo 966013; fi; }
+full_name() { echo "${S[repo_owner]}/$NAME"; }
+repo_owner_id() { if [ "${S[repo_owner]}" = "$NEW_OWNER" ]; then echo "$ORG_ID"; else echo 966013; fi; }
 subject() { # $1: suffix such as environment:production or pull_request
   if [ "${S[transferred]}" = yes ] && [[ "$TRANSFER_DATE" > "2026-07-15" ]]; then
-    echo "repo:${S[owner]}@$(owner_id)/$NAME@${S[repo_id]}:$1"
+    echo "repo:${S[repo_owner]}@$(repo_owner_id)/$NAME@${S[repo_id]}:$1"
   else
     echo "repo:$(full_name):$1"
   fi
 }
 claim() { # $1 claim, $2 event
   case $1 in
-    repository) full_name ;; repository_id) echo "${S[repo_id]}" ;; repository_owner) echo "${S[owner]}" ;;
+    repository) full_name ;; repository_id) echo "${S[repo_id]}" ;; repository_owner) echo "${S[repo_owner]}" ;;
     ref) [ "$2" = push ] && echo refs/heads/main || echo refs/pull/1/merge ;;
     event_name) echo "$2" ;;
   esac
@@ -196,8 +196,8 @@ eval_guard() { # $1 `repository==x` or `repository_id==n` or `none`
   local field=${1%%==*} value=${1#*==}
   [ "$(claim "$field" push)" = "$value" ]
 }
-installed() { # $1 install list: the App reaches the repository when installed on its owner
-  [[ " $1 " == *" ${S[owner]} "* ]]
+installed() { # $1 install list: the App reaches the repository when installed on the account that owns it
+  [[ " $1 " == *" ${S[repo_owner]} "* ]]
 }
 
 FAILS=()
@@ -223,33 +223,33 @@ check_invariants() {
     for ev in $need; do [[ " $t " == *" $ev "* ]] || fail "I3 checks: '$c' has no $ev trigger; the queue would wait forever"; done
   done
   # I4 the agent can push and open PRs
-  installed "${S[agent_installs]}" || fail "I4 agent: chb-factory-agent is not installed on ${S[owner]}"
+  installed "${S[agent_installs]}" || fail "I4 agent: chb-factory-agent is not installed on ${S[repo_owner]}"
   [[ " ${S[as_agent]} " == *" $(full_name) "* ]] || fail "I4 agent: as_agent.py does not name $(full_name) (relies on an undocumented API redirect)"
   # I5 automation workflows run and can mint the agent token
   eval_guard "${S[guard_pr_updates]}" || fail "I5 automation: pr-updates.yml guard ${S[guard_pr_updates]} skips the job"
   eval_guard "${S[guard_dependabot]}" || fail "I5 automation: dependabot-auto-merge.yml guard ${S[guard_dependabot]} skips the job"
   # I6 the reviewer can post
-  installed "${S[rev_installs]}" || fail "I6 reviewer: chb-factory-reviewer is not installed on ${S[owner]}"
-  # I7 the owner's approval still counts in supply-chain and the agreement report
-  if [ "${S[supply_owner]}" = repository_owner ] && [ "${S[owner]}" != "$HUMAN_OWNER" ]; then
-    fail "I7 owner: supply-chain --owner is ${S[owner]}, not $HUMAN_OWNER; owner-approved lockfile PRs can never pass"
+  installed "${S[rev_installs]}" || fail "I6 reviewer: chb-factory-reviewer is not installed on ${S[repo_owner]}"
+  # I7 the human's approval still counts in supply-chain and the agreement report
+  if [ "${S[supply_owner]}" = repository_owner ] && [ "${S[repo_owner]}" != "$HUMAN_OWNER" ]; then
+    fail "I7 human: supply-chain --owner is ${S[repo_owner]}, not $HUMAN_OWNER; human-approved lockfile PRs can never pass"
   fi
-  if [ "${S[agreement_owner]}" = repository_owner ] && [ "${S[owner]}" != "$HUMAN_OWNER" ]; then
-    fail "I7 owner: review agreement counts reactions of ${S[owner]}, not $HUMAN_OWNER"
+  if [ "${S[agreement_owner]}" = repository_owner ] && [ "${S[repo_owner]}" != "$HUMAN_OWNER" ]; then
+    fail "I7 human: review agreement counts reactions of ${S[repo_owner]}, not $HUMAN_OWNER"
   fi
-  # I8 the GitHub Terraform provider targets the owner of the repository (checked when applied)
+  # I8 the GitHub Terraform provider targets the account that owns the repository (checked when applied)
   # I9 the old name stays free so redirects keep working
   [ "${S[old_name_reused]}" = no ] || fail "I9 redirects: a repository at $OLD_OWNER/$NAME deletes the redirects"
 }
 check_tf_owner() { # I8, at an infra-apply step
   local o=${S[tf_owner]#token-user:}
-  [ "$o" = "${S[owner]}" ] || { fail "I8 terraform: infra/github provider owner '$o' is not the repository owner '${S[owner]}'"; return 1; }
+  [ "$o" = "${S[repo_owner]}" ] || { fail "I8 terraform: infra/github provider account '$o' is not the repository owner '${S[repo_owner]}'"; return 1; }
 }
 
 show() {
-  printf '    owner=%s guards=[%s | %s] gcp_deploy=[%s] bindings=[%s] mapping=[%s]\n' \
-    "${S[owner]}" "${S[guard_pr_updates]}" "${S[guard_dependabot]}" "${S[deploy_cond]}" "${S[deploy_bind]}" "${S[mapping]}"
-  printf '    apps: agent owner=%s public=%s installs=[%s]; reviewer owner=%s public=%s installs=[%s]; as_agent=[%s]\n' \
+  printf '    repo_owner=%s guards=[%s | %s] gcp_deploy=[%s] bindings=[%s] mapping=[%s]\n' \
+    "${S[repo_owner]}" "${S[guard_pr_updates]}" "${S[guard_dependabot]}" "${S[deploy_cond]}" "${S[deploy_bind]}" "${S[mapping]}"
+  printf '    apps: agent app_account=%s public=%s installs=[%s]; reviewer app_account=%s public=%s installs=[%s]; as_agent=[%s]\n' \
     "${S[agent_app_owner]}" "${S[agent_public]}" "${S[agent_installs]}" "${S[rev_app_owner]}" "${S[rev_public]}" "${S[rev_installs]}" "${S[as_agent]}"
   printf '    checks: queue=%s strict=%s ci=[%s] supply=[%s] triage=[%s]; supply_owner=%s tf_owner=%s remote=%s\n' \
     "${S[queue]}" "${S[strict]}" "${S[trig_ci]}" "${S[trig_supply]}" "${S[trig_triage]}" "${S[supply_owner]}" "${S[tf_owner]}" "${S[remote]}"
@@ -272,10 +272,10 @@ step() {
     B1) S[agent_public]=true; S[rev_public]=true ;;
     B2) if [ "${S[agent_public]}" = true ] || [ "${S[agent_app_owner]}" = "$NEW_OWNER" ]; then S[agent_installs]="${S[agent_installs]} $NEW_OWNER"; else fail "B2 refused: chb-factory-agent is private and owned by ${S[agent_app_owner]}"; fi
         if [ "${S[rev_public]}" = true ] || [ "${S[rev_app_owner]}" = "$NEW_OWNER" ]; then S[rev_installs]="${S[rev_installs]} $NEW_OWNER"; else fail "B2 refused: chb-factory-reviewer is private and owned by ${S[rev_app_owner]}"; fi ;;
-    B3) S[owner]=$NEW_OWNER; S[owner_type]=Organization; S[transferred]=yes ;;
+    B3) S[repo_owner]=$NEW_OWNER; S[repo_owner_type]=Organization; S[transferred]=yes ;;
     D1) S[remote]="$NEW_OWNER/$NAME" ;;
     B5) S[secrets_checked]=yes ;;
-    B7) # App transfer: the private App leaves islomar; installs on the new owner stay
+    B7) # App transfer: the private App leaves islomar; installs on the new account stay
         S[agent_app_owner]=$NEW_OWNER; S[rev_app_owner]=$NEW_OWNER
         S[agent_installs]=$(echo "${S[agent_installs]}" | xargs -n1 | grep -vx "$OLD_OWNER" | xargs)
         S[rev_installs]=$(echo "${S[rev_installs]}" | xargs -n1 | grep -vx "$OLD_OWNER" | xargs)
@@ -297,26 +297,26 @@ step() {
 }
 
 declare -A DESC=(
-  [A1]="agent PR: owner login is a constant (supply-chain, agreement, sweep)"
+  [A1]="agent PR: the human login is a constant (supply-chain, agreement, sweep)"
   [A2]="agent PR: workflow guards on github.repository_id"
   [A3]="agent PR: merge_group trigger on ci, supply-chain, triage"
   [A4]="agent PR: as_agent.py tries the new name, then the old"
-  [A5]="agent PR + owner apply: GCP trusts repository_id (expand, old bindings kept)"
-  [B0]="owner: back up infra/github/terraform.tfstate"
-  [B1]="owner: make both Apps public"
-  [B2]="owner: install both Apps on $NEW_OWNER"
-  [B3]="owner: transfer the repository to $NEW_OWNER"
-  [D1]="owner: git remote set-url origin (one .git, all worktrees)"
-  [B5]="agent reads, owner fixes: environments, secrets, variables, rulesets after transfer"
-  [B7]="owner: transfer Apps to $NEW_OWNER, make them private"
-  [C1]="agent PR + owner apply: new name, infra/github provider owner"
-  [C3]="agent PR + owner apply: main ruleset requires a merge queue, strict off"
+  [A5]="agent PR + human apply: GCP trusts repository_id (expand, old bindings kept)"
+  [B0]="human: back up infra/github/terraform.tfstate"
+  [B1]="human: make both Apps public"
+  [B2]="human: install both Apps on $NEW_OWNER"
+  [B3]="human: transfer the repository to $NEW_OWNER"
+  [D1]="human: git remote set-url origin (one .git, all worktrees)"
+  [B5]="agent reads, human fixes: environments, secrets, variables, rulesets after transfer"
+  [B7]="human: transfer Apps to $NEW_OWNER, make them private"
+  [C1]="agent PR + human apply: new name, infra/github provider account"
+  [C3]="agent PR + human apply: main ruleset requires a merge queue, strict off"
   [C4]="canary: Dependabot PR and agent PR merge through the queue"
   [C5]="agent PR: retire pr-updates rebase logic; ADRs"
-  [C6]="agent PR + owner apply: GCP contract, drop name bindings"
-  [INFRA_PLAN_NOW]="owner runs make infra-plan/apply now"
+  [C6]="agent PR + human apply: GCP contract, drop name bindings"
+  [INFRA_PLAN_NOW]="human runs make infra-plan/apply now"
   [REUSE_OLD_NAME]="someone creates $OLD_OWNER/$NAME again"
-  [UNDO_A1]="simulation only: the owner login reads github.repository_owner again (A1 not done)"
+  [UNDO_A1]="simulation only: the human login reads github.repository_owner again (A1 not done)"
 )
 
 # run_order NAME "STEPS" "DECLARED" : DECLARED lists `step:invariant-prefix` failures allowed as a declared window
@@ -383,7 +383,7 @@ expect_break() {
 TMPOUT=$(mktemp)
 expect_break "WRONG 1: transfer before GCP trusts the ID (A5 skipped)" "A1 A2 A3 A4 B0 B1 B2 B3"
 expect_break "WRONG 2: merge queue before merge_group triggers (A3 skipped)" "A1 A2 A4 A5 B0 B1 B2 B3 D1 B5 C1 C3"
-expect_break "WRONG 3: transfer before the owner login is a constant (A1 skipped)" "UNDO_A1 A2 A3 A4 A5 B0 B1 B2 B3"
+expect_break "WRONG 3: transfer before the human login is a constant (A1 skipped)" "UNDO_A1 A2 A3 A4 A5 B0 B1 B2 B3"
 expect_break "WRONG 4: infra-plan between the transfer and C1" "A1 A2 A3 A4 A5 B0 B1 B2 B3 INFRA_PLAN_NOW"
 expect_break "WRONG 5: transfer with private Apps and no declared window" "A1 A2 A3 A4 A5 B0 B3"
 expect_break "WRONG 6: old name reused after the transfer" "A1 A2 A3 A4 A5 B0 B1 B2 B3 REUSE_OLD_NAME"

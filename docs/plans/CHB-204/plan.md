@@ -5,26 +5,26 @@
 - [CHB-204 plan: move the repository to `islomar-software-garden` and merge through a merge queue](#chb-204-plan-move-the-repository-to-islomar-software-garden-and-merge-through-a-merge-queue)
   - [Facts read on 2026-11-20](#facts-read-on-2026-11-20)
   - [Documentation this plan relies on](#documentation-this-plan-relies-on)
-  - [Decisions for the owner](#decisions-for-the-owner)
+  - [Decisions for the human](#decisions-for-the-human)
   - [Unknowns](#unknowns)
   - [Costs](#costs)
   - [Must not be deleted or changed](#must-not-be-deleted-or-changed)
   - [Steps](#steps)
     - [(a) Preparation PRs: work before and after the transfer](#a-preparation-prs-work-before-and-after-the-transfer)
-    - [(b) Owner steps](#b-owner-steps)
+    - [(b) Human steps](#b-human-steps)
     - [(c) Post-transfer PRs and Terraform](#c-post-transfer-prs-and-terraform)
     - [(d) Local clones](#d-local-clones)
-  - [Owner time](#owner-time)
+  - [Human time](#human-time)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
 # CHB-204 plan: move the repository to `islomar-software-garden` and merge through a merge queue
 
-Status: draft for the owner's approval. Nothing in this plan has run. Written 2026-11-20.
+Status: draft for the human's approval. Nothing in this plan has run. Written 2026-11-20.
 
 ## Facts read on 2026-11-20
 
-- Repository: `islomar/corporate-hotel-booking-software-factory`, id `1447565814`, owner type `User`, public
+- Repository: `islomar/corporate-hotel-booking-software-factory`, id `1447565814`, human type `User`, public
   Source: `gh api repos/islomar/corporate-hotel-booking-software-factory`
 - Organization: `islomar-software-garden`, id `359214981`, plan `free`, 0 App installations, base permission `read`, 2FA requirement off
   Source: `gh api orgs/islomar-software-garden`, `.../installations`
@@ -74,7 +74,7 @@ Status: draft for the owner's approval. Nothing in this plan has run. Written 20
   - "Be sure to map any claims that you plan to use as attribute conditions or as part of a future `principalSet` condition."
   - The Azure DevOps section names 127 characters as "the maximum permitted length for `google.subject`".
 
-## Decisions for the owner
+## Decisions for the human
 
 0. Confirm the Apps are private. The plan infers it from `GET /apps/<slug>` returning 404.
    Check: <https://github.com/settings/apps>, each App, Advanced. A "Make public" button means private.
@@ -86,18 +86,18 @@ Status: draft for the owner's approval. Nothing in this plan has run. Written 20
      From the repository transfer until the App transfer and the organization install, the agent cannot push or open PRs, and `pr-updates`, Dependabot auto-merge and the reviewer fail.
      The dry run shows this window as declared (`APP_ROUTE=transfer`). Expect 10 to 20 minutes if done in one sitting.
    - ❌ Create new Apps in the organization: new App IDs, client IDs and keys, new 1Password items and five secret updates. More work for the same result.
-2. Split the ticket. CHB-204 says "one PR, about a day". This plan needs 7 PRs and 5 owner sessions. ⭐ Split into child tickets:
-   (1) prep code PR, (2) GCP expand, (3) post-transfer rename and provider owner, (4) merge queue ruleset and CHB-177 close-out, (5) cleanup (GCP contract, `pr-updates`,
+2. Split the ticket. CHB-204 says "one PR, about a day". This plan needs 7 PRs and 5 human sessions. ⭐ Split into child tickets:
+   (1) prep code PR, (2) GCP expand, (3) post-transfer rename and provider account, (4) merge queue ruleset and CHB-177 close-out, (5) cleanup (GCP contract, `pr-updates`,
    ADRs). ❌ One ticket with seven PRs breaks "one ticket per branch".
-3. Acceptance criterion 5 reads "no tracked file outside `docs/sessions/` names the old owner".
-   `islomar` is also the owner's login (CODEOWNERS, fixtures, the owner approval of `supply-chain`), the Jira site `islomar.atlassian.net` and the contact email.
+3. Acceptance criterion 5 reads "no tracked file outside `docs/sessions/` names the old repository human".
+   `islomar` is also the human's login (CODEOWNERS, fixtures, the human approval of `supply-chain`), the Jira site `islomar.atlassian.net` and the contact email.
    ⭐ Reword it to "names `islomar/corporate-hotel-booking-software-factory`".
-   ❌ Keeping it literal would force renaming the Jira site and dropping the owner from CODEOWNERS.
+   ❌ Keeping it literal would force renaming the Jira site and dropping the human from CODEOWNERS.
 
 ## Unknowns
 
 - U1: Do environments, environment secrets and Dependabot secrets survive the transfer? The docs name "secrets" only.
-  How it is settled: B5 reads the names after the transfer. If any are gone, the owner re-adds the values from 1Password.
+  How it is settled: B5 reads the names after the transfer. If any are gone, the human re-adds the values from 1Password.
   Blocks: C3
 - U2: Does an App transfer keep the App ID, client ID and keys? `as_agent.CLIENT_ID` and 5 secrets depend on them.
   How it is settled: B7 runs only after the canary. Read the App page after the transfer. Route P makes B7 optional.
@@ -122,14 +122,14 @@ Status: draft for the owner's approval. Nothing in this plan has run. Written 20
   How it is settled: B5 lists open PRs with `autoMergeRequest`. Re-enable with `factory/bin/as-agent gh pr merge --auto <url>` if lost.
   Blocks: none
 - U9: `infra/README.md` says the GitHub state lives in `gs://chb-factory-a92932-tfstate/github`, but `infra/github` has no backend block and a local state file exists. Which is true?
-  How it is settled: Owner answer. The plan backs up the local file (B0) either way. A follow-up ticket moves it to GCS or fixes the README.
+  How it is settled: Human answer. The plan backs up the local file (B0) either way. A follow-up ticket moves it to GCS or fixes the README.
   Blocks: none
 - U10: Organization Actions policy (Settings, Actions, General) may restrict the repository's allow list or workflow permissions.
   How it is settled: B5 GET `orgs/islomar-software-garden/actions/permissions`.
   Blocks: C1
 - U11: Is the transfer reversible under the old name? The transfer doc says that after heavy GitHub Actions use in the week before,
-  "GitHub permanently retires the owner name and repository name combination". This repository runs CI on every push, so expect retirement.
-  How it is settled: owner accepts B3 as one-way for the name. The rollback of B3 is a forward fix in the organization.
+  GitHub permanently retires the account and repository name combination. This repository runs CI on every push, so expect retirement.
+  How it is settled: human accepts B3 as one-way for the name. The rollback of B3 is a forward fix in the organization.
   Blocks: B3
 
 ## Costs
@@ -155,14 +155,14 @@ Order: A1 to A5, B0 to B3, D1, B5, C1 (its merge is B6), C3 to C6, B7 last. C2 d
 
 ### (a) Preparation PRs: work before and after the transfer
 
-A1. Agent PR: the human owner is a constant, not the repository owner.
+A1. Agent PR: the human human is a constant, not the repository human.
 
 - Actor: agent. Branch `CHB-<n>-owner-login`. `factory/bin/as-agent gh pr create`.
 - Change: `supply-chain.yml` passes `--owner islomar` (or a repository variable `OWNER_LOGIN` managed in `infra/github/repository.tf`) instead of `${{ github.repository_owner }}`.
-  `factory/review/agreement.py` line 150 and `factory/hooks/validating_sweep.py` line 312 use the same constant instead of the repository owner.
+  `factory/review/agreement.py` line 150 and `factory/hooks/validating_sweep.py` line 312 use the same constant instead of the repository human.
   Unit tests in `scripts/tests/test_check_supply_chain.py`, `factory/tests/test_review_agreement.py`, `factory/tests/test_validating_sweep.py` cover an organization-owned answer.
 - Why: after the transfer, `github.repository_owner` is `islomar-software-garden`.
-  The owner-approval path of the required `supply-chain` check could never pass, and the review agreement report would count no reactions.
+  The human-approval path of the required `supply-chain` check could never pass, and the review agreement report would count no reactions.
 - Verify: `.devcontainer/run make check` exits 0; the PR's `supply-chain` check passes.
 - Roll back: revert the squash commit.
 
@@ -194,7 +194,7 @@ A4. Agent PR: `as_agent.py` accepts both names.
 - Verify: `make check`; `factory/bin/as-agent gh api repos/{owner}/{repo} --jq .full_name` still prints the old name before B3.
 - Roll back: revert.
 
-A5. Agent PR, then owner apply: GCP trusts the repository ID (expand).
+A5. Agent PR, then human apply: GCP trusts the repository ID (expand).
 
 - Change in `infra/gcp/`:
   - `variables.tf`: `github_repository_id = "1447565814"`.
@@ -205,7 +205,7 @@ A5. Agent PR, then owner apply: GCP trusts the repository ID (expand).
     member `principalSet://iam.googleapis.com/<pool>/attribute.repository_id/1447565814`.
     The old bindings stay untouched (changing `member` forces a replace).
   - `guards.tf` locals and `tests/guards.tftest.hcl` follow the new conditions.
-- Owner apply, from any folder:
+- Human apply, from any folder:
 
   ```sh
   cd ~/workspace/corporate-hotel-booking-software-factory && git switch main && git pull --ff-only && make infra-plan
@@ -219,13 +219,13 @@ A5. Agent PR, then owner apply: GCP trusts the repository ID (expand).
 
 - Verify: the next push to `main` deploys (Actions, Deploy, green). The next PR that touches `infra/gcp/` gets a `Terraform plan` comment.
 - Roll back: revert the PR and apply again. The old bindings never left, so a revert restores the name condition with no gap.
-- Time: owner 15 minutes.
+- Time: human 15 minutes.
 
-### (b) Owner steps
+### (b) Human steps
 
 B0. Back up the GitHub state.
 
-- Actor: owner. 1 minute.
+- Actor: human. 1 minute.
 
   ```sh
   cp -p ~/workspace/corporate-hotel-booking-software-factory/infra/github/terraform.tfstate ~/workspace/corporate-hotel-booking-software-factory/infra/github/terraform.tfstate.pre-CHB-204
@@ -236,36 +236,36 @@ B0. Back up the GitHub state.
 
 B1. Make both Apps public (Route P).
 
-- Actor: owner. 5 minutes.
+- Actor: human. 5 minutes.
 - Click path, for `chb-factory-agent` and then `chb-factory-reviewer`: <https://github.com/settings/apps>, the App, Advanced, "Make public", confirm.
 - Verify: `gh api apps/chb-factory-agent --jq .owner.login` prints `islomar` (it returned 404 while private). Same for the reviewer.
 - Roll back: Advanced, "Make private". Allowed while the App is installed only on `islomar`.
 
 B2. Install both Apps on the organization.
 
-- Actor: owner. 5 minutes.
+- Actor: human. 5 minutes.
 - Click path: <https://github.com/apps/chb-factory-agent>, Install, account `islomar-software-garden`, "All repositories" (U3), Install. Same for <https://github.com/apps/chb-factory-reviewer>.
 - Verify: `gh api orgs/islomar-software-garden/installations --jq '.installations[].app_slug'` lists both.
 - Roll back: <https://github.com/organizations/islomar-software-garden/settings/installations>, the App, Configure, Uninstall.
 
 B3. Transfer the repository.
 
-- Actor: owner. 5 minutes.
+- Actor: human. 5 minutes.
 - Before: no workflow run in progress on `main` (`gh run list -R islomar/corporate-hotel-booking-software-factory --branch main --limit 5`). Every A PR merged; A5 applied.
 - Click path: <https://github.com/islomar/corporate-hotel-booking-software-factory/settings>, General, Danger Zone, "Transfer", "Select one of my organizations",
   `islomar-software-garden`, type `islomar/corporate-hotel-booking-software-factory` to confirm, "I understand, transfer this repository".
-- Changes: owner, full name, every URL. The repository ID stays `1447565814`.
+- Changes: repository human, full name, every URL. The repository ID stays `1447565814`.
 - Verify: `gh api repositories/1447565814 --jq '.full_name, .owner.type'` prints `islomar-software-garden/corporate-hotel-booking-software-factory` and `Organization`.
   `curl -sI https://github.com/islomar/corporate-hotel-booking-software-factory | head -1` prints a 301.
 - Roll back: one-way for the name (U11). GitHub may retire `islomar/corporate-hotel-booking-software-factory` for good.
-  Fix forward in the organization instead: every A change already accepts the new owner.
+  Fix forward in the organization instead: every A change already accepts the new repository human.
   A transfer back to `islomar` is possible from the organization's repository Settings, Danger Zone, Transfer, but may not get the old name back.
 
 D1 (from group d, run right after B3): see below.
 
-B5. Check what survived the transfer (agent reads, owner fixes).
+B5. Check what survived the transfer (agent reads, human fixes).
 
-- Actor: agent (GET only), owner for any fix. 10 minutes.
+- Actor: agent (GET only), human for any fix. 10 minutes.
 - Reads, names only, never values:
 
   ```sh
@@ -284,18 +284,18 @@ B5. Check what survived the transfer (agent reads, owner fixes).
 - Expect: 4 environments; `production` with no secret, `reviewer` with `CLAUDE_CODE_OAUTH_TOKEN`, `REVIEWER_APP_CLIENT_ID`, `REVIEWER_APP_PRIVATE_KEY`;
   `agent-pr-updates` with `AGENT_APP_CLIENT_ID`, `AGENT_APP_PRIVATE_KEY`;
   Dependabot secrets `AGENT_APP_CLIENT_ID`, `AGENT_APP_PRIVATE_KEY`; 5 variables `APP_URL`, `GCP_*`; 3 rulesets; the 5 managed labels.
-- Fix if missing: the owner re-adds the value from 1Password in Settings, Environments (or Secrets and variables, Dependabot).
+- Fix if missing: the human re-adds the value from 1Password in Settings, Environments (or Secrets and variables, Dependabot).
 - Then: `factory/bin/as-agent gh api repos/{owner}/{repo} --jq .full_name` prints the new name.
 
 B6. A push to `main` deploys.
 
-- Actor: owner approves the first post-transfer agent PR (C1). Its merge is the deploy check.
+- Actor: human approves the first post-transfer agent PR (C1). Its merge is the deploy check.
 - Verify: `gh run list -R islomar-software-garden/corporate-hotel-booking-software-factory --workflow deploy.yml --limit 1` shows success, and the `deploy` job log shows the Google auth step passing.
 - If it fails with a workload identity error: check `google.subject` length (dry run computes 113 characters for `environment:production`) and the A5 conditions.
 
 B7. Optional, last: give the Apps to the organization and make them private again.
 
-- Actor: owner. 10 minutes. Only after C4 passed.
+- Actor: human. 10 minutes. Only after C4 passed.
 - Click path: <https://github.com/settings/apps>, the App, Advanced, "Transfer ownership", `islomar-software-garden`, "Transfer this GitHub App". Then in the organization:
   Settings, Developer settings, GitHub Apps, the App, Advanced, "Make private".
 - Verify: `factory/bin/as-agent gh api repos/{owner}/{repo} --jq .full_name` still works; the App page still shows client ID `Iv23li3OLZUlWY7ZMLdr` (U2).
@@ -303,7 +303,7 @@ B7. Optional, last: give the Apps to the organization and make them private agai
 
 ### (c) Post-transfer PRs and Terraform
 
-C1. Agent PR, owner apply: new name everywhere, GitHub provider owner.
+C1. Agent PR, human apply: new name everywhere, GitHub provider account.
 
 - Change:
   - New `infra/github/versions.tf`: `provider "github" { owner = "islomar-software-garden" }`.
@@ -311,41 +311,41 @@ C1. Agent PR, owner apply: new name everywhere, GitHub provider owner.
   - `factory/as_agent.py`: new name first (A4 keeps the fallback until C6). `factory/jira.py` `PULL_URL`, `factory/tests/test_as_agent.py`, `factory/tests/test_jira.py`.
   - `README.md` badges.
   - `infra/gcp/variables.tf` `github_repository`: unchanged in this PR; it still names the old bindings. C6 removes it.
-- Owner apply: `make infra-plan` from updated `main`. Expected GitHub plan: no add, no destroy; at most in-place updates of computed fields. Then `make infra-apply`.
+- Human apply: `make infra-plan` from updated `main`. Expected GitHub plan: no add, no destroy; at most in-place updates of computed fields. Then `make infra-apply`.
 - Verify: `git grep -n "islomar/corporate-hotel-booking-software-factory" -- ':!docs/sessions'` lists only `infra/gcp` (old bindings, removed in C6) and ADR history.
 - Roll back: revert; the redirects keep the old links working.
 
-C3. Agent PR, owner apply: the `main` ruleset requires a merge queue.
+C3. Agent PR, human apply: the `main` ruleset requires a merge queue.
 
 - Change in `infra/github/ruleset.tf`: a `merge_queue` block in `rules` (merge method `SQUASH`, grouping `ALLGREEN`, build concurrency 1, min 1, max 5 entries,
   wait 5 minutes, check timeout 60 minutes).
   `strict_required_status_checks_policy = false` (U6). The guard test `main_ruleset_requires_up_to_date_branches` becomes `main_ruleset_requires_a_merge_queue`. ADR-2ba2 amended.
-- Owner apply: `make infra-plan`, expect 1 change in place (`github_repository_ruleset.main`), then `make infra-apply`.
+- Human apply: `make infra-plan`, expect 1 change in place (`github_repository_ruleset.main`), then `make infra-apply`.
 - Verify: `gh api repos/islomar-software-garden/corporate-hotel-booking-software-factory/rules/branches/main --jq '.[].type'` lists `merge_queue`.
 - Roll back: revert and apply. The PRs fall back to the strict policy.
 
 C4. Canary: one Dependabot PR and one agent PR merge through the queue.
 
 - Dependabot: the next safe update (`dependencies:auto-merge` label) joins the queue and merges with no person acting.
-- Agent: the next agent PR merges after the owner's approval, with no rebase.
+- Agent: the next agent PR merges after the human's approval, with no rebase.
 - Verify: `gh api graphql` on the PR timeline shows `AddedToMergeQueueEvent` then `MergedEvent`; the push to `main` deploys.
 - If `gh pr merge --auto --squash` errors (U4): drop `--squash` in `as_agent.py` and `dependabot-auto-merge.yml`.
-- Owner time: 5 minutes for one approval.
+- Human time: 5 minutes for one approval.
 
 C5. Agent PR: retire the rebase logic.
 
 - Change: `factory/pr_updates.py` and `pr-updates.yml` keep only the `needs-rebase` label on conflicting agent PRs; the Dependabot rebase comment and agent rebases go.
-  `factory/README.md`, `docs/process/delivery-pipeline.md`, ADR-d7b7 (new owner, Apps installed on the organization) and ADR-2ba2 amended.
+  `factory/README.md`, `docs/process/delivery-pipeline.md`, ADR-d7b7 (new repository human, Apps installed on the organization) and ADR-2ba2 amended.
   CHB-177 and CHB-172 Validating sections close.
 - Verify: `make check`; next push to `main` logs only conflict checks.
 - Roll back: revert.
 
-C6. Agent PR, owner apply: GCP contract.
+C6. Agent PR, human apply: GCP contract.
 
 - Change: remove `google_service_account_iam_member.github_main_impersonates_deployer`, `github_pr_impersonates_planner`, their `import` blocks in `imports.tf`,
   `variable "github_repository"` and the `attribute.repository` mapping if unused.
   Remove the old name from `as_agent.REPOSITORY_CANDIDATES`.
-- Owner apply:
+- Human apply:
 
   ```sh
   make -C ~/workspace/corporate-hotel-booking-software-factory infra-plan ALLOW_DESTROY='google_service_account_iam_member.github_main_impersonates_deployer,google_service_account_iam_member.github_pr_impersonates_planner'
@@ -360,7 +360,7 @@ C6. Agent PR, owner apply: GCP contract.
 
 D1. Point `origin` at the new name, right after B3.
 
-- Actor: owner. 1 minute. One `.git` serves every worktree.
+- Actor: human. 1 minute. One `.git` serves every worktree.
 
   ```sh
   git -C ~/workspace/corporate-hotel-booking-software-factory remote set-url origin git@github.com:islomar-software-garden/corporate-hotel-booking-software-factory.git
@@ -370,7 +370,7 @@ D1. Point `origin` at the new name, right after B3.
 - Verify: `git -C ~/workspace/corporate-hotel-booking-software-factory remote -v` shows the new URL; `fetch` exits 0.
 - Roll back: the same command with the old URL. The redirect makes both work.
 
-## Owner time
+## Human time
 
 | Step | Minutes |
 |---|---|

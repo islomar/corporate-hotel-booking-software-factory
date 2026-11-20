@@ -46,7 +46,9 @@ IN_FILE = {
     ".github/workflows/supply-chain.yml": (r"\bOWNER\b",),
     # GraphQL answer fields of the repository owner.
     "factory/pr_updates.py": (r"\bowner, name = repo",),
-    "factory/hooks/validating_sweep.py": (r"\bowner: Any = None|\bowner = answer\[|\"owner\": owner\b",),
+    # The OWNER environment variable of the supply-chain workflow, read by tests and the CHB-204 dry run.
+    "scripts/tests/test_workflow_guards.py": (r"\bOWNER:",),
+    "docs/plans/CHB-204/dry-run.sh": (r"'OWNER: ",),
     # The acli command name.
     "factory/tests/test_deny_raw_jira_writes.py": (r"change-owner",),
     # A path the review plan must not echo.

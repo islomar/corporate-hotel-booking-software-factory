@@ -314,7 +314,7 @@ def main(argv: list[str]) -> int:
         token = installation_token(os.environ.get("AGENT_APP_CLIENT_ID", CLIENT_ID), private_key)
     except NoInstallationError as error:
         print(
-            f"as-agent: {error}. During the CHB-204 transfer, install the App on the new owner first."
+            f"as-agent: {error}. During the CHB-204 transfer, install the App on the new account first."
             " STOP: do not use another identity. Report to the human.",
             file=sys.stderr,
         )
