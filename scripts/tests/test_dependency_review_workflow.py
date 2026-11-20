@@ -24,18 +24,13 @@ class DependencyReviewWorkflowTest(unittest.TestCase):
         job_permissions = re.findall(r"^    permissions:\n((?:      .*\n)+)", body, re.MULTILINE)
         self.assertEqual(job_permissions, ["      contents: read\n"])
 
-    def test_action_is_pinned_to_a_full_commit_sha_with_its_version(self):
+    def test_every_action_is_pinned_to_a_full_commit_sha_with_its_version(self):
         uses = re.findall(r"uses: (\S+)(.*)", text())
-        review = [(ref, rest) for ref, rest in uses if ref.startswith("actions/dependency-review-action@")]
-        self.assertEqual(len(review), 1)
-        ref, rest = review[0]
-        self.assertRegex(ref, r"@[0-9a-f]{40}$")
-        self.assertRegex(rest, r"^ # v\d+\.\d+\.\d+$")
-
-    def test_every_action_is_pinned_to_a_full_commit_sha(self):
-        for ref, _ in re.findall(r"uses: (\S+)(.*)", text()):
+        self.assertIn("actions/dependency-review-action", [ref.split("@")[0] for ref, _ in uses])
+        for ref, rest in uses:
             with self.subTest(ref=ref):
                 self.assertRegex(ref, r"@[0-9a-f]{40}$")
+                self.assertRegex(rest, r"^ # v\d+\.\d+\.\d+$")
 
     def test_fails_on_high_severity_and_above(self):
         self.assertRegex(text(), re.compile(r"^          fail-on-severity: high$", re.MULTILINE))
