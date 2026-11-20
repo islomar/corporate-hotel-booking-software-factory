@@ -22,6 +22,7 @@ Usage:
   factory/bin/jira description CHB-12 --file FILE        (replaces the whole description)
   factory/bin/jira edit-comment CHB-12 10071 --body-file FILE
   factory/bin/jira link CHB-88 --blocked-by CHB-146         (a "Blocks" link: CHB-146 blocks CHB-88)
+  factory/bin/jira parent CHB-12 CHB-27                   (moves a ticket to another epic; CHB-211)
 
 The account email and API token are read from the 1Password item chb-jira-claude.api-token
 (fields username and credential, vault chb-factory) on every call, with one `op` call that
@@ -54,6 +55,7 @@ comment "Moved to Ready. Trigger: <text>". `transition` refuses that move and an
 `create` refuses a description that does not open with a non-empty "Why it matters" section (CHB-148).
 `description` writes only the description field. `edit-comment` changes one comment body.
 `link` creates only "Blocks" links between two different CHB issues, and never removes one.
+`parent` writes only the parent field, only to a CHB Epic, and never of an epic (CHB-211).
 
 Descriptions, comments and section bodies are Markdown: headings, bullet and numbered lists,
 task lists ("- [ ]" and "- [x]" become Jira checkboxes), `code`, **bold** and links render in Jira (text_to_adf). CHB-<n> links to the ticket, and
@@ -62,7 +64,8 @@ task lists ("- [ ]" and "- [x]" become Jira checkboxes), `code`, **bold** and li
 Exit codes:
   0  done
   1  Jira refused or failed (HTTP error, unknown status, parent is not an epic,
-     an issue that could not be ranked, a search answer with an issue outside CHB)
+     `parent` on a ticket that is an epic, an issue that could not be ranked,
+     a search answer with an issue outside CHB)
   2  usage error (also a bad section heading, an empty body or summary, a file that is not
      UTF-8, a duplicate rank key, JQL whose parentheses or quotes do not balance, a ticket
      linked to itself, a move from Backlog to Ready with `transition`, --trigger on `transition`,
@@ -1279,6 +1282,23 @@ class Jira:
         body = {"fields": {"priority": {"name": check_priority(priority)}}}
         self.request("PUT", f"/rest/api/3/issue/{check_key(key)}", body, empty_ok=True)
 
+    def set_parent(self, key: str, epic: str) -> tuple[str | None, bool]:
+        """Move a ticket under another epic. Return the old parent key and whether a write was sent.
+
+        Both checks run before the write: the ticket must not be an Epic, the target must be one.
+        """
+        fields = self.request("GET", f"/rest/api/3/issue/{check_key(key)}?fields=issuetype,parent")["fields"]
+        if fields["issuetype"]["name"] == "Epic":
+            raise JiraError(f"{key} is an Epic; only a ticket that is not an epic can move to another epic")
+        target = self.request("GET", f"/rest/api/3/issue/{check_key(epic)}?fields=issuetype")["fields"]["issuetype"]["name"]
+        if target != "Epic":
+            raise JiraError(f"{epic} is a {target}, not an Epic")
+        old = (fields.get("parent") or {}).get("key")
+        if old == epic:
+            return old, False
+        self.request("PUT", f"/rest/api/3/issue/{check_key(key)}", {"fields": {"parent": {"key": epic}}}, empty_ok=True)
+        return old, True
+
     def edit_comment(self, key: str, comment_id: str, body: str) -> None:
         """Replace the body of one of the agent's own comments on this issue.
 
@@ -2263,6 +2283,10 @@ def _parser() -> argparse.ArgumentParser:
     priority = commands.add_parser("priority", help="set the priority: High, Medium or Low")
     priority.add_argument("key")
     priority.add_argument("priority", help="High, Medium or Low")
+
+    parent = commands.add_parser("parent", help="move a ticket to another epic")
+    parent.add_argument("key")
+    parent.add_argument("epic", help="the CHB epic to move the ticket under")
     return parser
 
 
@@ -2362,6 +2386,12 @@ def run(args: argparse.Namespace, jira: Jira) -> int:
     elif args.command == "priority":
         jira.set_priority(args.key, args.priority)
         print(f"{args.key} priority {args.priority}")
+    elif args.command == "parent":
+        old, changed = jira.set_parent(args.key, args.epic)
+        if changed:
+            print(f"{args.key} parent {old or 'none'} -> {args.epic}")
+        else:
+            print(f"{args.key} parent {args.epic} (unchanged)")
     return 0
 
 
@@ -2377,7 +2407,7 @@ def main(
     try:
         if args.command == "link":
             check_link_input(args.key, args.blocked_by)
-        keys = [getattr(args, name, None) for name in ("key", "parent", "before", "after", "blocked_by")] + getattr(args, "keys", [])
+        keys = [getattr(args, name, None) for name in ("key", "parent", "epic", "before", "after", "blocked_by")] + getattr(args, "keys", [])
         for key in keys:
             if key is not None:
                 check_key(key)  # before 1Password and before reading any file

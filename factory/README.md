@@ -227,6 +227,7 @@ factory/bin/jira priority CHB-12 High   # High, Medium or Low (docs/process/prio
 factory/bin/jira description CHB-12 --file description.md   # replaces the whole description
 factory/bin/jira edit-comment CHB-12 10071 --body-file comment.md   # the agent's own comments only
 factory/bin/jira link CHB-88 --blocked-by CHB-146   # a "Blocks" link: CHB-146 blocks CHB-88
+factory/bin/jira parent CHB-12 CHB-27   # moves CHB-12 under the epic CHB-27; refuses a target that is not an epic, and a ticket that is one
 ```
 
 Text files are Markdown: the wrapper renders headings, lists, task lists, `code`, bold and links, and links CHB keys and PR numbers (`text_to_adf` in `factory/jira.py`).
