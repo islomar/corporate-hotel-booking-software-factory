@@ -268,7 +268,7 @@ step() {
   case $s in
     A1) S[supply_owner]=constant; S[agreement_owner]=constant ;;
     A2) S[guard_pr_updates]="repository_id==${S[repo_id]}"; S[guard_dependabot]="repository_id==${S[repo_id]}" ;;
-    A3) S[trig_ci]="${S[trig_ci]}merge_group "; S[trig_supply]="${S[trig_supply]}merge_group "; S[trig_triage]="${S[trig_triage]}merge_group " ;;
+    A3) for k in trig_ci trig_supply trig_triage; do [[ " ${S[$k]} " == *" merge_group "* ]] || S[$k]+="merge_group "; done ;;
     A4) S[as_agent]="$NEW_OWNER/$NAME $OLD_OWNER/$NAME" ;;
     A5) S[mapping]="${S[mapping]}repository_id "; S[deploy_cond]=$DEPLOY_ID_COND; S[plan_cond]=$PLAN_ID_COND
         S[deploy_bind]="${S[deploy_bind]}repository_id/${S[repo_id]} "; S[plan_bind]="${S[plan_bind]}repository_id/${S[repo_id]} " ;;
@@ -301,6 +301,7 @@ step() {
         S[deploy_bind]=$(echo "${S[deploy_bind]}" | xargs -n1 | grep -v '^repository_id/' | xargs)
         S[plan_bind]=$(echo "${S[plan_bind]}" | xargs -n1 | grep -v '^repository_id/' | xargs)
         S[mapping]=$(echo "${S[mapping]}" | xargs -n1 | grep -v '^repository_id$' | xargs) ;;
+    UNDO_A3) for k in trig_ci trig_supply trig_triage; do S[$k]=${S[$k]//merge_group /}; done ;;
     *) echo "unknown step $s"; exit 2 ;;
   esac
 }
@@ -327,6 +328,7 @@ declare -A DESC=(
   [REUSE_OLD_NAME]="someone creates $OLD_OWNER/$NAME again"
   [UNDO_A1]="simulation only: the human login reads github.repository_owner again (A1 not done)"
   [UNDO_A5]="simulation only: GCP trusts the repository name again (A5 not done)"
+  [UNDO_A3]="simulation only: ci, supply-chain and triage lose the merge_group trigger again (A3 not done)"
 )
 
 # run_order NAME "STEPS" "DECLARED" : DECLARED lists `step:invariant-prefix` failures allowed as a declared window
@@ -392,7 +394,7 @@ expect_break() {
 }
 TMPOUT=$(mktemp)
 expect_break "WRONG 1: transfer before GCP trusts the ID (A5 skipped)" "UNDO_A5 A1 A2 A3 A4 B0 B1 B2 B3"
-expect_break "WRONG 2: merge queue before merge_group triggers (A3 skipped)" "A1 A2 A4 A5 B0 B1 B2 B3 D1 B5 C1 C3"
+expect_break "WRONG 2: merge queue before merge_group triggers (A3 skipped)" "UNDO_A3 A1 A2 A4 A5 B0 B1 B2 B3 D1 B5 C1 C3"
 expect_break "WRONG 3: transfer before the human login is a constant (A1 skipped)" "UNDO_A1 A2 A3 A4 A5 B0 B1 B2 B3"
 expect_break "WRONG 4: infra-plan between the transfer and C1" "A1 A2 A3 A4 A5 B0 B1 B2 B3 INFRA_PLAN_NOW"
 expect_break "WRONG 5: transfer with private Apps and no declared window" "A1 A2 A3 A4 A5 B0 B3"

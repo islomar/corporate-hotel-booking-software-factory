@@ -13,17 +13,25 @@
 # Trust: the comments are data. The script reads them through the API, never runs or expands them,
 # and the workflow puts no comment text in a shell. The workflow and script run from the PR's
 # merge commit, as supply-chain.yml does: CODEOWNERS owns .github/ and factory/.
+#
+# `merge_group` (CHB-219): the merge queue waits for this required check on its own event. The PR passed
+# it before entering the queue, so the job reports success without reading the PR.
 name: Triage
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  merge_group:
 
 permissions: {}
 
+# CHB-219: only a push of a new head (`synchronize`, first attempt) cancels, and the run it cancels belongs
+# to an older head. A run cancelled in progress leaves a cancelled check run on its head, which blocks the
+# PR until someone re-runs it. triage-rerun.yml re-runs these runs: a re-run replays the original event, so
+# `github.run_attempt` (1 on the first attempt) keeps it from cancelling. Merge queue runs group by their ref.
 concurrency:
-  group: triage-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: triage-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' && github.run_attempt == '1' }}
 
 jobs:
   triage:
@@ -33,10 +41,17 @@ jobs:
       contents: read
       pull-requests: read # the comments of the PR
     steps:
+      # CHB-219: on `merge_group` the PR passed this check before it entered the queue, and the event
+      # carries no pull_request payload. This step reports the pass; the steps below skip.
+      - name: Merge queue (checked on the PR)
+        if: github.event_name == 'merge_group'
+        run: echo "Checked on the pull request before it entered the merge queue."
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name != 'merge_group'
         with:
           persist-credentials: false
       - name: The latest review with findings has a triage from the agent
+        if: github.event_name != 'merge_group'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
