@@ -36,6 +36,9 @@
   The state backend moved to `infra/gcp/backend.tf` and the `google` provider block to `infra/gcp/providers.tf`. Both stay code-owned under `/infra/`.
   The same test fails if a `versions.tf` under `infra/` holds anything but one `terraform` block with `required_version` and `required_providers`.
   `.terraform-version` (the Terraform binary pin) stays owned under `/infra/` on purpose: Dependabot does not update it, so a change to it is always a person's or the agent's.
+- Amended 2026-11-20 (CHB-213): "needs a human" means the human's approval of the head commit, not a manual merge.
+  PR #148 (jsdom 30 to 31) waited approved and green until the human asked why it had not merged. The merge click added no check.
+  After that approval, `.github/workflows/dependabot-approved-merge.yml` turns auto-merge (squash) on. See "Auto-merge" below.
 
 ## Context
 
@@ -140,6 +143,25 @@ A merge done with `GITHUB_TOKEN` would not run CI on `main`, and the deploy list
 GitHub App tokens do not have this limit.
 Runs triggered by Dependabot see only Dependabot secrets, so the App credentials go there.
 Until the App exists, safe PRs get `dependencies:safe` and a person merges them.
+
+Needs-human PRs (CHB-213): the human's approval of the head commit turns auto-merge (squash) on.
+
+- `dependabot-approval-trigger.yml` runs on `pull_request_review` (`submitted`) and does nothing.
+  `dependabot-approved-merge.yml` runs on its completion through `workflow_run`, from main.
+- Why not a `pull_request_review` job: the human triggers that run, so it gets Actions secrets, not Dependabot secrets.
+  GitHub restricts runs "triggered by Dependabot from `push`, `pull_request`, `pull_request_review`, or `pull_request_review_comment` events",
+  and "If another actor triggers the workflow, the actions secrets with those names are used."
+  The repository has no Actions secret for the agent App. The key lives in the `agent-pr-updates` environment, which admits main only,
+  and a `pull_request_review` job runs on `refs/pull/N/merge`. A `workflow_run` job runs on main.
+- `scripts/dependabot_approved_merge.py` decides from the API only: an open Dependabot PR into main from this repository,
+  every commit Dependabot's, label `dependencies:needs-human`, head equal to the reviewed SHA,
+  the human's latest deciding review an approval of that head (the rule of `supply-chain`), and a `main` ruleset that requires CI.
+  Any other review, a dismissal, a comment, an approval of an older commit or a non-Dependabot PR leaves auto-merge off.
+- The agent App token runs `gh pr merge --auto --squash --match-head-commit <approved SHA>`. The App does not approve.
+- A new push voids the approval (`require_last_push_approval`), and `supply-chain` fails on the new head until the human approves it.
+  These two stop a moved head from merging. The `Turn auto-merge off` step of `dependabot-auto-merge.yml` also turns auto-merge off,
+  but only while the agent App secrets exist as Dependabot secrets.
+- The PR still merges only when every required check passes, `supply-chain` included.
 
 ### Supply-chain check instead of code-owner review (CHB-90)
 
