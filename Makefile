@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := help
 SHELL := /bin/bash
 
-.PHONY: help setup check-npm dev down clean-dev up check check-backend check-frontend check-deps lint-backend lint-frontend test-backend test-frontend test-scripts test e2e format mutate review-agreement infra-plan infra-apply
+.PHONY: help setup check-npm dev down clean-dev up check check-backend check-frontend check-deps check-workflows lint-backend lint-frontend test-backend test-frontend test-scripts test e2e format mutate review-agreement infra-plan infra-apply
 
 help: ## List targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-16s %s\n", $$1, $$2}'
@@ -34,7 +34,7 @@ clean-dev: ## Remove this checkout's containers and volumes, and loop-detector s
 	docker compose --profile prod down --volumes --remove-orphans
 	python3 -I factory/hooks/warn_edit_loops.py --prune
 
-check: check-backend check-frontend check-deps ## Lint, typecheck and test everything (the pre-commit gate)
+check: check-backend check-frontend check-deps check-workflows ## Lint, typecheck and test everything (the pre-commit gate)
 
 check-backend: lint-backend test-backend
 
@@ -46,6 +46,16 @@ check-deps: test-scripts
 	python3 -I scripts/check_doctoc_title.py
 	python3 -I scripts/check_release_age.py backend/uv.lock
 	python3 -I scripts/check_guard_tests.py
+
+# CHB-189: zizmor, pinned in backend/uv.lock, scans the workflows. Findings of medium severity
+# or above fail. --offline: no token in the sandbox or this CI step, so the online audits
+# (known-vulnerable-actions, impostor-commit, ref-confusion) do not run. --color never: GitHub
+# Actions makes zizmor color its output, which tests and log readers then have to strip.
+# Ignore one finding: `# zizmor: ignore[<audit>]` on the flagged line, with a one-line reason above it.
+# `=`, not `?=`: only the command line (`make check-workflows WORKFLOWS=<path>`) overrides it.
+WORKFLOWS = $(CURDIR)/.github/workflows
+check-workflows: ## Scan .github/workflows with zizmor (medium severity or above fails)
+	cd backend && uv run --locked zizmor --offline --color never --min-severity medium "$(WORKFLOWS)"
 
 lint-backend: ## Lint and typecheck the backend (ruff and pyright)
 	cd backend && uv run --locked ruff format --check . && uv run --locked ruff check . && uv run --locked pyright

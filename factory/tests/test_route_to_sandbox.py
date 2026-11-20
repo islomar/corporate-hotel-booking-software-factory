@@ -21,6 +21,7 @@ DENIED = [
     "make test-scripts",
     "make lint-frontend",
     "make format",
+    "make check-workflows",
     "cd backend && uv run --locked pytest tests/test_x.py",
     "uv sync --locked",
     "uvx ruff check .",

@@ -532,7 +532,7 @@ Package installs, linters and test runners run code from npm and PyPI. On the ho
 The hook denies them on the host and names the sandbox form, `.devcontainer/run <command>`:
 
 - `uv`, `uvx`, `npm`, `npx`, `pnpm`, `yarn`, `pip`, `pip3`, `pytest`, `vitest`, `python -m pytest`, `python -m pip`;
-- `make check`, `make test`, `make check-backend`, `make check-frontend`, `make check-deps`,
+- `make check`, `make test`, `make check-backend`, `make check-frontend`, `make check-deps`, `make check-workflows`,
   `make lint-backend`, `make lint-frontend`, `make test-backend`, `make test-frontend`, `make test-scripts`, `make format`, `make mutate`.
 
 Wrappers such as `timeout`, `nice -n 5`, `env -u X`, `xargs` and `sudo` are skipped with their options.

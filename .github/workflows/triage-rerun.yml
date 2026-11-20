@@ -12,7 +12,9 @@
 name: Triage rerun
 
 on:
-  issue_comment:
+  # zizmor flags issue_comment as dangerous. This job checks out main only, runs nothing from the PR,
+  # uses only the job token (actions: write), no repository secret, and ignores the comment text.
+  issue_comment: # zizmor: ignore[dangerous-triggers]
     types: [created, edited, deleted]
 
 permissions: {}
