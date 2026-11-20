@@ -158,8 +158,9 @@ Needs-human PRs (CHB-213): the human's approval of the head commit turns auto-me
   the human's latest deciding review an approval of that head (the rule of `supply-chain`), and a `main` ruleset that requires CI.
   Any other review, a dismissal, a comment, an approval of an older commit or a non-Dependabot PR leaves auto-merge off.
 - The agent App token runs `gh pr merge --auto --squash --match-head-commit <approved SHA>`. The App does not approve.
-- A new push turns auto-merge off (the `Turn auto-merge off` step of `dependabot-auto-merge.yml`),
-  and `require_last_push_approval` makes the approval stop counting. The human approves the new head.
+- A new push voids the approval (`require_last_push_approval`), and `supply-chain` fails on the new head until the human approves it.
+  These two stop a moved head from merging. The `Turn auto-merge off` step of `dependabot-auto-merge.yml` also turns auto-merge off,
+  but only while the agent App secrets exist as Dependabot secrets.
 - The PR still merges only when every required check passes, `supply-chain` included.
 
 ### Supply-chain check instead of code-owner review (CHB-90)

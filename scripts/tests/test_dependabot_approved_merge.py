@@ -100,6 +100,12 @@ class DecideTest(unittest.TestCase):
     def test_a_missing_commit_listing_does_not(self):
         self.assertFalse(check(commits=[]).enable)
 
+    def test_an_incomplete_commit_listing_does_not(self):
+        # `pulls/{n}/commits` stops at 250: a listing shorter than the PR's count proves nothing.
+        pull = pr()
+        pull["commits"] = 2
+        self.assertFalse(check(pull=pull).enable)
+
     def test_a_pr_from_another_repository_does_not(self):
         pull = pr()
         pull["head"]["repo"] = {"full_name": "fork/repo"}
