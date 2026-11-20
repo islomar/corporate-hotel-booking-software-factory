@@ -25,6 +25,7 @@
   - [Hook: no secrets in the agent's context](#hook-no-secrets-in-the-agents-context)
   - [Hook: what to finish first, at session start](#hook-what-to-finish-first-at-session-start)
   - [Hook: rules health check is due](#hook-rules-health-check-is-due)
+  - [Hook: agent labels start with the Jira key](#hook-agent-labels-start-with-the-jira-key)
   - [Automated PR review (shadow mode)](#automated-pr-review-shadow-mode)
   - [Triage of review findings](#triage-of-review-findings)
   - [Workflow output schemas and routing](#workflow-output-schemas-and-routing)
@@ -387,7 +388,7 @@ Sessions started in another directory do not load this hook.
 
 ## Hooks at a glance
 
-Twelve hooks guard a Claude Code session, and each section below describes one.
+Thirteen hooks guard a Claude Code session, and each section below describes one.
 The diagram puts them side by side by Claude Code event, so a denied command or a refused end of turn can be traced to its hook.
 Each node names the hook file, the tool matcher of `.claude/settings.json` and what the hook blocks or reports.
 `factory/tests/test_readme_diagrams.py` fails when a registered hook is missing from the diagram.
@@ -406,6 +407,7 @@ flowchart TD
         DM["deny_agent_memory_writes.py<br/>matcher: Write, Edit, MultiEdit, NotebookEdit<br/>blocks writes to personal agent memory"]
         DH["deny_harness_edits.py<br/>matcher: Write, Edit, MultiEdit, NotebookEdit, Bash<br/>blocks edits of .claude, factory and .github on a product ticket branch"]
         DS["deny_secret_reads.py<br/>matcher: Read, Bash<br/>blocks reads and prints of secret files"]
+        DA["deny_unlabeled_agents.py<br/>matcher: Agent<br/>blocks an agent label without CHB-n: or no-ticket:"]
     end
     subgraph POST["PostToolUse: adds context"]
         WE["warn_edit_loops.py<br/>matcher: Write, Edit, MultiEdit<br/>warns on the 5th and 8th edit of one file"]
@@ -641,6 +643,19 @@ It fails open: when Jira or 1Password is unreachable it prints `Rules health che
 `factory/rules_health.py` holds the deterministic checks (dead paths, dead `factory/bin/jira` and `make` commands, unknown exit codes, unregistered hooks).
 `make check` runs it on this repository through `factory/tests/test_rules_health.py`.
 Duplicates and contradictions are judged by the agent in the procedure.
+
+## Hook: agent labels start with the Jira key
+
+`.claude/settings.json` runs `factory/hooks/deny_unlabeled_agents.py` before every Agent tool call (CHB-190).
+The owner watches several agents at once and sees only each one's short label, the `description` of the launch.
+A label that does not start with the ticket key forces a question.
+
+The hook denies a launch whose `description` does not start with `CHB-<n>:` or `no-ticket:`, and names both forms.
+The match is case-sensitive and starts at the first character: the hook denies `Implement CHB-23`, an empty label and `chb-23:`.
+It applies to every session started in this repository: the owner's, forks and agents launched by agents.
+
+Unlike the other PreToolUse hooks, it fails open: unreadable input, a missing `description` or an error inside the hook lets the launch run.
+A broken label check must not block every agent launch. A wrong label costs a question, not damage.
 
 ## Automated PR review (shadow mode)
 
