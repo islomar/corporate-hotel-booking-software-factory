@@ -21,6 +21,7 @@ REFUSED = [
     "Both owners agreed.",
     "It waits for the owners' answer.",
     "OWNER ACTION NEEDED",
+    "It needs an owner-approved merge.",
 ]
 
 ALLOWED = [

@@ -41,7 +41,7 @@ from stop_refusal import already_refused  # noqa: E402
 STATE_DIR_ENV = "CHB_HUMAN_WORD_STATE_DIR"
 FENCE = re.compile(r"^[ \t]*(```|~~~)")
 INLINE_CODE = re.compile(r"(`+)(?:(?!\1).)+?\1")
-WORD = re.compile(r"(?<![\w./$-])owners?(?:'s?|’s?)?(?![\w/-])", re.IGNORECASE)
+WORD = re.compile(r"(?<![\w./$-])owners?(?:'s?|’s?)?(?![\w/])", re.IGNORECASE)
 TECHNICAL_BEFORE = re.compile(r"\b(?:code|repository|repo|organization|organisation|org)\s+$", re.IGNORECASE)
 
 
