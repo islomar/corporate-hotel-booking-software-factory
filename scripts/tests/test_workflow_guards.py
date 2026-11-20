@@ -9,7 +9,8 @@ import re
 import unittest
 from pathlib import Path
 
-WORKFLOWS = Path(__file__).resolve().parents[2] / ".github/workflows"
+ROOT = Path(__file__).resolve().parents[2]
+WORKFLOWS = ROOT / ".github/workflows"
 GUARDED = ("pr-updates.yml", "dependabot-auto-merge.yml")
 GUARD = "github.repository_id == '1447565814'"
 
@@ -24,9 +25,6 @@ class RepositoryGuardTest(unittest.TestCase):
         for name in GUARDED:
             with self.subTest(workflow=name):
                 self.assertIsNone(re.search(r"github\.repository\s*==", (WORKFLOWS / name).read_text()))
-
-
-ROOT = Path(__file__).resolve().parents[2]
 
 
 def _one(pattern: str, path: Path) -> str:

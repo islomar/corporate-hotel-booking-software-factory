@@ -169,7 +169,7 @@ A1. Agent PR: the human owner is a constant, not the repository owner.
 A2. Agent PR: workflow guards on the repository ID.
 
 - Change: `pr-updates.yml` line 42 and `dependabot-auto-merge.yml` line 36:
-  `github.repository_id == 1447565814` (the ID is a number in the `github` context; check with a canary run) instead of the full name.
+  `github.repository_id == '1447565814'` (GitHub's context docs list the ID as a string) instead of the full name.
 - Verify: the next push to `main` runs `PR updates` (not skipped); the next Dependabot PR runs the `triage` job of `Dependabot auto-merge`.
 - Roll back: revert.
 
