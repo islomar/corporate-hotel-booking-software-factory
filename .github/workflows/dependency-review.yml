@@ -1,0 +1,30 @@
+# Dependency review (CHB-188, slice 1 of CHB-24): fails a pull request that adds or upgrades
+# to a dependency with a known vulnerability of severity high or above. It compares the
+# dependency graph of the base and the head through the GitHub API, so it needs no checkout.
+# CodeQL runs as GitHub's default setup, not as a workflow (CHB-134, guarded in
+# infra/github/guards.tf): default setup disables a CodeQL workflow file.
+#
+# Dependabot bumps the pinned SHA once a release is older than the 7-day cooldown of
+# .github/dependabot.yml (ADR-ebe6).
+# Structure tests: scripts/tests/test_dependency_review_workflow.py.
+name: Dependency review
+
+on:
+  pull_request:
+
+permissions: {}
+
+concurrency:
+  group: dependency-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  dependency-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high

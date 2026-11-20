@@ -12,6 +12,7 @@
   - [Sandbox container](#sandbox-container)
   - [Layout](#layout)
   - [Process](#process)
+    - [CI](#ci)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -261,3 +262,16 @@ Pushes to `main` run CI. When CI passes, the deploy workflow builds the image, d
 - One ticket, one short-lived branch, one pull request. See `docs/decisions/ADR-0faf-short-lived-branches.md`.
 - Merged is not done. See `docs/decisions/ADR-ad3e-definition-of-done.md`.
 - Dependabot updates arrive every weekday. Safe ones merge without a person once the setup in `docs/decisions/ADR-ebe6-unattended-dependency-updates.md` is complete.
+
+### CI
+
+Every pull request runs two security scans.
+Both show as checks on the pull request.
+CodeQL alerts also appear in the repository's Security tab. Dependency review results appear in the check's job summary.
+
+- CodeQL: GitHub's default setup scans Actions, JavaScript/TypeScript and Python on every pull request, on every push to `main` and weekly.
+  Checks: `Analyze (actions)`, `Analyze (javascript-typescript)`, `Analyze (python)`. Alerts: Security > Code scanning.
+  `infra/github/guards.tf` fails the plan if default setup is off (CHB-134).
+- Dependency review: `.github/workflows/dependency-review.yml` fails a pull request that adds or upgrades to a dependency with a known vulnerability of severity high or above.
+  Check: `dependency-review`, with the vulnerable packages in its job summary. It blocks a merge only once `required_checks` in `infra/github/repository.tf` names it.
+  Alerts for dependencies already on `main` come from Dependabot: Security > Dependabot.
