@@ -45,6 +45,7 @@ gh_get() { # GET only. Prints the jq result, or the fallback when gh is unavaila
   if command -v gh >/dev/null && out=$(gh api "$endpoint" --jq "$jq" 2>/dev/null) && [ -n "$out" ]; then
     echo "$out"
   else
+    echo "  NOTE: fallback used for $endpoint ($jq): $fallback" >&2
     echo "$fallback"
   fi
 }
@@ -100,7 +101,13 @@ SEED_DEPLOY_BIND=$(gcp_binding "$REPO_DIR/infra/gcp/identities.tf")
 SEED_PLAN_BIND=$(gcp_binding "$REPO_DIR/infra/gcp/planner.tf")
 SEED_MAPPING=$(grep -ohE '"attribute\.[a-z_]+"' "$REPO_DIR/infra/gcp/identities.tf" | tr -d '"' | sed 's/attribute\.//' | sort -u | tr '\n' ' ')
 SEED_SUPPLY_OWNER=$(grep -q 'OWNER: \${{ github.repository_owner }}' "$REPO_DIR/.github/workflows/supply-chain.yml" && echo repository_owner || echo constant)
-SEED_AS_AGENT=$(grep -oE '^REPOSITORY = "[^"]+"' "$REPO_DIR/factory/as_agent.py" | sed -E 's/.*"(.*)"/\1/')
+SEED_AGREEMENT_OWNER=$(grep -qE '^HUMAN_LOGIN = "' "$REPO_DIR/factory/review/agreement.py" && echo constant || echo repository_owner)
+# as_agent.py builds its names from REPOSITORY_NAME; A4 adds the organization name first (CHB-218).
+if grep -qE '^REPOSITORY_CANDIDATES = .*islomar-software-garden' "$REPO_DIR/factory/as_agent.py"; then
+  SEED_AS_AGENT="$NEW_OWNER/$NAME $OLD_OWNER/$NAME"
+else
+  SEED_AS_AGENT="$OLD_OWNER/$NAME"
+fi
 SEED_TF_OWNER=$(grep -rhoE 'owner *= *"[^"]+"' "$REPO_DIR"/infra/github/*.tf 2>/dev/null | head -1 | sed -E 's/.*"(.*)"/\1/')
 [ -z "$SEED_TF_OWNER" ] && SEED_TF_OWNER="token-user:$HUMAN_OWNER"
 
@@ -136,7 +143,7 @@ reset_state() {
     [trig_supply]=$(triggers "$REPO_DIR/.github/workflows/supply-chain.yml")
     [trig_triage]=$(triggers "$REPO_DIR/.github/workflows/triage.yml")
     [required]=$SEED_REQUIRED [strict]=$SEED_STRICT [queue]=$([ "$SEED_QUEUE" -gt 0 ] && echo yes || echo no)
-    [supply_owner]=$SEED_SUPPLY_OWNER [agreement_owner]=repository_owner
+    [supply_owner]=$SEED_SUPPLY_OWNER [agreement_owner]=$SEED_AGREEMENT_OWNER
     [as_agent]=$SEED_AS_AGENT
     [agent_app_owner]=$OLD_OWNER [agent_public]=$agent_public [agent_installs]="$OLD_OWNER $SEED_ORG_INSTALLS"
     [rev_app_owner]=$OLD_OWNER [rev_public]=$reviewer_public [rev_installs]="$OLD_OWNER $SEED_ORG_INSTALLS"
@@ -284,6 +291,7 @@ step() {
         S[as_agent]="$NEW_OWNER/$NAME" ;;
     INFRA_PLAN_NOW) check_tf_owner ;;
     REUSE_OLD_NAME) S[old_name_reused]=yes ;;
+    UNDO_A1) S[supply_owner]=repository_owner; S[agreement_owner]=repository_owner ;;
     *) echo "unknown step $s"; exit 2 ;;
   esac
 }
@@ -308,6 +316,7 @@ declare -A DESC=(
   [C6]="agent PR + owner apply: GCP contract, drop name bindings"
   [INFRA_PLAN_NOW]="owner runs make infra-plan/apply now"
   [REUSE_OLD_NAME]="someone creates $OLD_OWNER/$NAME again"
+  [UNDO_A1]="simulation only: the owner login reads github.repository_owner again (A1 not done)"
 )
 
 # run_order NAME "STEPS" "DECLARED" : DECLARED lists `step:invariant-prefix` failures allowed as a declared window
@@ -374,7 +383,7 @@ expect_break() {
 TMPOUT=$(mktemp)
 expect_break "WRONG 1: transfer before GCP trusts the ID (A5 skipped)" "A1 A2 A3 A4 B0 B1 B2 B3"
 expect_break "WRONG 2: merge queue before merge_group triggers (A3 skipped)" "A1 A2 A4 A5 B0 B1 B2 B3 D1 B5 C1 C3"
-expect_break "WRONG 3: transfer before the owner login is a constant (A1 skipped)" "A2 A3 A4 A5 B0 B1 B2 B3"
+expect_break "WRONG 3: transfer before the owner login is a constant (A1 skipped)" "UNDO_A1 A2 A3 A4 A5 B0 B1 B2 B3"
 expect_break "WRONG 4: infra-plan between the transfer and C1" "A1 A2 A3 A4 A5 B0 B1 B2 B3 INFRA_PLAN_NOW"
 expect_break "WRONG 5: transfer with private Apps and no declared window" "A1 A2 A3 A4 A5 B0 B3"
 expect_break "WRONG 6: old name reused after the transfer" "A1 A2 A3 A4 A5 B0 B1 B2 B3 REUSE_OLD_NAME"

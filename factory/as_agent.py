@@ -59,6 +59,7 @@ import op_service_account  # noqa: E402
 CLIENT_ID = "Iv23li3OLZUlWY7ZMLdr"
 APP_SLUG = "chb-factory-agent"
 REPOSITORY_NAME = "corporate-hotel-booking-software-factory"
+# triage_review.py still uses this personal name; after the transfer it works through GitHub's redirect until CHB-221 switches it.
 REPOSITORY = f"islomar/{REPOSITORY_NAME}"
 # CHB-204 moves the repository to the organization. The App installation is looked up under
 # each name in turn, so the agent works before and after the transfer (CHB-218).
