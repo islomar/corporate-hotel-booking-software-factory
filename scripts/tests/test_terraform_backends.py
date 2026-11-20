@@ -20,6 +20,12 @@ BUCKET = "chb-factory-a92932-tfstate"
 EXPECTED_PREFIXES = {"gcp": "gcp", "github": "github"}
 BACKEND_START = re.compile(r'^\s*backend\s+"(?P<kind>[^"]+)"\s*\{')
 ATTRIBUTE = re.compile(r'^\s*(?P<name>\w+)\s*=\s*"(?P<value>[^"]*)"')
+# A quoted string, kept as it is, or a `#` or `//` comment outside quotes, dropped.
+STRING_OR_COMMENT = re.compile(r'("[^"]*")|(?:#|//).*')
+
+
+def without_comment(line: str) -> str:
+    return STRING_OR_COMMENT.sub(lambda match: match[1] or "", line)
 
 
 def backend_blocks(folder: Path) -> list[tuple[str, str, dict[str, str]]]:
@@ -28,12 +34,12 @@ def backend_blocks(folder: Path) -> list[tuple[str, str, dict[str, str]]]:
     for path in sorted(folder.glob("*.tf")):
         lines = iter(path.read_text(encoding="utf-8").splitlines())
         for line in lines:
-            start = BACKEND_START.match(re.sub(r"(#|//).*", "", line))
+            start = BACKEND_START.match(without_comment(line))
             if not start:
                 continue
             attributes: dict[str, str] = {}
             for inner in lines:
-                code = re.sub(r"(#|//).*", "", inner)
+                code = without_comment(inner)
                 if code.strip() == "}":
                     break
                 attribute = ATTRIBUTE.match(code)
@@ -58,6 +64,15 @@ class BackendReaderTest(unittest.TestCase):
         )
 
         self.assertEqual(backend_blocks(folder), [("backend.tf", "gcs", {"bucket": "b", "prefix": "p"})])
+
+    def test_keeps_a_hash_or_double_slash_inside_a_quoted_value(self):
+        folder = self.scratch_folder()
+        (folder / "backend.tf").write_text(
+            'terraform {\n  backend "http" {\n    address = "https://x.example/state#a" # comment\n  }\n}\n',
+            encoding="utf-8",
+        )
+
+        self.assertEqual(backend_blocks(folder), [("backend.tf", "http", {"address": "https://x.example/state#a"})])
 
     def test_a_folder_without_a_backend_has_none(self):
         folder = self.scratch_folder()
