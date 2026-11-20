@@ -227,6 +227,20 @@ class UnresolvedThreadsTest(unittest.TestCase):
         self.assertIn("resolveReviewThread", err)
         self.assertNotIn("untriaged review findings", err)
 
+    def test_a_thread_the_human_opened_is_answered_not_resolved(self):
+        # Review of #160: the human's own thread is the human's review; the agent must not close it.
+        human = tr.agreement.HUMAN_LOGIN
+        gh = fake_gh([pull(142)], {142: []}, {142: [thread(login=human, body="Why this limit?")]})
+        code, err = run(gh, self.state_dir)
+        self.assertEqual(code, 2)
+        self.assertIn(f"by {human} (opened by the human: answer it, do not resolve it)", err)
+        self.assertIn("Never resolve a thread the human opened", err)
+
+    def test_a_bot_thread_is_answered_then_resolved(self):
+        gh = fake_gh([pull(142)], {142: []}, {142: [thread()]})
+        _, err = run(gh, self.state_dir)
+        self.assertIn("by copilot-pull-request-reviewer (answer it, then resolve it)", err)
+
     def test_the_same_pr_with_every_thread_resolved_does_not_block(self):
         gh = fake_gh([pull(142)], {142: []}, {142: [thread(resolved=True), thread(resolved=True, path="b.py")]})
         self.assertEqual(run(gh, self.state_dir), (0, ""))
