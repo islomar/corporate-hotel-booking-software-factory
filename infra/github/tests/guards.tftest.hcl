@@ -108,6 +108,7 @@ run "main_ruleset_requires_up_to_date_branches" {
 
 # CHB-214: a dependency review that only warns protects nothing. Dependabot and agent PRs merge
 # without a person, so a PR that adds a known-vulnerable dependency must not be able to merge.
+# The list repeats local.required_checks on purpose: removing a check by accident must fail here.
 run "main_ruleset_requires_every_check" {
   command = plan
 
