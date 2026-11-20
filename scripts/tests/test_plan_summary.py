@@ -13,7 +13,7 @@ from plan_summary import MARKER, StateError, error_lines, failure_comment, main,
 
 ROOT = Path(__file__).resolve().parents[2]
 CANARY = "canary-value-9f3a"
-EMAIL = "owner@example.org"
+EMAIL = "human@example.org"
 
 
 def change(address, *actions, before=None, after=None):

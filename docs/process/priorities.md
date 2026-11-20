@@ -22,7 +22,7 @@ The Jira Free plan has no priority schemes, so the global list stays and this ru
 
 Leaving the ticket open risks harm now.
 
-- A bug that affects users in production. It is an expedite ticket (Highest, straight to In Progress, `kanban.md`, Expedite) and the agent tells the owner at once.
+- A bug that affects users in production. It is an expedite ticket (Highest, straight to In Progress, `kanban.md`, Expedite) and the agent tells the human at once.
   When another expedite ticket is open, it is High and goes to Ready (trigger 1, something is broken) at the top.
 - The delivery pipeline is broken: CI on `main`, the deploy, a required check, or anything that stops a change from reaching production.
   CI on `main` or the deploy broken is an expedite ticket too. A leaking secret also is.
@@ -50,7 +50,7 @@ The ticket can wait indefinitely at no cost.
 ## Rules
 
 - A bug report is High from the start.
-- Among High tickets, production bugs come first, then a broken pipeline, then the rest by the owner's rank.
+- Among High tickets, production bugs come first, then a broken pipeline, then the rest by the human's rank.
 - Priority sets the rank. `factory/bin/jira sort-todo` keeps Ready in priority order: tickets that can start, High, Medium, then Low,
   then blocked tickets (CHB-148, `kanban.md`, Ready). Backlog is not sorted. The rank within a priority decides the order of work there.
   A High ticket sits below a Medium or Low ticket only while an open dependency blocks it.

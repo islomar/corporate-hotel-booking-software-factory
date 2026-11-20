@@ -113,7 +113,7 @@ resource "github_actions_variable" "this" {
 
 # Dependabot security updates (CHB-95): a PR for each Dependabot alert with a fix.
 # They skip the dependabot.yml cooldown. The supply-chain check still decides the merge:
-# patch, or minor at 1.0 or above, merges unattended; anything else waits for the owner.
+# patch, or minor at 1.0 or above, merges unattended; anything else waits for the human.
 # Needs the alerts above.
 import {
   to = github_repository_dependabot_security_updates.this

@@ -48,7 +48,7 @@ COMMENT_JSON = re.compile(r"^\s*(jq -n --rawfile body .*)$", re.MULTILINE)
 
 
 class ReviewCommentTest(unittest.TestCase):
-    """CHB-141: the owner reacts to a PR comment; factory/review/agreement.py counts the reactions."""
+    """CHB-141: the human reacts to a PR comment; factory/review/agreement.py counts the reactions."""
 
     def setUp(self) -> None:
         self.text = WORKFLOW.read_text()
@@ -80,7 +80,7 @@ class ReviewCommentTest(unittest.TestCase):
     @unittest.skipUnless(shutil.which("jq"), "jq is not installed")
     def test_the_jq_line_sends_the_file_as_the_body(self) -> None:
         line = COMMENT_JSON.search(self.text).group(1)  # type: ignore[union-attr]
-        body = 'Pass "quoted" `code` $HOME\n\nOwner: react 👍\n<!-- chb-review reviewed:abc -->\n'
+        body = 'Pass "quoted" `code` $HOME\n\nHuman: react 👍\n<!-- chb-review reviewed:abc -->\n'
         with tempfile.TemporaryDirectory() as tmp:
             comment = Path(tmp) / "comment.md"
             comment.write_text(body, encoding="utf-8")

@@ -1,6 +1,6 @@
 {
   "title": "Analysis stage output (CHB-62)",
-  "description": "factory/workflow/route.py: a non-empty blockingQuestions stops the workflow and notifies the owner.",
+  "description": "factory/workflow/route.py: a non-empty blockingQuestions stops the workflow and notifies the human.",
   "type": "object",
   "additionalProperties": false,
   "required": ["planFile", "acceptanceCriteria", "isVerifiable", "blockingQuestions"],

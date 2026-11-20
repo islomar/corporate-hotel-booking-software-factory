@@ -1,4 +1,4 @@
-"""CHB-141: the owner's agreement with the review verdict, ADR-ea8c stage 1."""
+"""CHB-141: the human's agreement with the review verdict, ADR-ea8c stage 1."""
 
 import json
 import sys
@@ -20,7 +20,7 @@ from agreement import (
 )
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "review" / "agreement-prs.json"
-OWNER = "islomar"
+HUMAN = "islomar"
 
 
 def _prs() -> list:
@@ -33,31 +33,31 @@ def _pr(number: int) -> dict:
 
 class AnswerTest(unittest.TestCase):
     def test_owner_thumbs_up_agrees(self) -> None:
-        self.assertEqual(answer(_pr(70), OWNER), "agree")
+        self.assertEqual(answer(_pr(70), HUMAN), "agree")
 
     def test_owner_thumbs_down_disagrees(self) -> None:
-        self.assertEqual(answer(_pr(71), OWNER), "disagree")
+        self.assertEqual(answer(_pr(71), HUMAN), "disagree")
 
     def test_no_reaction_is_no_answer(self) -> None:
-        self.assertEqual(answer(_pr(72), OWNER), "no answer")
+        self.assertEqual(answer(_pr(72), HUMAN), "no answer")
 
     def test_reactions_from_anyone_else_are_ignored(self) -> None:
-        self.assertEqual(answer(_pr(73), OWNER), "no answer")
+        self.assertEqual(answer(_pr(73), HUMAN), "no answer")
 
     def test_a_pr_without_a_review_comment_was_not_reviewed(self) -> None:
-        self.assertIsNone(answer(_pr(74), OWNER))
+        self.assertIsNone(answer(_pr(74), HUMAN))
 
     def test_only_the_reviewer_app_with_the_marker_counts(self) -> None:
-        self.assertIsNone(answer(_pr(75), OWNER))
+        self.assertIsNone(answer(_pr(75), HUMAN))
 
     def test_the_last_review_comment_holds_the_verdict(self) -> None:
         comment = review_comment(_pr(76)["comments"])
         self.assertIsNotNone(comment)
         self.assertEqual(comment["id"], 762)  # type: ignore[index]
-        self.assertEqual(answer(_pr(76), OWNER), "agree")
+        self.assertEqual(answer(_pr(76), HUMAN), "agree")
 
     def test_both_thumbs_count_as_disagree(self) -> None:
-        self.assertEqual(answer(_pr(77), OWNER), "disagree")
+        self.assertEqual(answer(_pr(77), HUMAN), "disagree")
 
 
 class GateCommentTest(unittest.TestCase):
@@ -72,7 +72,7 @@ class GateCommentTest(unittest.TestCase):
 
 class TallyTest(unittest.TestCase):
     def test_counts_the_fixture_prs(self) -> None:
-        result = tally(_prs(), OWNER)
+        result = tally(_prs(), HUMAN)
 
         self.assertEqual(result, Tally(agree=2, disagree=2, no_answer=2, disagree_prs=[71, 77]))
         self.assertEqual(result.reviewed, 6)
@@ -89,13 +89,13 @@ class Stage1ExitTest(unittest.TestCase):
     def test_met_at_20_answered_with_2_disagree(self) -> None:
         self.assertEqual(
             stage1_exit(Tally(18, 2, 4, [71, 77])),
-            "met on agreement; the owner checks that no 👎 reply names a missed critical finding (#71, #77)",
+            "met on agreement; the human checks that no 👎 reply names a missed critical finding (#71, #77)",
         )
 
     def test_met_without_disagreement(self) -> None:
         self.assertEqual(
             stage1_exit(Tally(20, 0, 0)),
-            "met on agreement; the owner checks that no 👎 reply names a missed critical finding",
+            "met on agreement; the human checks that no 👎 reply names a missed critical finding",
         )
 
 
@@ -117,7 +117,7 @@ class FetchTest(unittest.TestCase):
                 {"number": 1, "merged_at": "2026-11-01T10:00:00Z"},
             ],
             "repos/o/r/issues/3/comments?per_page=100": [review],
-            "repos/o/r/issues/comments/9/reactions?per_page=100": [{"user": {"login": OWNER}, "content": "+1"}],
+            "repos/o/r/issues/comments/9/reactions?per_page=100": [{"user": {"login": HUMAN}, "content": "+1"}],
         }
         calls: list[str] = []
 
@@ -128,7 +128,7 @@ class FetchTest(unittest.TestCase):
         prs = fetch_prs(gh, "o/r", "2026-11-10")
 
         self.assertEqual([p["number"] for p in prs], [3])
-        self.assertEqual(answer(prs[0], OWNER), "agree")
+        self.assertEqual(answer(prs[0], HUMAN), "agree")
         self.assertNotIn("repos/o/r/issues/1/comments?per_page=100", calls)
 
 

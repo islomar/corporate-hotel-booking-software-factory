@@ -1,7 +1,7 @@
 # Code owners for the harness paths. Design: ADR-ea8c, section 4, and ADR-ebe6.
 # The main ruleset requires code-owner review (infra/github/ruleset.tf), so a PR that
-# touches any path below needs an approval from @islomar. A GitHub App cannot be a code
-# owner. There is no `*` line: other paths need only the ruleset's normal approval.
+# touches any path below needs an approval from @islomar. A GitHub App cannot be a
+# code owner. There is no `*` line: other paths need only the ruleset's normal approval.
 #
 # Syntax: the last matching pattern wins. A pattern ending in `/` matches the directory
 # and everything below it. A leading `/` anchors the pattern at the repository root.
@@ -19,13 +19,13 @@
 /docs/knowledge/   @islomar
 
 # Supply chain. Manifests, lockfiles, images and runtime pins have no code owner: the
-# required check `supply-chain` takes the owner's place (ADR-ebe6). It passes for
-# Dependabot-only PRs and otherwise needs the owner's approval on the head commit.
+# required check `supply-chain` takes the code owner's place (ADR-ebe6). It passes for
+# Dependabot-only PRs and otherwise needs the human's approval on the head commit.
 # The check itself and `.npmrc` (release-age settings and exemptions) stay owned.
 # Keep the check's own lines even if the directory lines above are narrowed later.
 # Terraform provider pins sit under the owned `/infra/`, so they need lines with no
-# owner here, below it: the last matching pattern wins (CHB-207).
-# scripts/tests/test_codeowners.py fails if either file gets an owner again.
+# code owner here, below it: the last matching pattern wins (CHB-207).
+# scripts/tests/test_codeowners.py fails if either file gets a code owner again.
 /infra/**/.terraform.lock.hcl
 /infra/**/versions.tf
 .npmrc                               @islomar

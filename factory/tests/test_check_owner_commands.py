@@ -17,7 +17,7 @@ def block(*lines: str, lang: str = "") -> str:
 
 
 FLAGGED = [
-    # The CHB-126 incident: the target depended on the folder the owner was in.
+    # The CHB-126 incident: the target depended on the folder the human was in.
     "cp /tmp/x/scratchpad/git-config.bak .git/config",
     "mv backup.txt notes/backup.txt",
     "rm -rf build",

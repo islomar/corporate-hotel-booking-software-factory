@@ -25,7 +25,7 @@
 # - The PR head is data: checked out into a separate directory, never installed, built, sourced
 #   or run. No step restores or saves a cache. No `run:` block expands a PR-controlled string.
 # - Claude runs with read-only tools, --safe-mode and --restricted, an empty HOME and config dir, and
-#   never sees the reviewer App key or a GitHub token. It authenticates with the owner's subscription
+#   never sees the reviewer App key or a GitHub token. It authenticates with the human's subscription
 #   token (claude setup-token); --bare cannot, as it reads only ANTHROPIC_API_KEY or apiKeyHelper.
 #   The token is only in the env of the Claude step. The App token is minted after Claude exits.
 #
@@ -54,7 +54,7 @@ jobs:
   resolve:
     name: resolve
     # Cheap filters on fields GitHub sets. The API checks below are the real control.
-    # Fork PRs never reach the secrets: a fork PR gets no review, and the owner reviews it.
+    # Fork PRs never reach the secrets: a fork PR gets no review, and the human reviews it.
     # Dependabot PRs follow ADR-ebe6.
     if: >-
       github.event.workflow_run.event == 'pull_request' &&
@@ -215,7 +215,7 @@ jobs:
       # - --restricted: only --settings and managed settings load, file tools stay in the working directory.
       # - CLAUDE_CODE_DISABLE_CLAUDE_MDS, disableAllHooks, autoMemoryEnabled: false: the same, a second time.
       # - --strict-mcp-config, ENABLE_CLAUDEAI_MCP_SERVERS=false, disableClaudeAiConnectors: no MCP server,
-      #   and none of the owner's claude.ai connectors (Gmail, Drive and others) that the token could reach.
+      #   and none of the human's claude.ai connectors (Gmail, Drive and others) that the token could reach.
       # - Empty HOME and CLAUDE_CONFIG_DIR: no user settings, memory, plugins or credentials files.
       - id: claude
         name: Review with Claude
@@ -307,7 +307,7 @@ jobs:
           jq --arg url "$run_url" '.details_url = $url' "$payload" > "$payload.tmp" && mv "$payload.tmp" "$payload"
           gh api -X POST "repos/$REPO/check-runs" --input "$payload" > /dev/null
 
-      # CHB-141: a PR comment the owner reacts to with 👍 or 👎. factory/review/agreement.py counts them
+      # CHB-141: a PR comment the human reacts to with 👍 or 👎. factory/review/agreement.py counts them
       # (ADR-ea8c stage 1). gate.py writes the comment only for a valid model review.
       # Only after the check posted. Own token with pull requests write, and continue-on-error:
       # a missing permission or a failed comment never blocks the review check.

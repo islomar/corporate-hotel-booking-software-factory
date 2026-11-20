@@ -1,8 +1,8 @@
 """CODEOWNERS leaves supply-chain files without a code owner (ADR-ebe6, CHB-207).
 
 The `main` ruleset requires code-owner review, and a GitHub App cannot be a code owner.
-A supply-chain file with an owner makes every Dependabot PR that changes it wait for the
-owner, even when the `supply-chain` check passes. This test reads the real CODEOWNERS
+A supply-chain file with a code owner makes every Dependabot PR that changes it wait for the
+human, even when the `supply-chain` check passes. This test reads the real CODEOWNERS
 with GitHub's rules, so a later edit cannot bring that wait back unnoticed.
 
 GitHub's rules (docs.github.com, "About code owners", "CODEOWNERS syntax"): patterns
@@ -106,7 +106,7 @@ def non_pin_lines(text: str) -> list[str]:
     `/* */` comment, more than one brace on a line, or a `#` or `//` inside a quoted
     string (an odd number of quotes before it). It does not inspect the contents of
     `required_providers`: Terraform accepts only provider requirement maps there.
-    The `supply-chain` check still asks the owner to approve any change to
+    The `supply-chain` check still asks the human to approve any change to
     versions.tf that Dependabot did not make.
     """
     found = []

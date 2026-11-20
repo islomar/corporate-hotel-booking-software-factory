@@ -1,7 +1,7 @@
 # Unattended merge for safe Dependabot updates.
 # Design: docs/decisions/ADR-ebe6-unattended-dependency-updates.md
 #
-# Safe: patch and minor updates, 0.x included (owner decision 2026-11-19, CHB-206), and
+# Safe: patch and minor updates, 0.x included (human decision 2026-11-19, CHB-206), and
 # GitHub Actions commit bumps.
 # The required check `supply-chain` applies the same rules (update_risks in
 # scripts/check_supply_chain.py). Change both together.

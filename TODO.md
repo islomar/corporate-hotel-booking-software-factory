@@ -28,4 +28,4 @@ Epics:
 | CHB-52 | Agent evals |
 | CHB-72 | DORA metrics |
 
-Raw agent session exports stay in the owner's private notes folder. Curated copies go to `docs/sessions/`.
+Raw agent session exports stay in the human's private notes folder. Curated copies go to `docs/sessions/`.

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Claude Code Stop hook: commands for the owner to paste must work from any folder (CHB-126).
+"""Claude Code Stop hook: commands for the human to paste must work from any folder (CHB-126).
 
-On 2026-11-07 the agent gave the owner `cp <backup> .git/config`. The owner ran it from another
+On 2026-11-07 the agent gave the human `cp <backup> .git/config`. The human ran it from another
 repository's folder, and that repository's config was overwritten with this one's.
 
 The hook reads the shell code blocks of the agent's final reply (fenced, with no language or
@@ -138,7 +138,7 @@ def main(stdin: TextIO = sys.stdin) -> int:
     if problems:
         listed = "\n".join(f"- {p}" for p in problems)
         reason = (
-            "Commands in your reply depend on the folder the owner runs them from (CHB-126):\n"
+            "Commands in your reply depend on the folder the human runs them from (CHB-126):\n"
             f"{listed}\n"
             "Rewrite them to work from any folder: absolute paths, `git -C <repo>`, `make -C <repo>`, "
             "or start the block with `cd ~/workspace/<repo> &&`. "

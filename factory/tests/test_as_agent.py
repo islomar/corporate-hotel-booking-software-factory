@@ -41,7 +41,7 @@ class JwtSigningInputTest(unittest.TestCase):
 class AgentEnvTest(unittest.TestCase):
     def setUp(self) -> None:
         self.env = agent_env(
-            {"PATH": "/bin", "GH_TOKEN": "owner-token", "GITHUB_TOKEN": "owner", "OP_SERVICE_ACCOUNT_TOKEN": "ops_x"},
+            {"PATH": "/bin", "GH_TOKEN": "human-token", "GITHUB_TOKEN": "human", "OP_SERVICE_ACCOUNT_TOKEN": "ops_x"},
             token="ghs_agent",
             bot_login="chb-factory-agent[bot]",
             bot_id=42,

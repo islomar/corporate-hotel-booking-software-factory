@@ -2,7 +2,7 @@
 """Claude Code PreToolUse hook: third-party code runs in the sandbox container, not on the host (CHB-31).
 
 Package installs, linters and test runners run code from npm and PyPI. On the host that code
-could read the owner's keyring, 1Password and home folder. `.devcontainer/run <command>` runs it
+could read the human's keyring, 1Password and home folder. `.devcontainer/run <command>` runs it
 in a container with no secret and an egress allow list (README.md, "Sandbox container").
 
 Denied on the host, in any simple command of the Bash command line:

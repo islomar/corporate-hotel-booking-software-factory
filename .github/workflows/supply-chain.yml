@@ -3,17 +3,17 @@
 # scripts/check_supply_chain.py.
 #
 # A PR that changes a manifest, lockfile, image or runtime pin passes only if every commit
-# is Dependabot's (and no release-age setting changed), or the owner approved the head.
+# is Dependabot's (and no release-age setting changed), or the human approved the head.
 #
 # The workflow and the script run from the PR's merge commit. CODEOWNERS keeps both files
-# owned, so a PR that weakens them needs the owner.
+# owned, so a PR that weakens them needs the human.
 #
-# `pull_request_review` re-runs the check after the owner approves or a review is
+# `pull_request_review` re-runs the check after the human approves or a review is
 # dismissed. Both events report a check run named `supply-chain` on the head commit, and a
 # failed one keeps the required check red. So a review run that passes re-runs the failed
 # runs of the same head (scripts/rerun_failed_supply_chain.py, CHB-184): the agent's App
 # cannot re-run workflows, the workflow token can. A re-run reads the live reviews, so it
-# passes only while the owner's approval stands.
+# passes only while the human's approval stands.
 # Concurrency cancels an older run of the same event so it cannot finish last. The events
 # have separate groups: a re-run of the `pull_request` run must not cancel the review run.
 #
@@ -56,7 +56,7 @@ jobs:
           for sha in "$HEAD_SHA" "$BASE_SHA"; do
             git cat-file -e "$sha^{commit}" 2>/dev/null || git fetch --no-tags origin "$sha"
           done
-      - name: Supply-chain files need Dependabot or the owner
+      - name: Supply-chain files need Dependabot or the human
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}

@@ -1,5 +1,5 @@
 # Uptime check, SLO and alert policies for the Cloud Run service (ADR-c17d, CHB-17).
-# Both alert policies email the owner. The address comes from var.alert_email.
+# Both alert policies email the human. The address comes from var.alert_email.
 
 locals {
   service_host = trimprefix(google_cloud_run_v2_service.chb.uri, "https://")

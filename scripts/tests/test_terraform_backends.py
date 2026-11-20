@@ -2,7 +2,7 @@
 
 Without a backend block Terraform writes the state to a local `terraform.tfstate`, on the
 machine that ran it. `infra/github` did that until CHB-216: the state lived only on the
-owner's laptop. This test reads the `.tf` files of each folder and fails when the folder
+human's laptop. This test reads the `.tf` files of each folder and fails when the folder
 has no `backend "gcs"` block with the bucket and prefix that infra/README.md names, or when
 the block sits outside `backend.tf` (`versions.tf` has no code owner, CHB-207).
 

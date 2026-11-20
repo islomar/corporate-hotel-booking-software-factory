@@ -1,5 +1,5 @@
 # Additive IAM only (*_iam_member). Never manage project IAM authoritatively:
-# that would remove the owner and the Google service agents.
+# that would remove the human and the Google service agents.
 
 resource "google_service_account" "deployer" {
   account_id   = "github-deployer"

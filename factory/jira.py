@@ -36,7 +36,7 @@ Tasks under a CHB Epic, and has no delete, no project, board, workflow or permis
 writes, and no raw request command. Do not add one. `rank` changes only the rank of
 issues. `section` writes only the description field, and changes only one section of it.
 In "Acceptance criteria (Validating)", `section` refuses a "When:" line without a "Speed up:" line.
-In "Needs human: owner steps", `section` refuses a body without an "Answer:" line (CHB-171).
+In "Needs human: steps", `section` refuses a body without an "Answer:" line (CHB-171).
 `priority` writes only the priority field, and only High, Medium or Low (docs/process/priorities.md).
 Highest marks an expedite ticket: only `create --expedite` sets it, one open at a time, for a production bug,
 a broken pipeline or a leaking secret. It skips Backlog, Ready and every column limit (CHB-157).
@@ -145,7 +145,7 @@ REFERENCE_PATTERN = re.compile(
 INLINE_PATTERN = re.compile(r"`(?P<code>[^`]+)`|\*\*(?P<bold>[^*]+)\*\*")
 RANK_LIMIT = 50  # issues per rank request, the Jira Software limit
 BOARD_ID = 2  # the CHB board; its column configuration holds the WIP limits
-# The pull list (CHB-153): the column agents pull work from. It is "Ready", or "To Do" until the owner
+# The pull list (CHB-153): the column agents pull work from. It is "Ready", or "To Do" until the human
 # renames that column. "Backlog" holds work not needed yet: never sorted, never next, never started.
 READY = "Ready"
 TO_DO = "To Do"
@@ -161,8 +161,11 @@ CLOSED = ("Done", "Discarded")
 # Target status (casefolded) -> description section it requires (docs/process/kanban.md).
 REQUIRED_SECTIONS = {
     "validating": "Acceptance criteria (Validating)",
-    "needs human": "Needs human: owner steps",
+    "needs human": "Needs human: steps",
 }
+# Headings written before CHB-194 called the person "owner". Open tickets may still carry them, so the
+# checks read them and `section` replaces them; `section` refuses to write an old name.
+OLD_HEADINGS = {"Needs human: steps": ("Needs human: owner steps",)}
 # The top ticket of the pull list (CHB-125, docs/process/kanban.md, Ready) is the highest-ranked non-epic
 # ticket that no open ticket blocks (open_blockers). It starts once it has acceptance criteria: a
 # heading that starts with "Acceptance criteria" (not "Acceptance criteria (Validating)"), or a line
@@ -250,6 +253,7 @@ class Box:
     name: str  # the name `tick` takes
     prefix: str  # the start of the box text: it finds the box in a description, so keep it when editing the text
     text: str
+    old_prefixes: tuple[str, ...] = ()  # earlier starts that open tickets still carry (CHB-194)
 
 
 # The Definition of Ready (CHB-154, docs/process/kanban.md, Backlog): a task list in every ticket, right after
@@ -264,16 +268,17 @@ DOR_BOXES = (
     Box(
         "trigger",
         "Trigger named",
-        "Trigger named with evidence: broken, owner asked (or in the agreed product slice), unblocks work in progress, "
+        "Trigger named with evidence: broken, human asked (or in the agreed product slice), unblocks work in progress, "
         "or the same pain twice. (agent ticks; `ready` requires the trigger text and posts it)",
     ),
     Box("acceptance", "Acceptance criteria", "Acceptance criteria that can be checked. (`ready` verifies the section and ticks)"),
     Box("unblocked", "Not blocked", 'Not blocked: every "is blocked by" ticket is Done or Discarded. (`ready` verifies the links and ticks)'),
     Box(
         "decision",
-        "No owner decision",
-        "No owner decision pending (money, lock-in, public exposure, deletion), or its decision ticket is Done. "
+        "No human decision",
+        "No human decision pending (money, lock-in, public exposure, deletion), or its decision ticket is Done. "
         "(agent ticks; a pending decision is a Blocks link that `ready` verifies)",
+        old_prefixes=("No owner decision",),
     ),
     Box("small", "Small", "Small: one PR, about a day of agent work; otherwise split first. (agent ticks)"),
 )
@@ -612,6 +617,11 @@ def check_key(key: str) -> str:
     return key
 
 
+def heading_names(heading: str) -> tuple[str, ...]:
+    """The heading and the older names an open ticket may still carry (CHB-194)."""
+    return (heading, *OLD_HEADINGS.get(heading, ()))
+
+
 def replace_section(description: dict[str, Any] | None, heading: str, body: str, *, first: bool = False) -> dict[str, Any]:
     """Return a copy of the description with the section under `heading` set to `body`.
 
@@ -619,6 +629,7 @@ def replace_section(description: dict[str, Any] | None, heading: str, body: str,
     heading of the same or a higher level, or at the end. It is replaced by a level-2 heading and
     the body. Without such a heading the section is appended. Other nodes are kept as they are.
     With `first`, the new section goes at the top instead, and the old one is removed wherever it was.
+    A section under an older name of the heading (OLD_HEADINGS) is replaced the same way.
     """
     heading = check_section_input(heading, body)
     doc = description if isinstance(description, dict) and description.get("type") == "doc" else None
@@ -627,7 +638,8 @@ def replace_section(description: dict[str, Any] | None, heading: str, body: str,
         {"type": "heading", "attrs": {"level": 2}, "content": [{"type": "text", "text": heading}]},
         *text_to_adf(acceptance_checkboxes(heading, body))["content"],
     ]
-    starts = [i for i, node in enumerate(content) if _is_heading(node) and _heading_text(node) == heading]
+    names = heading_names(heading)  # an old name of the heading is replaced by the new one (CHB-194)
+    starts = [i for i, node in enumerate(content) if _is_heading(node) and _heading_text(node) in names]
     if len(starts) > 1:
         raise JiraError(f"the description has {len(starts)} sections headed {heading!r}; fix it by hand")
     if starts:
@@ -704,7 +716,7 @@ def _checklist_items(description: Any) -> list[dict[str, Any]] | None:
 
 def _box_of(item: dict[str, Any]) -> Box | None:
     text = "".join(adf_to_text(child) for child in item.get("content", [])).strip()
-    return next((box for box in DOR_BOXES if text.startswith(box.prefix)), None)
+    return next((box for box in DOR_BOXES if text.startswith((box.prefix, *box.old_prefixes))), None)
 
 
 def box_states(description: Any) -> dict[str, str] | None:
@@ -773,6 +785,9 @@ def check_section_input(heading: str, body: str) -> str:
         raise UsageError("heading must be one non-empty line")
     if not body.strip():
         raise UsageError("section body is empty")
+    new = next((name for name, old in OLD_HEADINGS.items() if heading in old), None)
+    if new is not None:
+        raise UsageError(f"{heading!r} is the old name of the heading; write {new!r} (CHB-194)")
     return heading
 
 
@@ -796,7 +811,7 @@ def check_speed_up(heading: str, body: str) -> None:
             if part and not any(SPEED_UP_PATTERN.match(other) for other in part):
                 raise UsageError(
                     f"{part[0].strip()!r} has no Speed up line. After each When line add "
-                    "'- Speed up: <exact step the owner can take>' or '- Speed up: cannot be sped up (<reason>)'"
+                    "'- Speed up: <exact step the human can take>' or '- Speed up: cannot be sped up (<reason>)'"
                 )
             part = [line] if line is not None else []
         elif part:
@@ -807,17 +822,17 @@ ANSWER_PATTERN = re.compile(_LABEL.format("answer"), re.IGNORECASE)
 
 
 def check_answer_line(heading: str, body: str) -> None:
-    """Refuse a "Needs human: owner steps" section without an "Answer:" line (exit 2, CHB-171).
+    """Refuse a "Needs human: steps" section without an "Answer:" line (exit 2, CHB-171).
 
-    The line says where the owner answers: in the Claude Code chat, or in a ticket comment that the
+    The line says where the human answers: in the Claude Code chat, or in a ticket comment that the
     next session start picks up (factory/hooks/validating_sweep.py).
     """
-    if heading.strip() != REQUIRED_SECTIONS["needs human"]:
+    if heading.strip() not in heading_names(REQUIRED_SECTIONS["needs human"]):
         return
     if not any(ANSWER_PATTERN.match(line) for line in body.splitlines()):
         raise UsageError(
             "the section has no Answer line. Add "
-            "'- Answer: <where the owner answers: in the Claude Code chat, or in a comment on this ticket, "
+            "'- Answer: <where the human answers: in the Claude Code chat, or in a comment on this ticket, "
             "which the next session start picks up>'"
         )
 
@@ -857,7 +872,7 @@ def check_why_text(text: str) -> None:
     if problem:
         raise UsageError(
             f"the description {problem}. Start it with '## {WHY_HEADING}' and 2 to 5 plain sentences: "
-            "the pain, who feels it (the owner, users of the app, or agents) and the value of solving it "
+            "the pain, who feels it (the human, users of the app, or agents) and the value of solving it "
             "(docs/process/kanban.md, Ready)"
         )
 
@@ -955,7 +970,7 @@ class Jira:
         if open_ones:
             raise BlockedError(
                 f"{', '.join(open_ones)} is an open expedite ticket; only one may be open at a time. "
-                f"Finish it first, or tell the owner (docs/process/kanban.md, Expedite)."
+                f"Finish it first, or tell the human (docs/process/kanban.md, Expedite)."
             )
         return self._create(parent, summary, description, EXPEDITE_PRIORITY)
 
@@ -1003,7 +1018,7 @@ class Jira:
             notices.append(f"could not check for other open expedite tickets: {error}")
         else:
             if len(open_ones) > 1:
-                notices.append(f"more than one open expedite ticket: {', '.join(open_ones)}. Tell the owner")
+                notices.append(f"more than one open expedite ticket: {', '.join(open_ones)}. Tell the human")
         return notices
 
     def _create(self, parent: str, summary: str, description: str, priority: str) -> str:
@@ -1078,7 +1093,7 @@ class Jira:
     def place_created(self, key: str) -> Column | None:
         """Put a ticket just created in Backlog (CHB-153). Return its column. `ready` moves it on (CHB-154).
 
-        Without a Backlog column (before the owner adds it), the ticket stays where Jira put it, the
+        Without a Backlog column (before the human adds it), the ticket stays where Jira put it, the
         pull list, and nothing is read. Jira may put a new ticket in either column, so the status is
         read first and the ticket moves only when it is elsewhere. The move skips the board rules:
         neither column has any.
@@ -1349,7 +1364,7 @@ class Jira:
         if blocker not in self.blocked_by(blocked):
             raise JiraError(
                 f"{blocked} does not show {blocker} as a blocker after the link. "
-                "Check both tickets in Jira; the owner removes a wrong link in the Jira UI."
+                "Check both tickets in Jira; the human removes a wrong link in the Jira UI."
             )
         return True
 
@@ -1466,7 +1481,7 @@ def refill_lines(
         state = f"missing {', '.join(missing)}" if missing else "complete"
         lines.append(f"  {issue['key']} ({_priority_name(issue) or 'Medium'}): {state}")
     if len(lines) == 1:
-        lines.append(f"  none: no {BACKLOG} ticket can meet the {DOR_HEADING}; tell the owner")
+        lines.append(f"  none: no {BACKLOG} ticket can meet the {DOR_HEADING}; tell the human")
     return lines
 
 
@@ -1484,7 +1499,7 @@ def check_trigger(key: str, move: Move, trigger: str | None) -> str | None:
         name = pull.name if pull else READY
         raise UsageError(
             f'{key} moves from {BACKLOG} to {name} only with factory/bin/jira ready {key} --trigger "<which trigger and its evidence>", '
-            f"once every box of its {DOR_HEADING} is ticked. Triggers: 1. something is broken; 2. the owner asked for it; "
+            f"once every box of its {DOR_HEADING} is ticked. Triggers: 1. something is broken; 2. the human asked for it; "
             "3. it unblocks work in progress; 4. the same pain appeared twice; 5. Ready is below its minimum (docs/process/kanban.md, Backlog)."
         )
     if trigger and not promotes:
@@ -1565,8 +1580,8 @@ def before_transition(jira: Jira, key: str, status: str, *, status_id: str, trig
             f"Leave {key} in {where}, comment on it and start nothing else. "
             f"Run this in the background (run_in_background) and carry on; it moves {key} when a slot frees, "
             f"ends at once on any other refusal, and gives up after {WAIT_LIMIT_SECONDS // 60} minutes with one line, "
-            f"then tell the owner: {wait_command(key, status)} "
-            "Only the owner overrides a limit, in the Jira UI, with a comment on the ticket (docs/process/kanban.md)."
+            f"then tell the human: {wait_command(key, status)} "
+            "Only the human overrides a limit, in the Jira UI, with a comment on the ticket (docs/process/kanban.md)."
         )
     if target.name == IN_PROGRESS and source is not None and source == pull:
         check_top_of_to_do(jira, key, issue, columns)
@@ -1576,7 +1591,7 @@ def before_transition(jira: Jira, key: str, status: str, *, status_id: str, trig
 
 
 WAIT_SECONDS = 120  # between two tries of the wait command (CHB-162)
-WAIT_LIMIT_SECONDS = 3600  # the wait command gives up after an hour: the owner hears of a longer wait
+WAIT_LIMIT_SECONDS = 3600  # the wait command gives up after an hour: the human hears of a longer wait
 
 
 def wait_command(key: str, status: str) -> str:
@@ -1592,7 +1607,7 @@ def wait_command(key: str, status: str) -> str:
         f"( end=$(( $(date +%s) + {WAIT_LIMIT_SECONDS} )); "
         f"while {move}; rc=$?; [ $rc -eq {EXIT_WIP_LIMIT} ]; do "
         "[ $(date +%s) -lt $end ] || "
-        f"{{ echo \"{key}: the slot is still full after {WAIT_LIMIT_SECONDS // 60} minutes; tell the owner\"; exit 1; }}; "
+        f"{{ echo \"{key}: the slot is still full after {WAIT_LIMIT_SECONDS // 60} minutes; tell the human\"; exit 1; }}; "
         f"sleep {WAIT_SECONDS}; done; exit $rc )"
     )
 
@@ -1646,7 +1661,7 @@ def check_top_of_to_do(jira: Jira, key: str, fields: dict[str, Any], columns: li
     if queue[0] != key:
         top = queue[0]
         raise BlockedError(
-            f"{key} is not the top ticket of {name}: {top} is. Pull {top}. To start {key} first, with the owner's go, "
+            f"{key} is not the top ticket of {name}: {top} is. Pull {top}. To start {key} first, with the human's go, "
             f"raise its priority (factory/bin/jira priority {key} High) or, when both have the same priority, "
             f"rank it above {top} (factory/bin/jira rank {key} --before {top}), and try again. "
             f"Every start sorts {name} by priority, so a rank across priorities does not hold (docs/process/kanban.md, Ready)."
@@ -1704,7 +1719,7 @@ def start_gaps(key: str, description: Any) -> list[StartGap]:
                 "acceptance criteria",
                 f"{key} has no acceptance criteria. Write them first: "
                 f'factory/bin/jira section {key} --heading "Acceptance criteria" --body-file FILE '
-                "(derive them from the ticket, its epic and the ADRs; ask the owner only for decisions that are the owner's).",
+                "(derive them from the ticket, its epic and the ADRs; ask the human only for decisions that are the human's).",
             )
         )
     dor = dor_gap(description)
@@ -2080,10 +2095,11 @@ def startable(issues: list[dict[str, Any]], columns: Sequence[Column]) -> tuple[
 
 
 def has_section(description: Any, heading: str) -> bool:
-    """True when the description has a top-level heading with exactly this text and text under it."""
+    """True when the description has a top-level heading with exactly this text, or an older name of it, and text under it."""
+    names = heading_names(heading)
     content = description.get("content", []) if isinstance(description, dict) else []
     for start, node in enumerate(content):
-        if not (_is_heading(node) and _heading_text(node) == heading):
+        if not (_is_heading(node) and _heading_text(node) in names):
             continue
         level = _level(node)
         for following in content[start + 1 :]:
@@ -2318,11 +2334,11 @@ def run(args: argparse.Namespace, jira: Jira) -> int:
             jira.move_expedite(key)
         except (JiraError, KeyError, TypeError, AttributeError) as error:
             print(
-                f"could not start {key} as expedite: {error}. Tell the owner now; the owner moves it to {IN_PROGRESS} "
+                f"could not start {key} as expedite: {error}. Tell the human now; the human moves it to {IN_PROGRESS} "
                 f"in the Jira UI, because transition refuses a start from {BACKLOG}"
             )
             return 0
-        print(f"{key} -> {IN_PROGRESS} (expedite). Tell the owner now: {args.expedite.strip()}")
+        print(f"{key} -> {IN_PROGRESS} (expedite). Tell the human now: {args.expedite.strip()}")
         for notice in jira.finish_expedite(key, args.expedite):
             print(notice)
     elif args.command == "create":
@@ -2470,7 +2486,7 @@ def main(
         jira = Jira(*credentials_reader(), opener_factory())
         code = run(args, jira)
     except CredentialError as error:
-        print(f"jira: no Jira credential: {error}. STOP: do not use another Jira login. Report to the owner.", file=sys.stderr)
+        print(f"jira: no Jira credential: {error}. STOP: do not use another Jira login. Report to the human.", file=sys.stderr)
         return EXIT_CREDENTIAL
     except BlockedError as error:
         print(f"jira: blocked: {error}", file=sys.stderr)

@@ -406,7 +406,7 @@ class UpdateRisksTest(unittest.TestCase):
         self.assertEqual(update_risks([self.entry("patch", "0.54.1")], "uv"), [])
 
     def test_a_minor_of_a_zero_x_version_is_safe(self):
-        # Owner decision 2026-11-19 (CHB-206): CI is the gate for 0.x minors.
+        # Human decision 2026-11-19 (CHB-206): CI is the gate for 0.x minors.
         self.assertEqual(update_risks([self.entry("minor", "0.55.0")], "uv"), [])
 
     def test_majors_playwright_and_unknown_types_need_a_human(self):

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fail when a file in docs/sessions/ holds something a redaction should have removed.
 
-docs/sessions/ holds Claude Code session exports, and this repository is public. The owner
+docs/sessions/ holds Claude Code session exports, and this repository is public. The human
 redacts each export by hand before adding it (CHB-122). This check stops a missed email
 address, home or /mnt path (also dash-encoded, as in Claude Code scratchpad paths),
 1Password reference or token-like string before the commit. It also requires the two

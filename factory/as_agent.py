@@ -31,7 +31,7 @@ Environment overrides:
 - AGENT_NO_AUTO_MERGE=1: open a PR without auto-merge.
 - AGENT_APP_KEY_COMMAND: command that prints the private key, instead of the default
   `op` call. It runs without the service account token: an explicit opt-in to another
-  key source, for example the owner's desktop 1Password (with its pop-up).
+  key source, for example the human's desktop 1Password (with its pop-up).
 """
 
 from __future__ import annotations
@@ -288,7 +288,7 @@ def main(argv: list[str]) -> int:
         else:
             private_key = read_private_key(shlex.split(KEY_COMMAND), os.environ)
     except AppKeyError as error:
-        print(f"as-agent: no App key: {error}. STOP: do not use another identity. Report to the owner.", file=sys.stderr)
+        print(f"as-agent: no App key: {error}. STOP: do not use another identity. Report to the human.", file=sys.stderr)
         return EXIT_NO_KEY
     token = installation_token(os.environ.get("AGENT_APP_CLIENT_ID", CLIENT_ID), private_key)
     bot_login = f"{APP_SLUG}[bot]"
