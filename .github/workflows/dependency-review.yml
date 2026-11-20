@@ -7,16 +7,25 @@
 # Dependabot bumps the pinned SHA once a release is older than the 7-day cooldown of
 # .github/dependabot.yml (ADR-ebe6).
 # Structure tests: scripts/tests/test_dependency_review_workflow.py.
+#
+# Required check on `main` (CHB-214, list in infra/github/repository.tf).
+# `merge_group` (CHB-219): the merge queue waits for this required check on its own event. The PR passed
+# it before entering the queue, so the job reports success without reading the PR.
+# Concurrency (CHB-219): only a push of a new head (`synchronize`, first attempt) cancels, and the run it
+# cancels belongs to an older head. A run cancelled in progress leaves a cancelled check run on its head,
+# which blocks the PR until someone re-runs it. A re-run replays the original event, so
+# `github.run_attempt` (1 on the first attempt) keeps it from cancelling. Merge queue runs group by their ref.
 name: Dependency review
 
 on:
   pull_request:
+  merge_group:
 
 permissions: {}
 
 concurrency:
-  group: dependency-review-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: dependency-review-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' && github.run_attempt == '1' }}
 
 jobs:
   dependency-review:
@@ -25,6 +34,12 @@ jobs:
     permissions:
       contents: read
     steps:
+      # CHB-219: on `merge_group` the PR passed this check before it entered the queue, and the event
+      # carries no pull_request payload. This step reports the pass; the step below skips.
+      - name: Merge queue (checked on the PR)
+        if: github.event_name == 'merge_group'
+        run: echo "Checked on the pull request before it entered the merge queue."
       - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        if: github.event_name != 'merge_group'
         with:
           fail-on-severity: high

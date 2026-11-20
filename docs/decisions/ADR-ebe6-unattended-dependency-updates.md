@@ -130,7 +130,7 @@ These run as steps of the `backend`, `frontend` and `e2e` jobs, so auto-merge wa
   - Safe: patch and minor updates, 0.x included (CHB-206), and GitHub Actions commit bumps without a version.
   - Needs a human: majors, Playwright, and updates without a known type.
 - Safe PRs get auto-merge (squash) and an approval from a GitHub App token.
-- The workflow enables auto-merge only when the `main` ruleset requires `backend`, `frontend`, `e2e` and `supply-chain`.
+- The workflow enables auto-merge only when the `main` ruleset requires `backend`, `frontend`, `e2e`, `supply-chain` and `dependency-review` (CHB-214).
   Without required checks, auto-merge would merge before CI.
 - Labels: `dependencies:auto-merge`, `dependencies:needs-human`, `dependencies:safe` (safe, but auto-merge is off: a person merges).
 
@@ -217,7 +217,7 @@ Consequences:
   Any other entry younger than 7 days fails until a person adds an exemption.
   Dependabot cooldown does not delay security updates. For uv, `exclude-newer` still does (see above).
 - Unattended merge starts only when these exist:
-  the GitHub App with its Dependabot secrets, the `main` ruleset requiring `backend`, `frontend`, `e2e` and `supply-chain`, and the `allow auto-merge` setting.
+  the GitHub App with its Dependabot secrets, the `main` ruleset requiring `backend`, `frontend`, `e2e`, `supply-chain` and `dependency-review`, and the `allow auto-merge` setting.
   The ruleset requires 1 approval. The App approval must count (CHB-88).
   A user report says an App approval with contents read shows as "approved with read-only permissions" and does not count.
   The auto-merge token has contents write.

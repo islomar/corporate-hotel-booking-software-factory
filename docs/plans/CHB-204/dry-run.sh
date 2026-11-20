@@ -60,7 +60,7 @@ SEED_STRICT=$(gh_get "repos/$OLD_OWNER/$NAME/rules/branches/main" \
   '[.[]|select(.type=="required_status_checks")|.parameters.strict_required_status_checks_policy][0]' true)
 SEED_REQUIRED=$(gh_get "repos/$OLD_OWNER/$NAME/rules/branches/main" \
   '[.[]|select(.type=="required_status_checks")|.parameters.required_status_checks[].context]|unique|join(" ")' \
-  "backend e2e frontend supply-chain triage")
+  "backend dependency-review e2e frontend supply-chain triage")
 SEED_QUEUE=$(gh_get "repos/$OLD_OWNER/$NAME/rules/branches/main" '[.[]|select(.type=="merge_queue")]|length' 0)
 agent_public=false; gh api apps/chb-factory-agent >/dev/null 2>&1 && agent_public=true
 reviewer_public=false; gh api apps/chb-factory-reviewer >/dev/null 2>&1 && reviewer_public=true
@@ -146,6 +146,7 @@ reset_state() {
     [trig_ci]=$(triggers "$REPO_DIR/.github/workflows/ci.yml")
     [trig_supply]=$(triggers "$REPO_DIR/.github/workflows/supply-chain.yml")
     [trig_triage]=$(triggers "$REPO_DIR/.github/workflows/triage.yml")
+    [trig_dependency]=$(triggers "$REPO_DIR/.github/workflows/dependency-review.yml")
     [required]=$SEED_REQUIRED [strict]=$SEED_STRICT [queue]=$([ "$SEED_QUEUE" -gt 0 ] && echo yes || echo no)
     [supply_owner]=$SEED_SUPPLY_OWNER [agreement_owner]=$SEED_AGREEMENT_OWNER
     [as_agent]=$SEED_AS_AGENT
@@ -223,7 +224,7 @@ check_invariants() {
   local need=pull_request c t
   [ "${S[queue]}" = yes ] && need="pull_request merge_group"
   for c in ${S[required]}; do
-    case $c in backend | frontend | e2e) t=${S[trig_ci]} ;; supply-chain) t=${S[trig_supply]} ;; triage) t=${S[trig_triage]} ;; *) t="" ;; esac
+    case $c in backend | frontend | e2e) t=${S[trig_ci]} ;; supply-chain) t=${S[trig_supply]} ;; triage) t=${S[trig_triage]} ;; dependency-review) t=${S[trig_dependency]} ;; *) t="" ;; esac
     for ev in $need; do [[ " $t " == *" $ev "* ]] || fail "I3 checks: '$c' has no $ev trigger; the queue would wait forever"; done
   done
   # I4 the agent can push and open PRs
@@ -255,8 +256,8 @@ show() {
     "${S[repo_owner]}" "${S[guard_pr_updates]}" "${S[guard_dependabot]}" "${S[deploy_cond]}" "${S[deploy_bind]}" "${S[mapping]}"
   printf '    apps: agent app_account=%s public=%s installs=[%s]; reviewer app_account=%s public=%s installs=[%s]; as_agent=[%s]\n' \
     "${S[agent_app_owner]}" "${S[agent_public]}" "${S[agent_installs]}" "${S[rev_app_owner]}" "${S[rev_public]}" "${S[rev_installs]}" "${S[as_agent]}"
-  printf '    checks: queue=%s strict=%s ci=[%s] supply=[%s] triage=[%s]; supply_owner=%s tf_owner=%s remote=%s\n' \
-    "${S[queue]}" "${S[strict]}" "${S[trig_ci]}" "${S[trig_supply]}" "${S[trig_triage]}" "${S[supply_owner]}" "${S[tf_owner]}" "${S[remote]}"
+  printf '    checks: queue=%s strict=%s ci=[%s] supply=[%s] triage=[%s] dependency=[%s]; supply_owner=%s tf_owner=%s remote=%s\n' \
+    "${S[queue]}" "${S[strict]}" "${S[trig_ci]}" "${S[trig_supply]}" "${S[trig_triage]}" "${S[trig_dependency]}" "${S[supply_owner]}" "${S[tf_owner]}" "${S[remote]}"
   printf '    subject(deploy)=%s (%d chars)\n' "$(subject environment:production)" "$(subject environment:production | wc -c | awk '{print $1-1}')"
 }
 
@@ -268,7 +269,7 @@ step() {
   case $s in
     A1) S[supply_owner]=constant; S[agreement_owner]=constant ;;
     A2) S[guard_pr_updates]="repository_id==${S[repo_id]}"; S[guard_dependabot]="repository_id==${S[repo_id]}" ;;
-    A3) for k in trig_ci trig_supply trig_triage; do [[ " ${S[$k]} " == *" merge_group "* ]] || S[$k]+="merge_group "; done ;;
+    A3) for k in trig_ci trig_supply trig_triage trig_dependency; do [[ " ${S[$k]} " == *" merge_group "* ]] || S[$k]+="merge_group "; done ;;
     A4) S[as_agent]="$NEW_OWNER/$NAME $OLD_OWNER/$NAME" ;;
     A5) S[mapping]="${S[mapping]}repository_id "; S[deploy_cond]=$DEPLOY_ID_COND; S[plan_cond]=$PLAN_ID_COND
         S[deploy_bind]="${S[deploy_bind]}repository_id/${S[repo_id]} "; S[plan_bind]="${S[plan_bind]}repository_id/${S[repo_id]} " ;;
@@ -301,7 +302,7 @@ step() {
         S[deploy_bind]=$(echo "${S[deploy_bind]}" | xargs -n1 | grep -v '^repository_id/' | xargs)
         S[plan_bind]=$(echo "${S[plan_bind]}" | xargs -n1 | grep -v '^repository_id/' | xargs)
         S[mapping]=$(echo "${S[mapping]}" | xargs -n1 | grep -v '^repository_id$' | xargs) ;;
-    UNDO_A3) for k in trig_ci trig_supply trig_triage; do S[$k]=${S[$k]//merge_group /}; done ;;
+    UNDO_A3) for k in trig_ci trig_supply trig_triage trig_dependency; do S[$k]=${S[$k]//merge_group /}; done ;;
     *) echo "unknown step $s"; exit 2 ;;
   esac
 }
@@ -309,7 +310,7 @@ step() {
 declare -A DESC=(
   [A1]="agent PR: the human login is a constant (supply-chain, agreement, sweep)"
   [A2]="agent PR: workflow guards on github.repository_id"
-  [A3]="agent PR: merge_group trigger on ci, supply-chain, triage"
+  [A3]="agent PR: merge_group trigger on ci, supply-chain, triage, dependency-review"
   [A4]="agent PR: as_agent.py tries the new name, then the old"
   [A5]="agent PR + human apply: GCP trusts repository_id (expand, old bindings kept)"
   [B0]="human: back up infra/github/terraform.tfstate"
@@ -328,7 +329,7 @@ declare -A DESC=(
   [REUSE_OLD_NAME]="someone creates $OLD_OWNER/$NAME again"
   [UNDO_A1]="simulation only: the human login reads github.repository_owner again (A1 not done)"
   [UNDO_A5]="simulation only: GCP trusts the repository name again (A5 not done)"
-  [UNDO_A3]="simulation only: ci, supply-chain and triage lose the merge_group trigger again (A3 not done)"
+  [UNDO_A3]="simulation only: ci, supply-chain, triage and dependency-review lose the merge_group trigger again (A3 not done)"
 )
 
 # run_order NAME "STEPS" "DECLARED" : DECLARED lists `step:invariant-prefix` failures allowed as a declared window

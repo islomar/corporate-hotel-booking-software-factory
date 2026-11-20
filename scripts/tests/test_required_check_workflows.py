@@ -22,9 +22,18 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
 RULESET = ROOT / "infra" / "github" / "repository.tf"
 # Workflows whose steps read `github.event.pull_request`: on `merge_group` that payload is absent.
-PR_PAYLOAD_WORKFLOWS = ("supply-chain.yml", "triage.yml")
+PR_PAYLOAD_WORKFLOWS = ("dependency-review.yml", "supply-chain.yml", "triage.yml")
+# Actions that read the pull request payload themselves, without `github.event.pull_request` in the step.
+PR_PAYLOAD_ACTIONS = ("actions/dependency-review-action@",)
 # The workflow of each required check. A new required check fails the first test until it is added here.
-CHECK_WORKFLOWS = {"backend": "ci.yml", "frontend": "ci.yml", "e2e": "ci.yml", "supply-chain": "supply-chain.yml", "triage": "triage.yml"}
+CHECK_WORKFLOWS = {
+    "backend": "ci.yml",
+    "frontend": "ci.yml",
+    "e2e": "ci.yml",
+    "supply-chain": "supply-chain.yml",
+    "triage": "triage.yml",
+    "dependency-review": "dependency-review.yml",
+}
 # Workflows outside the required checks that follow the same cancel rule (CHB-234). They have no
 # `merge_group` trigger, so only the cancel tests apply to them.
 OTHER_PR_WORKFLOWS = ("dependabot-auto-merge.yml",)
@@ -205,6 +214,9 @@ class RequiredCheckWorkflowsTest(unittest.TestCase):
                 self.assertNotRegex(path.read_text(encoding="utf-8"), re.compile(r"^ +concurrency:", re.MULTILINE))
 
     def test_on_merge_group_no_step_reads_the_pull_request_payload(self):
+        def reads_payload(step: str) -> bool:
+            return "github.event.pull_request" in step or any(action in step for action in PR_PAYLOAD_ACTIONS)
+
         def steps_event(step: str) -> tuple[str, str]:
             return ("pull_request_review", "submitted") if "pull_request_review" in step else ("pull_request", "synchronize")
 
@@ -212,13 +224,13 @@ class RequiredCheckWorkflowsTest(unittest.TestCase):
             text = (WORKFLOWS / name).read_text(encoding="utf-8")
             steps = re.split(r"^      - ", text.split("\n    steps:\n", 1)[1], flags=re.MULTILINE)[1:]
             self.assertRegex(steps[0], r"if: github\.event_name == 'merge_group'", f"{name}: the first step reports the merge_group pass")
-            self.assertTrue(any("github.event.pull_request" in step for step in steps), f"{name}: no step reads the PR payload; the step parse failed")
+            self.assertTrue(any(reads_payload(step) for step in steps), f"{name}: no step reads the PR payload; the step parse failed")
             for step in steps:
-                if "github.event.pull_request" not in step:
+                if not reads_payload(step):
                     continue
                 with self.subTest(workflow=name, step=step.splitlines()[0]):
                     condition = re.search(r"^(?:        )?if: (.+)$", step, re.MULTILINE)
-                    self.assertIsNotNone(condition, "a step that reads github.event.pull_request needs an `if:`")
+                    self.assertIsNotNone(condition, "a step that reads the pull request payload needs an `if:`")
                     self.assertIs(evaluate(condition.group(1), run("merge_group", "checks_requested")), False)
                     self.assertIs(evaluate(condition.group(1), run(*steps_event(step))), True, "the step still runs on its own event")
 

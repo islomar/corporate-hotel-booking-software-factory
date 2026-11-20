@@ -27,7 +27,7 @@ flowchart TD
     rv["review.yml (Review)<br/>resolve, then score-pr"]
     sc["supply-chain.yml (Supply chain)"]
     dam["dependabot-auto-merge.yml<br/>classify-dependabot-update"]
-    gate{"Required checks<br/>backend, frontend, e2e, supply-chain, triage<br/>and code-owner review on CODEOWNERS paths"}
+    gate{"Required checks<br/>backend, frontend, e2e, supply-chain, triage, dependency-review<br/>and code-owner review on CODEOWNERS paths"}
     asagent["as-agent gh pr create"]
     merge["Squash merge into main"]
     cimain["ci.yml on main<br/>every job"]
@@ -84,8 +84,9 @@ A `workflow_run` workflow always runs the copy on `main`, so a branch cannot cha
 ## Required checks
 
 Every merge into `main` deploys to production, so the merge is the last point where a person or a check can stop a bad change.
-The `main` ruleset (`infra/github/ruleset.tf`, list in `infra/github/repository.tf`) requires `backend`, `frontend`, `e2e`, `supply-chain` and `triage`.
+The `main` ruleset (`infra/github/ruleset.tf`, list in `infra/github/repository.tf`) requires `backend`, `frontend`, `e2e`, `supply-chain`, `triage` and `dependency-review`.
 The `triage` check (`triage.yml`, `triage-rerun.yml`, CHB-60) fails while the latest review has findings and the agent has not posted its triage of them.
+The `dependency-review` check (`dependency-review.yml`, CHB-188, required since CHB-214) fails a pull request that adds a dependency with a known vulnerability of severity high or above.
 It also requires the human's review on the paths in `.github/CODEOWNERS`: the files that steer the agents, the pipeline and the infrastructure.
 A change there changes the rules every later change runs under.
 The `review` check is not required yet: it runs in shadow mode until stage 1 of [ADR-ea8c](../decisions/ADR-ea8c-automated-pr-review.md) ends.
