@@ -18,11 +18,12 @@ resource "google_iam_workload_identity_pool" "github_pr" {
 resource "google_iam_workload_identity_pool_provider" "github_pr" {
   workload_identity_pool_id          = google_iam_workload_identity_pool.github_pr.workload_identity_pool_id
   workload_identity_pool_provider_id = "github-pr"
-  attribute_condition                = "assertion.repository=='${var.github_repository}' && assertion.event_name=='${var.planner_event_name}'"
+  attribute_condition                = "assertion.repository_id=='${var.github_repository_id}' && assertion.event_name=='${var.planner_event_name}'"
   attribute_mapping = {
-    "google.subject"       = "assertion.sub"
-    "attribute.repository" = "assertion.repository"
-    "attribute.ref"        = "assertion.ref"
+    "google.subject"          = "assertion.sub"
+    "attribute.repository"    = "assertion.repository"
+    "attribute.repository_id" = "assertion.repository_id"
+    "attribute.ref"           = "assertion.ref"
   }
 
   oidc {
@@ -47,6 +48,14 @@ resource "google_service_account_iam_member" "github_pr_impersonates_planner" {
   service_account_id = google_service_account.planner.name
   role               = "roles/iam.workloadIdentityUser"
   member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github_pr.name}/attribute.repository/${var.github_repository}"
+}
+
+# The same trust by repository ID, which survives the transfer to the organization (CHB-220, CHB-204).
+# The name binding above stays until CHB-204 removes it: changing its `member` would replace it.
+resource "google_service_account_iam_member" "github_pr_impersonates_planner_by_id" {
+  service_account_id = google_service_account.planner.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github_pr.name}/attribute.repository_id/${var.github_repository_id}"
 }
 
 locals {

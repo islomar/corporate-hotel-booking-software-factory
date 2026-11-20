@@ -44,6 +44,21 @@ override_resource {
   values = { name = "projects/1027266991110/locations/global/workloadIdentityPools/github" }
 }
 override_resource { target = google_iam_workload_identity_pool_provider.github }
+# Known names, so all_guards_pass can check the planner's ID binding at plan time (CHB-220).
+# Terraform creates these two (no import block), so their names are unknown at plan without override_during.
+override_resource {
+  target          = google_iam_workload_identity_pool.github_pr
+  override_during = plan
+  values          = { name = "projects/1027266991110/locations/global/workloadIdentityPools/github-pr" }
+}
+override_resource {
+  target          = google_service_account.planner
+  override_during = plan
+  values = {
+    name   = "projects/chb-factory-a92932/serviceAccounts/github-planner@chb-factory-a92932.iam.gserviceaccount.com"
+    member = "serviceAccount:github-planner@chb-factory-a92932.iam.gserviceaccount.com"
+  }
+}
 override_resource { target = google_project_iam_member.deployer_run_developer }
 override_resource { target = google_artifact_registry_repository_iam_member.deployer_writer }
 override_resource { target = google_service_account_iam_member.deployer_acts_as_runtime }
@@ -57,6 +72,33 @@ override_resource {
 
 run "all_guards_pass" {
   command = plan
+
+  # CHB-220: both conditions and the new bindings name the repository ID, which a transfer keeps.
+  # The old name bindings stay until CHB-204 removes them.
+  assert {
+    condition     = google_iam_workload_identity_pool_provider.github.attribute_condition == "assertion.repository_id=='1447565814' && assertion.ref=='refs/heads/main'"
+    error_message = "The deployer's condition must trust the repository ID and main only."
+  }
+  assert {
+    condition     = google_iam_workload_identity_pool_provider.github_pr.attribute_condition == "assertion.repository_id=='1447565814' && assertion.event_name=='pull_request'"
+    error_message = "The planner's condition must trust the repository ID and pull_request only."
+  }
+  assert {
+    condition     = google_service_account_iam_member.github_main_impersonates_deployer_by_id.member == "principalSet://iam.googleapis.com/projects/1027266991110/locations/global/workloadIdentityPools/github/attribute.repository_id/1447565814"
+    error_message = "The deployer's ID binding must trust the repository ID in the github pool."
+  }
+  assert {
+    condition     = google_service_account_iam_member.github_main_impersonates_deployer_by_id.service_account_id == google_service_account.deployer.name
+    error_message = "The deployer's ID binding must be on the deployer."
+  }
+  assert {
+    condition     = google_service_account_iam_member.github_pr_impersonates_planner_by_id.member == "principalSet://iam.googleapis.com/projects/1027266991110/locations/global/workloadIdentityPools/github-pr/attribute.repository_id/1447565814"
+    error_message = "The planner's ID binding must trust the repository ID in the planner pool."
+  }
+  assert {
+    condition     = google_service_account_iam_member.github_pr_impersonates_planner_by_id.service_account_id == google_service_account.planner.name
+    error_message = "The planner's ID binding must be on the planner."
+  }
 }
 
 run "planner_with_editor_fails_the_plan" {
@@ -96,6 +138,17 @@ run "planner_with_fewer_roles_passes" {
   variables {
     planner_project_roles = ["roles/viewer"]
   }
+}
+
+run "repository_name_in_place_of_the_id_fails_the_plan" {
+  command = plan
+
+  # A name can be reused after a transfer or a rename; the numeric ID cannot (CHB-220).
+  variables {
+    github_repository_id = "islomar/corporate-hotel-booking-software-factory"
+  }
+
+  expect_failures = [var.github_repository_id]
 }
 
 run "deployer_condition_moved_to_another_branch_fails_the_plan" {

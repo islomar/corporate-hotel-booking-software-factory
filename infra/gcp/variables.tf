@@ -18,6 +18,18 @@ variable "github_repository" {
   default = "islomar/corporate-hotel-booking-software-factory"
 }
 
+# The numeric ID of the repository. A transfer or a rename keeps it, and GitHub never reuses it (CHB-220).
+# Google trusts it in both workload identity conditions. Read it with `gh api repos/<owner>/<repo> --jq .id`.
+variable "github_repository_id" {
+  type    = string
+  default = "1447565814"
+
+  validation {
+    condition     = can(regex("^[0-9]+$", var.github_repository_id))
+    error_message = "github_repository_id must be the numeric repository ID, not a name (CHB-220)."
+  }
+}
+
 variable "billing_account" {
   description = "Billing account ID. Pass with TF_VAR_billing_account; never commit it."
   type        = string

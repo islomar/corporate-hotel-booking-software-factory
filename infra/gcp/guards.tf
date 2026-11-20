@@ -14,8 +14,9 @@ locals {
     [for b in google_storage_bucket_iam_member.planner_state : b.role],
   )
   # The deployer logs in from main only. Never widen this (ADR-d7b7).
-  deployer_attribute_condition = "assertion.repository=='${var.github_repository}' && assertion.ref=='refs/heads/main'"
-  planner_attribute_condition  = "assertion.repository=='${var.github_repository}' && assertion.event_name=='pull_request'"
+  # Both trust the repository ID, which a transfer keeps (CHB-220).
+  deployer_attribute_condition = "assertion.repository_id=='${var.github_repository_id}' && assertion.ref=='refs/heads/main'"
+  planner_attribute_condition  = "assertion.repository_id=='${var.github_repository_id}' && assertion.event_name=='pull_request'"
 }
 
 resource "terraform_data" "guards" {
