@@ -9,6 +9,7 @@ may cancel: the run it cancels belongs to an older head. A re-run replays the or
 `github.run_attempt` tells it apart.
 
 The required checks come from infra/github/repository.tf, so a new required check is covered here too.
+Only the workflow of a required check may have a job of that name (CHB-234): the ruleset matches by name.
 The tests read the files as text: `python3 -I` has no YAML parser. The expression reader understands
 only the forms these workflows use, and fails on anything else, so a new form needs a test first.
 """
@@ -22,9 +23,11 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 RULESET = ROOT / "infra" / "github" / "repository.tf"
 # Workflows whose steps read `github.event.pull_request`: on `merge_group` that payload is absent.
 PR_PAYLOAD_WORKFLOWS = ("supply-chain.yml", "triage.yml")
-# The workflow of each required check. dependabot-auto-merge.yml also has a job `triage`, so the
-# workflow cannot be found by job name alone. A new required check fails the first test until it is added here.
+# The workflow of each required check. A new required check fails the first test until it is added here.
 CHECK_WORKFLOWS = {"backend": "ci.yml", "frontend": "ci.yml", "e2e": "ci.yml", "supply-chain": "supply-chain.yml", "triage": "triage.yml"}
+# Workflows outside the required checks that follow the same cancel rule (CHB-234). They have no
+# `merge_group` trigger, so only the cancel tests apply to them.
+OTHER_PR_WORKFLOWS = ("dependabot-auto-merge.yml",)
 
 
 def required_checks() -> list[str]:
@@ -36,6 +39,15 @@ def required_checks() -> list[str]:
 def job_ids(text: str) -> list[str]:
     jobs = text.split("\njobs:\n", 1)
     return re.findall(r"^  ([A-Za-z0-9_-]+):", jobs[1], re.MULTILINE) if len(jobs) == 2 else []
+
+
+def check_run_names(text: str) -> set[str]:
+    """The check run names of a workflow's jobs: the job-level `name:` when set, otherwise the job id."""
+    jobs = text.split("\njobs:\n", 1)
+    names = re.findall(r"^    name: ['\"]?([^'\"\n]+?)['\"]?\s*$", jobs[1], re.MULTILINE) if len(jobs) == 2 else []
+    for name in names:
+        assert "${{" not in name, f"unsupported job name {name!r}: an expression hides the check run name"
+    return set(job_ids(text)) | set(names)
 
 
 def required_workflows() -> list[Path]:
@@ -138,20 +150,28 @@ class RequiredCheckWorkflowsTest(unittest.TestCase):
             with self.subTest(check=check):
                 self.assertIn(check, job_ids((WORKFLOWS / name).read_text(encoding="utf-8")))
 
+    def test_no_other_workflow_has_a_job_named_like_a_required_check(self):
+        # The ruleset matches required checks by name. A second check run with that name, even a
+        # skipped one, hides which one failed and can stand in for the real check (CHB-234).
+        for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]):  # GitHub runs both
+            clashes = {check for check in check_run_names(path.read_text(encoding="utf-8")) & set(CHECK_WORKFLOWS) if CHECK_WORKFLOWS[check] != path.name}
+            with self.subTest(workflow=path.name):
+                self.assertEqual(clashes, set())
+
     def test_every_required_check_workflow_runs_on_merge_group(self):
         for path in required_workflows():
             with self.subTest(workflow=path.name):
                 self.assertIn("merge_group", triggers(path.read_text(encoding="utf-8")))
 
     def test_only_a_new_head_cancels_a_run_in_progress(self):
-        for path in required_workflows():
+        for path in required_workflows() + [WORKFLOWS / name for name in OTHER_PR_WORKFLOWS]:
             _, cancel = concurrency(path.read_text(encoding="utf-8"))
             for name, context in SAME_HEAD_RUNS.items():
                 with self.subTest(workflow=path.name, run=name):
                     self.assertFalse(cancels(cancel, context))
 
     def test_a_push_of_a_new_head_cancels_the_run_of_the_older_head(self):
-        for path in required_workflows():
+        for path in required_workflows() + [WORKFLOWS / name for name in OTHER_PR_WORKFLOWS]:
             group, cancel = concurrency(path.read_text(encoding="utf-8"))
             old = run("pull_request", "synchronize", head="a" * 40)
             new = run("pull_request", "synchronize", head="b" * 40)
@@ -209,6 +229,17 @@ class RequiredCheckWorkflowsTest(unittest.TestCase):
 
 
 class ExpressionReaderTest(unittest.TestCase):
+    def test_reads_a_job_name_as_its_check_run_name(self):
+        text = "on:\n  push:\njobs:\n  build:\n    name: triage\n    steps:\n      - name: not a job\n"
+        self.assertEqual(check_run_names(text), {"build", "triage"})
+
+    def test_reads_a_job_id_as_its_check_run_name(self):
+        self.assertEqual(check_run_names("on:\n  push:\njobs:\n  triage:\n    steps:\n"), {"triage"})
+
+    def test_rejects_a_job_name_with_an_expression(self):
+        with self.assertRaises(AssertionError):
+            check_run_names("on:\n  push:\njobs:\n  build:\n    name: e2e (${{ matrix.x }})\n")
+
     def test_the_fixture_tells_heads_apart(self):
         # The group tests above would pass by construction if run() ignored the head.
         group = "x-${{ github.event.pull_request.head.sha }}"

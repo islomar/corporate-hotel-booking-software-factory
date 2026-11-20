@@ -170,7 +170,7 @@ A2. Agent PR: workflow guards on the repository ID.
 
 - Change: `pr-updates.yml` line 42 and `dependabot-auto-merge.yml` line 36:
   `github.repository_id == '1447565814'` (GitHub's context docs list the ID as a string) instead of the full name.
-- Verify: the next push to `main` runs `PR updates` (not skipped); the next Dependabot PR runs the `triage` job of `Dependabot auto-merge`.
+- Verify: the next push to `main` runs `PR updates` (not skipped); the next Dependabot PR runs the `classify-dependabot-update` job of `Dependabot auto-merge`.
 - Roll back: revert.
 
 A3. Agent PR: required checks report on `merge_group`.
