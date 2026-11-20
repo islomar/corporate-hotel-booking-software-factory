@@ -26,7 +26,7 @@ flowchart TD
     rt["review-trigger.yml (Review trigger)<br/>no permissions, no secrets"]
     rv["review.yml (Review)<br/>resolve, then score-pr"]
     sc["supply-chain.yml (Supply chain)"]
-    dam["dependabot-auto-merge.yml<br/>triage"]
+    dam["dependabot-auto-merge.yml<br/>classify-dependabot-update"]
     gate{"Required checks<br/>backend, frontend, e2e, supply-chain, triage<br/>and code-owner review on CODEOWNERS paths"}
     asagent["as-agent gh pr create"]
     merge["Squash merge into main"]

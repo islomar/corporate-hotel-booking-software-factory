@@ -23,12 +23,15 @@ on:
 
 permissions: {}
 
+# CHB-234: same rule as the required checks (CHB-219). Only a push of a new head (`synchronize`, first
+# attempt) cancels, and the run it cancels belongs to an older head.
 concurrency:
   group: dependabot-auto-merge-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' && github.run_attempt == '1' }}
 
 jobs:
-  triage:
+  # Not `triage`: that name belongs to the required check of triage.yml (CHB-234).
+  classify-dependabot-update:
     # fetch-metadata also verifies that every commit on the branch comes from Dependabot.
     # After a push by a person it fails and the job stops: that person owns the merge.
     if: >-
