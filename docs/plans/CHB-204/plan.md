@@ -188,7 +188,8 @@ A4. Agent PR: `as_agent.py` accepts both names.
 
 - Change: `REPOSITORY_CANDIDATES = ("islomar-software-garden/corporate-hotel-booking-software-factory", "islomar/corporate-hotel-booking-software-factory")`.
   `installation_token` tries `GET /repos/<name>/installation` for each, takes the first 200, and passes that name to the token request.
-  `triage_review.py` keeps `as_agent.REPOSITORY` pointing at the resolved name. Unit tests for 404 then 200.
+  `as_agent.REPOSITORY` stays the personal name, which `triage_review.py` uses; after the transfer it works through GitHub's redirect
+  until C1 (CHB-221) switches it to the new name. Unit tests for 404 then 200.
 - Why: the API 301 redirect for the old name is not documented for App JWT calls. This removes the dependency.
 - Verify: `make check`; `factory/bin/as-agent gh api repos/{owner}/{repo} --jq .full_name` still prints the old name before B3.
 - Roll back: revert.
