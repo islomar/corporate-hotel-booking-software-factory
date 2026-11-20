@@ -5,7 +5,7 @@ The owner watches several agents at once and sees only each one's short label. A
 not start with the ticket key forces a question. A prose rule to put the key first gets forgotten.
 
 Denied: an Agent tool call whose `description` does not start with `CHB-<n>:` or `no-ticket:` followed by text.
-The match is case-sensitive and anchored at the first character: `Implement CHB-23`, an empty label
+The match is case-sensitive and anchored at the first character: `Implement CHB-23`, an empty label,
 `chb-23:` and a bare `CHB-23:` are denied.
 
 Unlike the other PreToolUse hooks, this one fails open: input that is not JSON, a `tool_input` that is
