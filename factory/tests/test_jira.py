@@ -106,7 +106,7 @@ TRANSITIONS = {
 }
 
 
-# CHB-153: the owner adds a "Backlog" column first, then renames "To Do" to "Ready". The project is
+# CHB-153: the human adds a "Backlog" column first, then renames "To Do" to "Ready". The project is
 # team-managed, so a column is a status: Backlog is a new status, and the rename keeps the status id.
 # "before": today's board. "half": Backlog plus To Do. "after": Backlog plus Ready.
 BACKLOG_ID = "10009"  # as on the live board, 2026-11-10
@@ -145,7 +145,7 @@ def board_config(*, state: str = "before", **limits: dict[str, int]) -> dict[str
 BOARD_LIMITS = {"In Progress": {"min": 1, "max": 3}, "In Review": {"max": 3}, "Validating": {"max": 3}, "Needs human": {"max": 3}}
 SECTIONS = {
     "Validating": "Acceptance criteria (Validating)",
-    "Needs human": "Needs human: owner steps",
+    "Needs human": "Needs human: steps",
 }
 
 
@@ -191,7 +191,7 @@ def doc(markdown: str) -> dict[str, Any]:
     return text_to_adf(markdown)
 
 
-WHY_SECTION = "## Why it matters\n\nThe owner waits for the thing."
+WHY_SECTION = "## Why it matters\n\nThe human waits for the thing."
 ALL_BOXES = tuple(box.name for box in jira.DOR_BOXES)
 DOR_SECTION = f"## Definition of Ready\n\n{jira.checklist_markdown(ALL_BOXES)}"
 READY = doc(f"{WHY_SECTION}\n\n{DOR_SECTION}\n\n## Acceptance criteria\n\n- A test shows the thing.")
@@ -382,7 +382,7 @@ class StartAssignsTheAgentTest(unittest.TestCase):
         self.assertEqual(_write_paths(fake), [MOVE_PATH])
 
     def test_a_ticket_assigned_to_someone_else_goes_to_the_agent(self) -> None:
-        fake = transition_fake("To Do", {}, assignee="owner-id")
+        fake = transition_fake("To Do", {}, assignee="human-id")
         code, _, _ = _run(["transition", "CHB-12", "In Progress"], fake)
 
         self.assertEqual(code, 0)
@@ -406,7 +406,7 @@ class StartAssignsTheAgentTest(unittest.TestCase):
     def test_a_move_back_into_in_progress_assigns_nobody(self) -> None:
         for current in ("In Review", "Needs human", "Validating"):
             with self.subTest(current):
-                fake = transition_fake(current, {}, assignee="owner-id")
+                fake = transition_fake(current, {}, assignee="human-id")
                 code, _, _ = _run(["transition", "CHB-12", "In Progress"], fake)
 
                 self.assertEqual(code, 0)
@@ -448,7 +448,7 @@ class WipLimitTest(unittest.TestCase):
                 self.assertEqual(fake.writes(), [])
 
     def test_a_wip_block_names_the_background_wait_command(self) -> None:
-        """CHB-162: the agent waits for the free slot in the background and does not hand the wait to the owner."""
+        """CHB-162: the agent waits for the free slot in the background and does not hand the wait to the human."""
         fake = transition_fake("To Do", {"In Progress": ["CHB-1", "CHB-2", "CHB-3"]})
         code, _, err = _run(["transition", "CHB-12", "In Progress"], fake)
 
@@ -622,7 +622,7 @@ class WaitCommandTest(unittest.TestCase):
         result, calls = self._run([5] * 100)
 
         self.assertEqual(result.returncode, 1)
-        self.assertEqual(result.stdout.strip(), "CHB-12: the slot is still full after 60 minutes; tell the owner")
+        self.assertEqual(result.stdout.strip(), "CHB-12: the slot is still full after 60 minutes; tell the human")
         self.assertEqual(len(calls), 31)  # tries at 0, 120, ... 3600 seconds
 
     def test_a_refusal_that_waiting_does_not_clear_ends_the_loop_at_once(self) -> None:
@@ -778,7 +778,7 @@ class TopTicketTest(unittest.TestCase):
                 self.assertEqual(out, "")
                 self.assertIn("CHB-12 has no acceptance criteria. Write them first:", err)
                 self.assertIn('factory/bin/jira section CHB-12 --heading "Acceptance criteria" --body-file FILE', err)
-                self.assertIn("ask the owner only for decisions that are the owner's", err)
+                self.assertIn("ask the human only for decisions that are the human's", err)
                 self.assertEqual(fake.writes(), [])
 
     def test_epics_and_tickets_with_open_dependencies_are_skipped_when_finding_the_top(self) -> None:
@@ -1139,6 +1139,20 @@ class RequiredSectionTest(unittest.TestCase):
                 self.assertEqual(code, 0)
                 self.assertIn(f"CHB-12 -> {target}", out)
 
+    def test_the_old_needs_human_heading_of_open_tickets_still_counts(self) -> None:
+        """CHB-194: tickets written before the rename keep "Needs human: owner steps"."""
+        fake = transition_fake("In Progress", {"In Progress": ["CHB-1"]}, description=description_with("Needs human: steps"))
+        code, out, _ = _run(["transition", "CHB-12", "Needs human"], fake)
+
+        self.assertEqual(code, 0)
+        self.assertIn("CHB-12 -> Needs human", out)
+
+    def test_the_required_headings_say_human_not_owner(self) -> None:
+        """CHB-194: the headings the wrapper asks for call the person "human"."""
+        self.assertEqual(jira.REQUIRED_SECTIONS["needs human"], "Needs human: steps")
+        for heading in jira.REQUIRED_SECTIONS.values():
+            self.assertNotIn("owner", heading.casefold())
+
     def test_heading_must_match_exactly_and_have_text_under_it(self) -> None:
         cases = {
             "other case": description_with("acceptance criteria (validating)"),
@@ -1225,10 +1239,10 @@ class AssignTest(unittest.TestCase):
 
     def test_by_account_id(self) -> None:
         fake = FakeJira({("PUT", "/rest/api/3/issue/CHB-12/assignee"): None})
-        code, _, _ = _run(["assign", "CHB-12", "--account-id", "owner-id"], fake)
+        code, _, _ = _run(["assign", "CHB-12", "--account-id", "human-id"], fake)
 
         self.assertEqual(code, 0)
-        self.assertEqual(fake.writes()[0][2], {"accountId": "owner-id"})
+        self.assertEqual(fake.writes()[0][2], {"accountId": "human-id"})
 
 
 def create_fake(parent_type: str = "Epic") -> FakeJira:
@@ -1545,14 +1559,14 @@ class ViewTest(unittest.TestCase):
                 "assignee": {"displayName": "Claude (CHB agent)"},
                 "parent": {"key": "CHB-27"},
                 "description": doc,
-                "comment": {"comments": [{"author": {"displayName": "Owner"}, "created": "t", "body": doc}]},
+                "comment": {"comments": [{"author": {"displayName": "Human"}, "created": "t", "body": doc}]},
             },
         }
         path = "/rest/api/3/issue/CHB-12?fields=summary,status,priority,assignee,issuetype,parent,description,comment,issuelinks"
         code, out, _ = _run(["view", "CHB-12"], FakeJira({("GET", path): issue}))
 
         self.assertEqual(code, 0)
-        for text in ("CHB-12 [Task] Title", "Status: In Review", "Priority: High", "Assignee: Claude (CHB agent)", "Parent: CHB-27", "--- Owner"):
+        for text in ("CHB-12 [Task] Title", "Status: In Review", "Priority: High", "Assignee: Claude (CHB agent)", "Parent: CHB-27", "--- Human"):
             self.assertIn(text, out)
         self.assertEqual(out.count("The description."), 2)
 
@@ -1885,7 +1899,7 @@ class SectionCommandTest(unittest.TestCase):
         with tempfile.NamedTemporaryFile("w") as handle:
             handle.write("1. Click Merge.\n- When: today\n- Answer: in the chat")
             handle.flush()
-            code, _, _ = _run(["section", "CHB-12", "--heading", "Needs human: owner steps", "--body-file", handle.name], fake)
+            code, _, _ = _run(["section", "CHB-12", "--heading", "Needs human: steps", "--body-file", handle.name], fake)
 
         self.assertEqual(code, 0)
 
@@ -1896,12 +1910,25 @@ class SectionCommandTest(unittest.TestCase):
             with tempfile.NamedTemporaryFile("w") as handle:
                 handle.write(body)
                 handle.flush()
-                argv = ["section", "CHB-12", "--heading", "Needs human: owner steps", "--body-file", handle.name]
+                argv = ["section", "CHB-12", "--heading", "Needs human: steps", "--body-file", handle.name]
                 code, _, err = _run(argv, fake, credentials_reader=mock.Mock(side_effect=AssertionError("read credentials")))
 
             self.assertEqual(code, 2, body)
             self.assertIn("Answer:", err)
             self.assertEqual(fake.requests, [])
+
+    def test_the_old_needs_human_heading_needs_an_answer_line_too(self) -> None:
+        """CHB-194: an open ticket may still carry "Needs human: owner steps"."""
+        fake = FakeJira({})
+        with tempfile.NamedTemporaryFile("w") as handle:
+            handle.write("1. Click Merge.")
+            handle.flush()
+            argv = ["section", "CHB-12", "--heading", "Needs human: owner steps", "--body-file", handle.name]
+            code, _, err = _run(argv, fake, credentials_reader=mock.Mock(side_effect=AssertionError("read credentials")))
+
+        self.assertEqual(code, 2)
+        self.assertIn("Answer:", err)
+        self.assertNotIn("owner", err)
 
     def test_needs_human_with_an_answer_line_is_accepted(self) -> None:
         bodies = (
@@ -1914,7 +1941,7 @@ class SectionCommandTest(unittest.TestCase):
             with tempfile.NamedTemporaryFile("w") as handle:
                 handle.write(body)
                 handle.flush()
-                argv = ["section", "CHB-12", "--heading", "Needs human: owner steps", "--body-file", handle.name]
+                argv = ["section", "CHB-12", "--heading", "Needs human: steps", "--body-file", handle.name]
                 self.assertEqual(_run(argv, fake)[0], 0, body)
 
     def test_the_validating_section_needs_no_answer_line(self) -> None:
@@ -2203,7 +2230,7 @@ class ReferenceLinkTest(unittest.TestCase):
 
 class EditCommentTest(unittest.TestCase):
     def test_refuses_a_comment_written_by_someone_else(self) -> None:
-        fake = FakeJira({ME: {"accountId": "agent"}, ("GET", COMMENT): {"id": "10071", "author": {"accountId": "owner"}}})
+        fake = FakeJira({ME: {"accountId": "agent"}, ("GET", COMMENT): {"id": "10071", "author": {"accountId": "human"}}})
         with tempfile.NamedTemporaryFile("w") as body:
             body.write("x")
             body.flush()
@@ -2380,13 +2407,13 @@ class WhyItMattersTest(unittest.TestCase):
 
     def test_why_problem(self) -> None:
         cases = {
-            "first, with text": (f"## {WHY}\n\nThe owner waits.\n\n## Plan\n\nDo it.", None),
-            "level 3 heading": (f"### {WHY}\n\nThe owner waits.", None),
-            "a list as its text": (f"## {WHY}\n\n- The owner waits.", None),
+            "first, with text": (f"## {WHY}\n\nThe human waits.\n\n## Plan\n\nDo it.", None),
+            "level 3 heading": (f"### {WHY}\n\nThe human waits.", None),
+            "a list as its text": (f"## {WHY}\n\n- The human waits.", None),
             "no description": ("", "does not start with"),
-            "intro before it": (f"Intro.\n\n## {WHY}\n\nThe owner waits.", "does not start with"),
-            "another heading first": (f"## Plan\n\nDo it.\n\n## {WHY}\n\nThe owner waits.", "does not start with"),
-            "wrong case": ("## Why It Matters\n\nThe owner waits.", "does not start with"),
+            "intro before it": (f"Intro.\n\n## {WHY}\n\nThe human waits.", "does not start with"),
+            "another heading first": (f"## Plan\n\nDo it.\n\n## {WHY}\n\nThe human waits.", "does not start with"),
+            "wrong case": ("## Why It Matters\n\nThe human waits.", "does not start with"),
             "empty": (f"## {WHY}\n\n## Plan\n\nDo it.", "is empty"),
             "empty at the end": (f"## {WHY}", "is empty"),
             "a subheading is not text": (f"## {WHY}\n\n### Detail\n\n## Plan\n\nDo it.", "is empty"),
@@ -2402,7 +2429,7 @@ class WhyItMattersTest(unittest.TestCase):
     def test_create_without_the_section_exits_2_before_any_request(self) -> None:
         for name, description in {
             "missing": "Line one.\n\nAC1: works.",
-            "not first": f"Intro.\n\n## {WHY}\n\nThe owner waits.",
+            "not first": f"Intro.\n\n## {WHY}\n\nThe human waits.",
             "empty": f"## {WHY}\n\n## Acceptance criteria\n\n- AC1.",
         }.items():
             with self.subTest(name):
@@ -2414,7 +2441,7 @@ class WhyItMattersTest(unittest.TestCase):
                 self.assertEqual(fake.requests, [])
 
     def test_create_with_the_section_creates(self) -> None:
-        code, out, _, fake = _create_with(f"## {WHY}\n\nThe owner waits.\n\n## Acceptance criteria\n\n- AC1.")
+        code, out, _, fake = _create_with(f"## {WHY}\n\nThe human waits.\n\n## Acceptance criteria\n\n- AC1.")
 
         self.assertEqual(code, 0)
         self.assertEqual(out.splitlines()[0], "CHB-200")
@@ -2563,7 +2590,7 @@ class SortTodoTest(unittest.TestCase):
         """The search can miss a ticket created a moment ago: it is sorted as the last To Do ticket."""
         fake = create_fake()
         fake.routes[("POST", SEARCH)] = keys_answer({"To Do": ["CHB-1", "CHB-2"]}, priorities={"CHB-1": "Low", "CHB-2": "Low"})
-        code, out, _, _ = _create_with(f"## {WHY}\n\nThe owner waits.", fake, priority="High")
+        code, out, _, _ = _create_with(f"## {WHY}\n\nThe human waits.", fake, priority="High")
 
         self.assertEqual(code, 0)
         self.assertEqual(out.splitlines()[0], "CHB-200")
@@ -2573,7 +2600,7 @@ class SortTodoTest(unittest.TestCase):
     def test_a_failed_sort_after_create_is_a_notice_and_exits_0(self) -> None:
         fake = create_fake()
         fake.routes[("POST", SEARCH)] = 500
-        code, out, _, _ = _create_with(f"## {WHY}\n\nThe owner waits.", fake)
+        code, out, _, _ = _create_with(f"## {WHY}\n\nThe human waits.", fake)
 
         self.assertEqual(code, 0)
         self.assertEqual(out.splitlines()[0], "CHB-200")
@@ -2625,7 +2652,7 @@ class SectionFirstTest(unittest.TestCase):
 
     def _rest(self) -> list[dict[str, Any]]:
         link = {"type": "text", "text": "the docs", "marks": [{"type": "link", "attrs": {"href": "https://x.y/z", "title": "t"}}]}
-        mention = {"type": "mention", "attrs": {"id": "a1", "text": "@Owner"}}
+        mention = {"type": "mention", "attrs": {"id": "a1", "text": "@Human"}}
         return [
             _heading("Problem"),
             _para("Intro."),
@@ -2640,9 +2667,9 @@ class SectionFirstTest(unittest.TestCase):
     def test_inserts_the_section_first_and_keeps_the_rest_byte_for_byte(self) -> None:
         rest = self._rest()
         before = {"type": "doc", "version": 1, "content": rest}
-        after = replace_section(json.loads(json.dumps(before)), WHY, "The owner waits.", first=True)
+        after = replace_section(json.loads(json.dumps(before)), WHY, "The human waits.", first=True)
 
-        self.assertEqual(after["content"][:2], [_heading(WHY), _para("The owner waits.")])
+        self.assertEqual(after["content"][:2], [_heading(WHY), _para("The human waits.")])
         self.assertEqual(json.dumps(after["content"][2:]), json.dumps(rest))
         self.assertEqual({k: v for k, v in after.items() if k != "content"}, {"type": "doc", "version": 1})
 
@@ -2664,7 +2691,7 @@ class SectionFirstTest(unittest.TestCase):
         rest = self._rest()
         fake = FakeJira({("GET", DESCRIPTION_PATH): {"fields": {"description": _doc(*rest)}}, ("PUT", "/rest/api/3/issue/CHB-12"): None})
         with tempfile.NamedTemporaryFile("w") as handle:
-            handle.write("The owner waits.")
+            handle.write("The human waits.")
             handle.flush()
             code, out, _ = _run(["section", "CHB-12", "--heading", WHY, "--first", "--body-file", handle.name], fake)
 
@@ -2672,13 +2699,13 @@ class SectionFirstTest(unittest.TestCase):
         self.assertIn("set", out)
         (_, _, sent), = fake.writes()
         content = sent["fields"]["description"]["content"]
-        self.assertEqual(content[:2], [_heading(WHY), _para("The owner waits.")])
+        self.assertEqual(content[:2], [_heading(WHY), _para("The human waits.")])
         self.assertEqual(json.dumps(content[2:]), json.dumps(rest))
 
     def test_the_why_heading_always_goes_first(self) -> None:
         fake = FakeJira({("GET", DESCRIPTION_PATH): {"fields": {"description": _doc(_para("Intro."))}}, ("PUT", "/rest/api/3/issue/CHB-12"): None})
         with tempfile.NamedTemporaryFile("w") as handle:
-            handle.write("The owner waits.")
+            handle.write("The human waits.")
             handle.flush()
             _run(["section", "CHB-12", "--heading", WHY, "--body-file", handle.name], fake)
 
@@ -2718,7 +2745,7 @@ def _create_args(
 ) -> tuple[int, str, str]:
     """`create` with a valid description; priority None leaves --priority out."""
     with tempfile.NamedTemporaryFile("w") as handle:
-        handle.write(f"## {WHY}\n\nThe owner waits.")
+        handle.write(f"## {WHY}\n\nThe human waits.")
         handle.flush()
         argv = ["create", "--parent", "CHB-27", "--summary", "Do it", "--description-file", handle.name]
         argv += [] if priority is None else ["--priority", priority]
@@ -2862,7 +2889,7 @@ class TriggerTest(unittest.TestCase):
     def test_a_failed_trigger_comment_says_the_ticket_moved(self) -> None:
         fake = ready_fake()
         fake.routes[("POST", COMMENT_PATH)] = 500
-        code, _, err = _run(["ready", "CHB-12", "--trigger", "2. the owner asked"], fake)
+        code, _, err = _run(["ready", "CHB-12", "--trigger", "2. the human asked"], fake)
 
         self.assertEqual(code, 1)
         self.assertIn("CHB-12 moved to Ready, but the trigger comment failed", err)
@@ -2902,7 +2929,7 @@ class TriggerTest(unittest.TestCase):
 
     def test_a_trigger_on_no_move_exits_2(self) -> None:
         fake = transition_fake("Ready", state="after")
-        code, _, err = _run(["transition", "CHB-12", "Ready", "--trigger", "2. the owner asked"], fake)
+        code, _, err = _run(["transition", "CHB-12", "Ready", "--trigger", "2. the human asked"], fake)
 
         self.assertEqual(code, 2)
         self.assertIn("transition takes no --trigger: factory/bin/jira ready CHB-12", err)
@@ -2962,7 +2989,7 @@ class CreateInBacklogTest(unittest.TestCase):
 
     def test_ready_and_trigger_are_refused_and_point_to_the_ready_command(self) -> None:
         """CHB-154: `ready` is the only way into Ready, so `create` always lands in Backlog."""
-        for extra in (["--ready"], ["--trigger", "1. broken"], ["--ready", "--trigger", "2. the owner asked"]):
+        for extra in (["--ready"], ["--trigger", "1. broken"], ["--ready", "--trigger", "2. the human asked"]):
             with self.subTest(extra):
                 fake = backlog_create_fake("after", "Ready")
                 code, out, err = _create_args(fake, *extra, credentials_reader=_no_credentials)
@@ -3073,6 +3100,33 @@ class TaskListTest(unittest.TestCase):
 
         self.assertFalse(jira.has_acceptance_criteria(description))
         self.assertIsNotNone(jira.why_problem(description))
+
+
+class HumanWordTest(unittest.TestCase):
+    """CHB-194: the wrapper writes "human" in the checklist and still reads the old box text of open tickets."""
+
+    def test_the_checklist_it_writes_says_human_not_owner(self) -> None:
+        text = jira.checklist_markdown()
+
+        self.assertNotIn("owner", text.casefold())
+        self.assertIn("No human decision pending", text)
+        self.assertIn("human asked", text)
+
+    def test_reads_the_old_owner_box_of_an_open_ticket(self) -> None:
+        old = jira.checklist_markdown(ALL_BOXES).replace("No human decision", "No owner decision").replace("human asked", "owner asked")
+        description = doc(f"{WHY_SECTION}\n\n## Definition of Ready\n\n{old}")
+
+        self.assertEqual(jira.box_states(description), dict.fromkeys(ALL_BOXES, "DONE"))
+        problems = jira.readiness_problems("CHB-12", description, [])
+        self.assertFalse([p for p in problems if "decision" in p], problems)
+
+    def test_ticks_the_old_owner_box_of_an_open_ticket(self) -> None:
+        old = jira.checklist_markdown().replace("No human decision", "No owner decision")
+        description = doc(f"{WHY_SECTION}\n\n## Definition of Ready\n\n{old}")
+
+        ticked = jira.tick_boxes(description, {"decision"})
+
+        self.assertEqual((jira.box_states(ticked) or {})["decision"], "DONE")
 
 
 class AddChecklistTest(unittest.TestCase):
@@ -3285,7 +3339,7 @@ class TickTest(unittest.TestCase):
 class ReadyCommandTest(unittest.TestCase):
     """CHB-154 AC1: `ready` re-verifies the checklist and moves a Backlog ticket to Ready with its trigger."""
 
-    TRIGGER = ["--trigger", "2. the owner asked for it on 2026-11-10"]
+    TRIGGER = ["--trigger", "2. the human asked for it on 2026-11-10"]
 
     def test_all_boxes_pass_it_ticks_the_verified_ones_moves_and_comments(self) -> None:
         fake = ready_fake()
@@ -3296,7 +3350,7 @@ class ReadyCommandTest(unittest.TestCase):
         self.assertEqual(_write_paths(fake), [ISSUE_PATH, MOVE_PATH, COMMENT_PATH])
         (ticked,) = _put_descriptions(fake)
         self.assertEqual(jira.box_states(ticked), dict.fromkeys(ALL_BOXES, "DONE"))
-        self.assertEqual(_comments(fake), ["Moved to Ready. Trigger: 2. the owner asked for it on 2026-11-10"])
+        self.assertEqual(_comments(fake), ["Moved to Ready. Trigger: 2. the human asked for it on 2026-11-10"])
 
     def test_the_ticks_go_on_a_fresh_read_of_the_description(self) -> None:
         """An edit made while `ready` checks and reads the board is kept."""
@@ -3444,7 +3498,7 @@ def ready_board(**limits: dict[str, int]) -> dict[str, Any]:
 class ReadyMaximumTest(unittest.TestCase):
     """CHB-157 AC1: a move into Ready is refused while Ready holds its board max; epics are not counted."""
 
-    TRIGGER = ["--trigger", "2. the owner asked for it on 2026-11-10"]
+    TRIGGER = ["--trigger", "2. the human asked for it on 2026-11-10"]
 
     def test_ready_is_refused_at_the_max_and_names_the_tickets(self) -> None:
         fake = ready_fake(board=ready_board(), by_status={"Ready": TEN})
@@ -3670,7 +3724,7 @@ class RefillCandidatesTest(unittest.TestCase):
     def test_says_so_when_no_ticket_can_meet_the_definition_of_ready(self) -> None:
         self.assertEqual(
             self.candidates(backlog_fake([])),
-            ["  none: no Backlog ticket can meet the Definition of Ready; tell the owner"],
+            ["  none: no Backlog ticket can meet the Definition of Ready; tell the human"],
         )
 
 
@@ -3713,7 +3767,7 @@ class RefillTriggerTest(unittest.TestCase):
 
     def test_the_other_triggers_work_at_the_min(self) -> None:
         fake = ready_fake(board=ready_board(), by_status={"Ready": ["CHB-1", "CHB-2", "CHB-3"]})
-        code, _, err = _run(["ready", "CHB-12", "--trigger", "2. the owner asked"], fake)
+        code, _, err = _run(["ready", "CHB-12", "--trigger", "2. the human asked"], fake)
 
         self.assertEqual(code, 0, err)
 
@@ -3721,7 +3775,7 @@ class RefillTriggerTest(unittest.TestCase):
         self.assertFalse(jira.is_refill_trigger("52 tickets failed"))
         self.assertTrue(jira.is_refill_trigger("5. Ready is below its minimum"))
         self.assertTrue(jira.is_refill_trigger(" 5: refill"))
-        self.assertFalse(jira.is_refill_trigger("2. the owner asked"))
+        self.assertFalse(jira.is_refill_trigger("2. the human asked"))
         self.assertFalse(jira.is_refill_trigger(None))
 
 
@@ -3762,7 +3816,7 @@ class ExpediteTest(unittest.TestCase):
         self.assertIn("Expedite: production bug: bookings fail with HTTP 500", comment)
         lines = out.splitlines()
         self.assertEqual(lines[0], "CHB-200")
-        self.assertIn("CHB-200 -> In Progress (expedite). Tell the owner now:", lines[1])
+        self.assertIn("CHB-200 -> In Progress (expedite). Tell the human now:", lines[1])
 
     def test_a_second_open_expedite_ticket_is_refused_before_any_write(self) -> None:
         fake = expedite_fake({"In Progress": ["CHB-150"]}, priorities={"CHB-150": "Highest"})
@@ -3850,7 +3904,7 @@ class ExpediteTest(unittest.TestCase):
                 code, out, _ = _create_args(fake, *EXPEDITE, priority=None)
 
                 self.assertEqual(code, 0)
-                self.assertIn("CHB-200 -> In Progress (expedite). Tell the owner now:", out)
+                self.assertIn("CHB-200 -> In Progress (expedite). Tell the human now:", out)
                 self.assertIn(command, out)
                 self.assertNotIn("Jira UI", out)
 

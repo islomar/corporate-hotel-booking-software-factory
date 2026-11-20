@@ -17,6 +17,7 @@
   - [Hook: commands for the owner work from any folder](#hook-commands-for-the-owner-work-from-any-folder)
   - [Hook: act on the WIP minimums](#hook-act-on-the-wip-minimums)
   - [Hook: triage review findings of agent PRs](#hook-triage-review-findings-of-agent-prs)
+  - [Hook: call the person "the human"](#hook-call-the-person-the-human)
   - [Hook: no personal agent memory](#hook-no-personal-agent-memory)
   - [Hook: branch names follow the ticket key](#hook-branch-names-follow-the-ticket-key)
   - [Hook: related tests only while iterating](#hook-related-tests-only-while-iterating)
@@ -417,6 +418,7 @@ flowchart TD
         CO["check_owner_commands.py<br/>matcher: none<br/>flags owner commands that depend on the current folder"]
         CW["check_wip_minimums.py<br/>matcher: none<br/>refuses while a board column is below its minimum"]
         CT["check_untriaged_reviews.py<br/>matcher: none<br/>refuses while an agent PR has untriaged review findings"]
+        CH["check_human_word.py<br/>matcher: none<br/>refuses a reply that calls the person owner, not the human"]
     end
     SS --> PRE
     PRE --> POST
@@ -484,6 +486,20 @@ It fails open: a GitHub error (no `gh`, a 6-second timeout, a failed call, outpu
 All calls share a 20-second deadline, below the 30-second hook timeout, so the hook warns before Claude Code would kill it.
 It refuses once per session for the same findings, and a new review refuses again
 (state in `<temp dir>/chb-untriaged-reviews-<uid>/`, folder override `CHB_UNTRIAGED_REVIEWS_STATE_DIR`). Tests: `factory/tests/test_check_untriaged_reviews.py`.
+
+## Hook: call the person "the human"
+
+`.claude/settings.json` runs `factory/hooks/check_human_word.py` when the agent finishes a reply (Stop hook, CHB-194).
+On 2026-11-13 the human asked to be called "the human" everywhere: in the chat, Jira, docs and commit messages.
+
+The hook reads the reply text in `last_assistant_message`, outside fenced code blocks and inline code.
+It exits 2 and names each line that uses `owner`, `owners` or `owner's` as a word, with "the human" as the word to use.
+Technical terms pass: `CODEOWNERS`, "repository owner", "repo owner", "organization owner", `owner/repo`, "root-owned".
+To quote the old word, put it in backticks.
+
+It fails open: bad input, an unusable state folder or any other error prints at most one line and lets the turn end.
+It refuses once per session for the same findings (state in `<temp dir>/chb-human-word-<uid>/`, folder override `CHB_HUMAN_WORD_STATE_DIR`).
+Tests: `factory/tests/test_check_human_word.py`.
 
 ## Hook: no personal agent memory
 
