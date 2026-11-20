@@ -80,7 +80,7 @@ The list must match exactly. A missing or an extra address fails.
 `github/tests/guards.tftest.hcl` checks each guard against stubbed GitHub responses. It needs no credentials.
 `gcp/guards.tf` fails the plan when the planner holds a role outside a read-only allowlist or the deployer's `refs/heads/main` condition changes (CHB-81).
 Both Workload Identity conditions trust the repository ID (`github_repository_id` in `gcp/variables.tf`), not its name (CHB-220).
-The ID is expected to stay the same when the repository moves to another owner or gets a new name; no GitHub source states it, and CHB-221 checks it after the transfer.
+The ID is expected to stay the same when the repository moves to another account or organization, or gets a new name; no GitHub source states it, and CHB-221 checks it after the transfer.
 The bindings on the old name stay until CHB-204 removes them.
 `gcp/tests/guards.tftest.hcl` breaks each guard with a mocked Google provider.
 `make check` and the `backend` job of CI run both folders (`scripts/check_guard_tests.py`, CHB-158, CHB-166). A PR that breaks a guard shows `backend` failing.
