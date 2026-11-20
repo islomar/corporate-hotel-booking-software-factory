@@ -73,7 +73,7 @@ override_resource {
 run "all_guards_pass" {
   command = plan
 
-  # CHB-220: both conditions and the new bindings name the repository ID, which a transfer keeps.
+  # CHB-220: both conditions and the new bindings name the repository ID, which a transfer is expected to keep (CHB-221 checks it).
   # The old name bindings stay until CHB-204 removes them.
   assert {
     condition     = google_iam_workload_identity_pool_provider.github.attribute_condition == "assertion.repository_id=='1447565814' && assertion.ref=='refs/heads/main'"

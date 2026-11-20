@@ -74,7 +74,7 @@ resource "google_service_account_iam_member" "github_main_impersonates_deployer"
   member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.repository/${var.github_repository}"
 }
 
-# The same trust by repository ID, which survives the transfer to the organization (CHB-220, CHB-204).
+# The same trust by repository ID, which a transfer to the organization is expected to keep (checked by CHB-221).
 # The name binding above stays until CHB-204 removes it: changing its `member` would replace it.
 resource "google_service_account_iam_member" "github_main_impersonates_deployer_by_id" {
   service_account_id = google_service_account.deployer.name
