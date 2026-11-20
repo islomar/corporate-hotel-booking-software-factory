@@ -106,6 +106,21 @@ run "main_ruleset_requires_up_to_date_branches" {
   }
 }
 
+# CHB-214: a dependency review that only warns protects nothing. Dependabot and agent PRs merge
+# without a person, so a PR that adds a known-vulnerable dependency must not be able to merge.
+# The list repeats local.required_checks on purpose: removing a check by accident must fail here.
+run "main_ruleset_requires_every_check" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for check in ["backend", "frontend", "e2e", "supply-chain", "triage", "dependency-review"] :
+      contains([for c in github_repository_ruleset.main.rules[0].required_status_checks[0].required_check : c.context], check)
+    ])
+    error_message = "The main ruleset must require backend, frontend, e2e, supply-chain, triage and dependency-review (CHB-214)."
+  }
+}
+
 run "repository_topics_fit_github_and_name_the_community" {
   command = plan
 
