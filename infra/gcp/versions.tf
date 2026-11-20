@@ -1,10 +1,8 @@
+# Version pins only. Dependabot updates this file, and it has no code owner: the required
+# check `supply-chain` decides (ADR-ebe6, CHB-207). Configuration that is not a version pin
+# lives in code-owned files: the state backend in backend.tf, the provider in providers.tf.
 terraform {
   required_version = "~> 1.17.0"
-
-  backend "gcs" {
-    bucket = "chb-factory-a92932-tfstate"
-    prefix = "gcp"
-  }
 
   required_providers {
     google = {
@@ -13,12 +11,4 @@ terraform {
       version = "~> 8.11.0"
     }
   }
-}
-
-provider "google" {
-  project = var.project_id
-  region  = var.region
-  # Budgets API calls with user credentials need a quota project.
-  user_project_override = true
-  billing_project       = var.project_id
 }

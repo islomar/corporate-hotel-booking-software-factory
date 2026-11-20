@@ -73,6 +73,11 @@ SUPPLY_CHAIN_NAMES = (
     ".nvmrc",
     ".node-version",
     ".python-version",
+    # Terraform: provider lockfile and version constraints (CHB-207). `versions.tf` holds
+    # only `required_version` and `required_providers`; the backend and the provider
+    # block live in code-owned files (scripts/tests/test_codeowners.py checks it).
+    ".terraform.lock.hcl",
+    "versions.tf",
 )
 
 # Image build and compose files, matched in any case: Docker and Podman accept any name
