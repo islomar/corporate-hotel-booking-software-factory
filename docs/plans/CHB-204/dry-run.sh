@@ -301,7 +301,7 @@ step() {
         S[deploy_bind]=$(echo "${S[deploy_bind]}" | xargs -n1 | grep -v '^repository_id/' | xargs)
         S[plan_bind]=$(echo "${S[plan_bind]}" | xargs -n1 | grep -v '^repository_id/' | xargs)
         S[mapping]=$(echo "${S[mapping]}" | xargs -n1 | grep -v '^repository_id$' | xargs) ;;
-    UNDO_A3) for k in trig_ci trig_supply trig_triage; do S[$k]=$(echo "${S[$k]}" | xargs -n1 | grep -vx merge_group | xargs); done ;;
+    UNDO_A3) for k in trig_ci trig_supply trig_triage; do S[$k]=${S[$k]//merge_group /}; done ;;
     *) echo "unknown step $s"; exit 2 ;;
   esac
 }

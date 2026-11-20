@@ -67,15 +67,21 @@ def value(term: str, context: dict[str, str]) -> str:
 
 
 def evaluate(expression: str, context: dict[str, str]) -> str | bool:
-    """Evaluate `a || b` or `a == 'x' && b == 'y'` as GitHub does for these forms."""
+    """Evaluate `a || b`, or `a == 'x' && b != 'y' && success()`, as GitHub does for these forms.
+
+    `success()` counts as true: the tests ask what a step does when the steps before it passed.
+    """
     expression = expression.strip()
-    if "&&" in expression or "==" in expression:
+    if "&&" in expression or "==" in expression or "!=" in expression:
         assert "||" not in expression, f"unsupported mix of && and || in {expression!r}"
         for clause in expression.split("&&"):
-            left, sep, right = clause.partition("==")
+            if clause.strip() == "success()":
+                continue
+            op = "!=" if "!=" in clause else "=="
+            left, sep, right = clause.partition(op)
             assert sep, f"unsupported clause {clause!r}"
             # GitHub compares strings ignoring case.
-            if value(left, context).lower() != value(right, context).lower():
+            if (value(left, context).lower() == value(right, context).lower()) != (op == "=="):
                 return False
         return True
     for term in expression.split("||"):
@@ -179,6 +185,9 @@ class RequiredCheckWorkflowsTest(unittest.TestCase):
                 self.assertNotRegex(path.read_text(encoding="utf-8"), re.compile(r"^ +concurrency:", re.MULTILINE))
 
     def test_on_merge_group_no_step_reads_the_pull_request_payload(self):
+        def steps_event(step: str) -> tuple[str, str]:
+            return ("pull_request_review", "submitted") if "pull_request_review" in step else ("pull_request", "synchronize")
+
         for name in PR_PAYLOAD_WORKFLOWS:
             text = (WORKFLOWS / name).read_text(encoding="utf-8")
             steps = re.split(r"^      - ", text.split("\n    steps:\n", 1)[1], flags=re.MULTILINE)[1:]
@@ -189,8 +198,8 @@ class RequiredCheckWorkflowsTest(unittest.TestCase):
                 with self.subTest(workflow=name, step=step.splitlines()[0]):
                     condition = re.search(r"^(?:        )?if: (.+)$", step, re.MULTILINE)
                     self.assertIsNotNone(condition, "a step that reads github.event.pull_request needs an `if:`")
-                    self.assertRegex(condition.group(1), r"github\.event_name (!= 'merge_group'|== 'pull_request_review')")
-
+                    self.assertIs(evaluate(condition.group(1), run("merge_group", "checks_requested")), False)
+                    self.assertIs(evaluate(condition.group(1), run(*steps_event(step))), True, "the step still runs on its own event")
 
     def test_deploy_ignores_ci_runs_of_the_merge_queue(self):
         # CI now also runs on `merge_group`; only a CI run of a push to main may deploy.
@@ -211,13 +220,17 @@ class ExpressionReaderTest(unittest.TestCase):
     def test_reads_or_with_a_fallback(self):
         self.assertEqual(evaluate("github.event.pull_request.number || github.ref", {"github.ref": "r"}), "r")
 
+    def test_reads_not_equal_and_success(self):
+        self.assertIs(evaluate("success() && github.event_name != 'merge_group'", {"github.event_name": "merge_group"}), False)
+        self.assertIs(evaluate("success() && github.event_name != 'merge_group'", {"github.event_name": "pull_request"}), True)
+
     def test_reads_and_of_equalities_ignoring_case(self):
         self.assertIs(evaluate("github.event_name == 'Push' && github.run_attempt == '1'", {"github.event_name": "push", "github.run_attempt": "1"}), True)
         self.assertIs(evaluate("github.event_name == 'push'", {"github.event_name": "merge_group"}), False)
 
     def test_rejects_forms_it_does_not_know(self):
         with self.assertRaises(AssertionError):
-            evaluate("github.event_name != 'push'", {})
+            evaluate("contains(github.ref, 'push')", {})
         with self.assertRaises(AssertionError):
             cancels("${{ !cancelled() }}", {})
 
