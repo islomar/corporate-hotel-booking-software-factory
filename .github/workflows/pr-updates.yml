@@ -39,7 +39,8 @@ concurrency:
 jobs:
   update:
     name: update
-    if: github.repository == 'islomar/corporate-hotel-booking-software-factory'
+    # The repository ID survives the move to the organization (CHB-204); the name does not.
+    if: github.repository_id == '1447565814'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: agent-pr-updates

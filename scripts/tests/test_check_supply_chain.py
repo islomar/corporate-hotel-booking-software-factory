@@ -711,5 +711,16 @@ class GithubGetTest(unittest.TestCase):
             self.assertEqual(github_get("/y", "t"), {"a": 1})
 
 
+class WorkflowOwnerTest(unittest.TestCase):
+    """CHB-218: the approving human is a fixed login, not the repository owner (an organization after CHB-204)."""
+
+    def test_the_workflow_passes_the_human_login(self):
+        workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/supply-chain.yml").read_text()
+
+        self.assertNotIn("${{ github.repository_owner }}", workflow)
+        self.assertIn(f"OWNER: {OWNER}\n", workflow)
+        self.assertIn('--owner "$OWNER"', workflow)
+
+
 if __name__ == "__main__":
     unittest.main()

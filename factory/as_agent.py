@@ -45,6 +45,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -57,6 +58,12 @@ import op_service_account  # noqa: E402
 CLIENT_ID = "Iv23li3OLZUlWY7ZMLdr"
 APP_SLUG = "chb-factory-agent"
 REPOSITORY = "islomar/corporate-hotel-booking-software-factory"
+# CHB-204 moves the repository to the organization. The App installation is looked up under
+# each name in turn, so the agent works before and after the transfer (CHB-218).
+REPOSITORY_CANDIDATES = (
+    "islomar-software-garden/corporate-hotel-booking-software-factory",
+    "islomar/corporate-hotel-booking-software-factory",
+)
 KEY_COMMAND = f"op document get chb-factory-agent.2026-11-06.private-key --vault {op_service_account.VAULT}"
 KEY_TIMEOUT_SECONDS = 60
 EXIT_NO_KEY = 3
@@ -171,16 +178,28 @@ def read_private_key_with_override(
     return result.stdout
 
 
-def installation_token(client_id: str, private_key: bytes) -> str:
+class NoInstallationError(Exception):
+    """The App is installed on none of REPOSITORY_CANDIDATES."""
+
+
+def installation_token(client_id: str, private_key: bytes, api: Callable[..., Any] = _api) -> str:
+    """A token for the first name in REPOSITORY_CANDIDATES whose installation answers. Only a 404 tries the next name."""
     app_jwt = _sign(jwt_signing_input(client_id, int(time.time())), private_key)
-    installation = _api("GET", f"/repos/{REPOSITORY}/installation", f"Bearer {app_jwt}")
-    token = _api(
-        "POST",
-        f"/app/installations/{installation['id']}/access_tokens",
-        f"Bearer {app_jwt}",
-        {"repositories": [REPOSITORY.split("/")[1]]},
-    )
-    return str(token["token"])
+    for repository in REPOSITORY_CANDIDATES:
+        try:
+            installation = api("GET", f"/repos/{repository}/installation", f"Bearer {app_jwt}")
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                continue
+            raise
+        token = api(
+            "POST",
+            f"/app/installations/{installation['id']}/access_tokens",
+            f"Bearer {app_jwt}",
+            {"repositories": [repository.split("/")[1]]},
+        )
+        return str(token["token"])
+    raise NoInstallationError(f"the App {APP_SLUG} is not installed on {' or '.join(REPOSITORY_CANDIDATES)}")
 
 
 def _is_pr_create(argv: list[str]) -> bool:

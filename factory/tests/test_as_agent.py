@@ -4,16 +4,21 @@ import json
 import subprocess
 import sys
 import unittest
+import urllib.error
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import as_agent
 from as_agent import (
     EXIT_NO_AUTO_MERGE,
+    REPOSITORY_CANDIDATES,
     KEY_COMMAND,
     AppKeyError,
     agent_env,
+    installation_token,
     jwt_signing_input,
     noreply_email,
     read_private_key,
@@ -238,6 +243,82 @@ class AutoMergeTest(unittest.TestCase):
             (call,) = fake.calls
             self.assertEqual(call["command"], argv)
             self.assertNotIn("stdout", call)
+
+
+def _http_error(code: int) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError("https://api.github.com/x", code, "error", {}, None)  # type: ignore[arg-type]
+
+
+def _api(answers: dict[str, object]) -> Any:
+    """A fake as_agent._api: each path answers a dict, or raises the HTTPError it maps to."""
+    calls: list[tuple[str, str, object]] = []
+
+    def api(method: str, path: str, auth: str, body: object | None = None) -> object:
+        calls.append((method, path, body))
+        answer = answers[path]
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    api.calls = calls  # type: ignore[attr-defined]
+    return api
+
+
+class InstallationTokenTest(unittest.TestCase):
+    """CHB-218: the App installation is found under the organization name, then the personal one."""
+
+    NEW, OLD = REPOSITORY_CANDIDATES
+
+    def _token(self, api: Any) -> str:
+        with mock.patch.object(as_agent, "_sign", lambda signing_input, key: "jwt"):
+            return installation_token("Iv23client", b"key", api=api)
+
+    def test_the_organization_name_comes_first_then_the_personal_one(self) -> None:
+        self.assertEqual(
+            REPOSITORY_CANDIDATES,
+            (
+                "islomar-software-garden/corporate-hotel-booking-software-factory",
+                "islomar/corporate-hotel-booking-software-factory",
+            ),
+        )
+
+    def test_a_404_on_the_first_name_tries_the_next(self) -> None:
+        api = _api(
+            {
+                f"/repos/{self.NEW}/installation": _http_error(404),
+                f"/repos/{self.OLD}/installation": {"id": 7},
+                "/app/installations/7/access_tokens": {"token": "ghs_x"},
+            }
+        )
+
+        self.assertEqual(self._token(api), "ghs_x")
+        self.assertEqual(
+            api.calls,
+            [
+                ("GET", f"/repos/{self.NEW}/installation", None),
+                ("GET", f"/repos/{self.OLD}/installation", None),
+                ("POST", "/app/installations/7/access_tokens", {"repositories": ["corporate-hotel-booking-software-factory"]}),
+            ],
+        )
+
+    def test_the_first_name_that_answers_200_wins(self) -> None:
+        api = _api({f"/repos/{self.NEW}/installation": {"id": 9}, "/app/installations/9/access_tokens": {"token": "ghs_y"}})
+
+        self.assertEqual(self._token(api), "ghs_y")
+        self.assertEqual([path for _, path, _ in api.calls], [f"/repos/{self.NEW}/installation", "/app/installations/9/access_tokens"])
+
+    def test_an_error_other_than_404_stops(self) -> None:
+        api = _api({f"/repos/{self.NEW}/installation": _http_error(401)})
+
+        with self.assertRaises(urllib.error.HTTPError):
+            self._token(api)
+        self.assertEqual(len(api.calls), 1)
+
+    def test_no_installation_under_any_name_names_them_all(self) -> None:
+        api = _api({f"/repos/{name}/installation": _http_error(404) for name in REPOSITORY_CANDIDATES})
+
+        with self.assertRaisesRegex(as_agent.NoInstallationError, "islomar-software-garden/.*islomar/"):
+            self._token(api)
 
 
 class NoreplyEmailTest(unittest.TestCase):

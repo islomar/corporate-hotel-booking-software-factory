@@ -1,14 +1,19 @@
 """CHB-141: the human's agreement with the review verdict, ADR-ea8c stage 1."""
 
+import contextlib
+import io
 import json
 import sys
 import unittest
 from fractions import Fraction
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "review"))
 
+import agreement
 from agreement import (
+    HUMAN_LOGIN,
     REVIEWER,
     Tally,
     answer,
@@ -130,6 +135,28 @@ class FetchTest(unittest.TestCase):
         self.assertEqual([p["number"] for p in prs], [3])
         self.assertEqual(answer(prs[0], HUMAN), "agree")
         self.assertNotIn("repos/o/r/issues/1/comments?per_page=100", calls)
+
+
+class MainTest(unittest.TestCase):
+    """CHB-218: the human's reactions count while an organization owns the repository."""
+
+    def test_the_human_login_is_a_constant(self) -> None:
+        self.assertEqual(HUMAN_LOGIN, "islomar")
+
+    def test_counts_the_human_reactions_under_an_organization_owner(self) -> None:
+        def gh_text(*args: str) -> str:
+            self.fail(f"the repository owner is not read: gh {args}")
+
+        out = io.StringIO()
+        with (
+            mock.patch.object(agreement, "_gh_text", gh_text),
+            mock.patch.object(agreement, "fetch_prs", lambda gh, repo, since: [_pr(71)]),
+            contextlib.redirect_stdout(out),
+        ):
+            code = agreement.main(["--repo", "islomar-software-garden/r"])
+
+        self.assertEqual(code, 0)
+        self.assertIn("PRs reviewed: 1; agree 0, disagree 1, no answer 0.", out.getvalue())
 
 
 if __name__ == "__main__":
