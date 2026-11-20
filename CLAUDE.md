@@ -20,6 +20,7 @@ All work is tracked in Jira space `CHB` (see `TODO.md`). Move tickets only as `d
 - At session start, if the context says "Rules health check is due", follow `docs/process/rules-health.md` after the owner's current request.
 - A dependency update that breaks something gets an automated test in the fix. See `docs/knowledge/dependency-update-breaks-get-a-test.md`.
 - Work outside-in: an acceptance test first, then unit tests, one public method at a time.
+- Start every agent label (the Agent tool's `description`) with `CHB-<n>:` or `no-ticket:`. A PreToolUse hook (`factory/hooks/deny_unlabeled_agents.py`) denies other labels.
 - Branch from `main`. Start dependent work after the parent PR merges.
   A PR that must build on an open PR uses `--base <parent-branch>`, never `--base main`. GitHub retargets it to `main` when the parent merges.
 - Push branches and open PRs through `factory/bin/as-agent` (for example `factory/bin/as-agent gh pr create`), never with the owner's login. See ADR-d7b7.

@@ -78,6 +78,15 @@
         ]
       },
       {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I \"${CLAUDE_PROJECT_DIR}/factory/hooks/deny_unlabeled_agents.py\""
+          }
+        ]
+      },
+      {
         "matcher": "Read|Bash",
         "hooks": [
           {
