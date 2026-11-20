@@ -146,6 +146,13 @@ class StaleHeadTest(unittest.TestCase):
         self.assertIn("backend/src/chb/app.py", verdict.message)
         self.assertNotIn("Run factory/bin/triage-review", verdict.message)
 
+    def test_the_message_names_the_code_paths_first(self) -> None:
+        """Review of PR #159: the paths that made the head stale must not hide behind docs."""
+        docs = [f"docs/{n}.md" for n in range(6)]
+        verdict = tr.evaluate([review(), triage()], head=NEW_SHA, changed=Changes([*docs, "factory/x.py"]))
+        self.assertFalse(verdict.ok)
+        self.assertIn("factory/x.py", verdict.message)
+
     def test_a_new_code_commit_fails_even_when_the_old_review_had_no_findings(self) -> None:
         verdict = tr.evaluate([review(findings="No findings.\n")], head=NEW_SHA, changed=Changes(["factory/x.py"]))
         self.assertFalse(verdict.ok)
@@ -610,6 +617,7 @@ class CommandTest(unittest.TestCase):
             code, _, err = run(["7", "--file", self.decisions_file("1 discard a\n2 discard b\n3 doubt c\n")], gh)
         self.assertEqual(code, 2)
         self.assertIn("triage-review failed", err)
+        self.assertEqual(gh.bodies, [], "a lookup error comes before anything is posted")
 
     def test_the_pr_number_must_be_digits(self) -> None:
         for bad in ("7;rm", "-1", "x", "07/../8"):

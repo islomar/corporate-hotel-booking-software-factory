@@ -179,7 +179,8 @@ def _stale(sha: str, head: str, paths: Sequence[str] | None) -> Verdict:
     elif not paths:
         why = "no file changed since the review, and the reviewer reviews such a head again"
     else:
-        shown = ", ".join(_flat(p, 200) for p in paths[:5]) + (f" and {len(paths) - 5} more" if len(paths) > 5 else "")
+        ordered = [p for p in paths if not docs_list.is_doc(p)] + [p for p in paths if docs_list.is_doc(p)]
+        shown = ", ".join(_flat(p, 200) for p in ordered[:5]) + (f" and {len(paths) - 5} more" if len(paths) > 5 else "")
         why = f"the head changes more than docs: {shown}"
     return Verdict(
         False,
@@ -521,9 +522,10 @@ def main(argv: Sequence[str], gh: Gh | None = None) -> int:
                     file=sys.stderr,
                 )
                 return 1
+        doubts = doubt_lines(found, decisions)  # before the post: a lookup error must not follow a posted triage
         post_triage(gh, args.repo, args.pr, sha, found, decisions)
         print(f"Posted the triage of review {sha} on PR {args.pr}.")
-        for line in doubt_lines(found, decisions):
+        for line in doubts:
             print(line)
     except (OSError, subprocess.SubprocessError, ValueError, LookupError) as error:
         detail = getattr(error, "stderr", None) or error
