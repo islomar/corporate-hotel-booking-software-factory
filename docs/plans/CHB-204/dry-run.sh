@@ -268,7 +268,7 @@ step() {
   case $s in
     A1) S[supply_owner]=constant; S[agreement_owner]=constant ;;
     A2) S[guard_pr_updates]="repository_id==${S[repo_id]}"; S[guard_dependabot]="repository_id==${S[repo_id]}" ;;
-    A3) S[trig_ci]="${S[trig_ci]}merge_group "; S[trig_supply]="${S[trig_supply]}merge_group "; S[trig_triage]="${S[trig_triage]}merge_group " ;;
+    A3) for k in trig_ci trig_supply trig_triage; do [[ " ${S[$k]} " == *" merge_group "* ]] || S[$k]+="merge_group "; done ;;
     A4) S[as_agent]="$NEW_OWNER/$NAME $OLD_OWNER/$NAME" ;;
     A5) S[mapping]="${S[mapping]}repository_id "; S[deploy_cond]=$DEPLOY_ID_COND; S[plan_cond]=$PLAN_ID_COND
         S[deploy_bind]="${S[deploy_bind]}repository_id/${S[repo_id]} "; S[plan_bind]="${S[plan_bind]}repository_id/${S[repo_id]} " ;;

@@ -192,6 +192,7 @@ class RequiredCheckWorkflowsTest(unittest.TestCase):
             text = (WORKFLOWS / name).read_text(encoding="utf-8")
             steps = re.split(r"^      - ", text.split("\n    steps:\n", 1)[1], flags=re.MULTILINE)[1:]
             self.assertRegex(steps[0], r"if: github\.event_name == 'merge_group'", f"{name}: the first step reports the merge_group pass")
+            self.assertTrue(any("github.event.pull_request" in step for step in steps), f"{name}: no step reads the PR payload; the step parse failed")
             for step in steps:
                 if "github.event.pull_request" not in step:
                     continue
