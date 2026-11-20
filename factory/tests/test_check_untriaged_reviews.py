@@ -34,15 +34,23 @@ def triage(sha: str = SHA) -> dict:
 
 
 def pull(number: int, *, login: str = tr.AGENT, state: str = "open", sha: str = SHA) -> dict:
-    return {"number": number, "state": state, "user": {"login": login}, "head": {"sha": sha}}
+    return {"number": number, "node_id": f"PR_kw{number}", "state": state, "user": {"login": login}, "head": {"sha": sha}}
 
 
-def fake_gh(pulls: list[dict], comments: dict[int, list[dict]]):
-    """A `gh` that answers `gh api --paginate <path> --jq .[]` with one JSON item per line."""
+def thread(*, resolved: bool = False, path: str = "factory/hooks/x.py", login: str = "copilot-pull-request-reviewer", body: str = "Handle the empty list.") -> dict:
+    return {"id": "PRRT_t1", "isResolved": resolved, "path": path, "comments": {"nodes": [{"author": {"login": login}, "body": body}]}}
+
+
+def fake_gh(pulls: list[dict], comments: dict[int, list[dict]], threads: dict[int, list[dict]] | None = None):
+    """A `gh` that answers `gh api --paginate <path> --jq .[]` with one JSON item per line, and `gh api graphql` with the review threads."""
     calls: list[list[str]] = []
 
     def gh(args: list[str]) -> str:
         calls.append(args)
+        if args[:2] == ["api", "graphql"]:
+            ids = [a.removeprefix("ids[]=") for a in args if a.startswith("ids[]=")]
+            nodes = [{"number": int(i.removeprefix("PR_kw")), "reviewThreads": {"nodes": (threads or {}).get(int(i.removeprefix("PR_kw")), [])}} for i in ids]
+            return json.dumps({"data": {"nodes": nodes}})
         path = next(a for a in args if a.startswith("repos/"))
         if path == PULLS_PATH:
             items = pulls
@@ -197,6 +205,105 @@ class UntriagedReviewsTest(unittest.TestCase):
                 code = hook.main(io.StringIO(json.dumps({"session_id": "s9"})), run_gh=fake_gh([pull(140)], {140: [review()]}))
         self.assertEqual(code, 2)
         self.assertTrue((Path(folder) / "s9.json").is_file())
+
+
+class UnresolvedThreadsTest(unittest.TestCase):
+    """CHB-217: the `main` ruleset refuses to merge a PR while a review thread is unresolved."""
+
+    def setUp(self):
+        self.state = tempfile.TemporaryDirectory()
+        self.addCleanup(self.state.cleanup)
+        self.state_dir = str(Path(self.state.name) / "state")
+
+    def test_agent_pr_with_one_unresolved_thread_blocks_naming_the_pr_the_path_and_the_thread(self):
+        gh = fake_gh([pull(142)], {142: []}, {142: [thread(path="backend/app.py", body="Handle the empty list before the loop.")]})
+        code, err = run(gh, self.state_dir)
+        self.assertEqual(code, 2)
+        self.assertIn("PR #142", err)
+        self.assertIn("backend/app.py", err)
+        self.assertIn("Handle the empty list before the loop.", err)
+        self.assertIn("PRRT_t1", err)
+        self.assertIn("copilot-pull-request-reviewer", err)
+        self.assertIn("resolveReviewThread", err)
+        self.assertNotIn("untriaged review findings", err)
+
+    def test_the_same_pr_with_every_thread_resolved_does_not_block(self):
+        gh = fake_gh([pull(142)], {142: []}, {142: [thread(resolved=True), thread(resolved=True, path="b.py")]})
+        self.assertEqual(run(gh, self.state_dir), (0, ""))
+
+    def test_an_unresolved_thread_on_a_pr_by_another_author_does_not_block(self):
+        gh = fake_gh([pull(141, login="islomar")], {141: []}, {141: [thread()]})
+        self.assertEqual(run(gh, self.state_dir), (0, ""))
+        self.assertFalse(any(c[:2] == ["api", "graphql"] for c in gh.calls))
+
+    def test_a_graphql_error_lets_the_turn_end_with_a_warning(self):
+        answers = {
+            "failed call": subprocess.CalledProcessError(1, ["gh"], stderr="GraphQL: Could not resolve to a node"),
+            "errors in the answer": json.dumps({"data": None, "errors": [{"message": "rate limited"}]}),
+            "no data": json.dumps({"message": "Bad credentials"}),
+            "not JSON": "<html>",
+        }
+        for name, answer in answers.items():
+            with self.subTest(name):
+                base = fake_gh([pull(142)], {142: []})
+
+                def gh(args: list[str], answer=answer) -> str:
+                    if args[:2] != ["api", "graphql"]:
+                        return base(args)
+                    if isinstance(answer, BaseException):
+                        raise answer
+                    return answer
+
+                code, err = run(gh, self.state_dir)
+                self.assertEqual(code, 0)
+                self.assertIn("Unresolved review thread check skipped", err)
+
+    def test_a_graphql_error_still_refuses_for_untriaged_findings(self):
+        base = fake_gh([pull(140)], {140: [review()]})
+
+        def gh(args: list[str]) -> str:
+            if args[:2] == ["api", "graphql"]:
+                raise subprocess.CalledProcessError(1, ["gh"], stderr="HTTP 502")
+            return base(args)
+
+        code, err = run(gh, self.state_dir)
+        self.assertEqual(code, 2)
+        self.assertIn("Unresolved review thread check skipped", err)
+        self.assertIn("factory/bin/triage-review 140", err)
+
+    def test_reads_the_threads_by_pr_node_id_in_one_call_after_the_comments(self):
+        gh = fake_gh([pull(142), pull(143)], {142: [], 143: []})
+        run(gh, self.state_dir)
+        graphql = [c for c in gh.calls if c[:2] == ["api", "graphql"]]
+        self.assertEqual(len(graphql), 1)
+        self.assertIn("ids[]=PR_kw142", graphql[0])
+        self.assertIn("ids[]=PR_kw143", graphql[0])
+        self.assertEqual(gh.calls[-1][:2], ["api", "graphql"])
+
+    def test_second_stop_with_the_same_threads_passes_and_a_new_thread_refuses_again(self):
+        gh = fake_gh([pull(142)], {142: []}, {142: [thread()]})
+        self.assertEqual(run(gh, self.state_dir)[0], 2)
+        code, err = run(gh, self.state_dir)
+        self.assertEqual(code, 0)
+        self.assertIn("allowing the stop", err)
+        newer = fake_gh([pull(142)], {142: []}, {142: [thread(), {**thread(path="c.py"), "id": "PRRT_t2"}]})
+        self.assertEqual(run(newer, self.state_dir)[0], 2)
+
+    def test_thread_text_is_one_short_line_without_control_characters(self):
+        body = "Line one\n\x1b[31mred\x1b[0m " + "word " * 100
+        code, err = run(fake_gh([pull(142)], {142: []}, {142: [thread(body=body)]}), self.state_dir)
+        self.assertEqual(code, 2)
+        self.assertNotIn("\x1b", err)
+        self.assertIn("Line one", err)
+        line = next(x for x in err.splitlines() if "Line one" in x)
+        self.assertLess(len(line), 300)
+
+    def test_both_kinds_are_listed_together(self):
+        gh = fake_gh([pull(140), pull(142)], {140: [review()], 142: []}, {142: [thread()]})
+        code, err = run(gh, self.state_dir)
+        self.assertEqual(code, 2)
+        self.assertIn("factory/bin/triage-review 140", err)
+        self.assertIn("PRRT_t1", err)
 
 
 class DeadlineTest(unittest.TestCase):

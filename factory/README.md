@@ -417,7 +417,7 @@ flowchart TD
     subgraph STOP["Stop: refuses the end of the turn"]
         CO["check_owner_commands.py<br/>matcher: none<br/>flags human commands that depend on the current folder"]
         CW["check_wip_minimums.py<br/>matcher: none<br/>refuses while a board column is below its minimum"]
-        CT["check_untriaged_reviews.py<br/>matcher: none<br/>refuses while an agent PR has untriaged review findings"]
+        CT["check_untriaged_reviews.py<br/>matcher: none<br/>refuses while an agent PR has untriaged review findings or unresolved review threads"]
         CH["check_human_word.py<br/>matcher: none<br/>refuses a reply that does not call the person the human"]
     end
     SS --> PRE
@@ -482,6 +482,14 @@ It exits 2 when the latest review comment of a PR has findings and no triage com
 It does not compare the review with the PR head: a review older than the head fails the check, but the agent can only wait for the reviewer, so the hook lets the turn end (CHB-195).
 The reason names each PR and the commands `factory/bin/triage-review <PR>` and `factory/bin/triage-review <PR> --file FILE`.
 A review with no findings, a PR of another author and a closed PR never block.
+
+It also exits 2 while an open agent PR has an unresolved review thread from any reviewer (CHB-217).
+On 2026-11-20 PR #142 waited for hours, approved and green: the `main` ruleset refuses to merge while a review thread is unresolved, and GitHub Copilot's reviewer had left two.
+After the comment reads, one GraphQL call reads `reviewThreads` of every agent PR by its node ID, so it works under any repository name.
+Each unresolved thread, outdated or not, names the PR, the thread ID, the file, the author and the first words of its first comment, flattened to one line.
+The reason says what to do: push the fix first if the thread is valid, answer the thread with the reason, then resolve it.
+It prints both commands, `addPullRequestReviewThreadReply` and `resolveReviewThread` through `factory/bin/as-agent gh api graphql`.
+A GraphQL error prints one warning and drops only the thread lines: untriaged findings still refuse.
 
 It fails open: a GitHub error (no `gh`, a 6-second timeout, a failed call, output that is not JSON) prints one line to stderr and lets the turn end.
 All calls share a 20-second deadline, below the 30-second hook timeout, so the hook warns before Claude Code would kill it.
