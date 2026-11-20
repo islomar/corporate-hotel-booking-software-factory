@@ -22,6 +22,9 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 RULESET = ROOT / "infra" / "github" / "repository.tf"
 # Workflows whose steps read `github.event.pull_request`: on `merge_group` that payload is absent.
 PR_PAYLOAD_WORKFLOWS = ("supply-chain.yml", "triage.yml")
+# The workflow of each required check. dependabot-auto-merge.yml also has a job `triage`, so the
+# workflow cannot be found by job name alone. A new required check fails the first test until it is added here.
+CHECK_WORKFLOWS = {"backend": "ci.yml", "frontend": "ci.yml", "e2e": "ci.yml", "supply-chain": "supply-chain.yml", "triage": "triage.yml"}
 
 
 def required_checks() -> list[str]:
@@ -33,11 +36,6 @@ def required_checks() -> list[str]:
 def job_ids(text: str) -> list[str]:
     jobs = text.split("\njobs:\n", 1)
     return re.findall(r"^  ([A-Za-z0-9_-]+):", jobs[1], re.MULTILINE) if len(jobs) == 2 else []
-
-
-# The workflow of each required check. dependabot-auto-merge.yml also has a job `triage`, so the
-# workflow cannot be found by job name alone. A new required check fails the first test until it is added here.
-CHECK_WORKFLOWS = {"backend": "ci.yml", "frontend": "ci.yml", "e2e": "ci.yml", "supply-chain": "supply-chain.yml", "triage": "triage.yml"}
 
 
 def required_workflows() -> list[Path]:
@@ -87,7 +85,11 @@ def evaluate(expression: str, context: dict[str, str]) -> str | bool:
 
 
 def render(template: str, context: dict[str, str]) -> str:
-    return re.sub(r"\$\{\{(.*?)\}\}", lambda m: str(evaluate(m.group(1), context)), template)
+    def text(match: re.Match[str]) -> str:
+        result = evaluate(match.group(1), context)
+        return str(result).lower() if isinstance(result, bool) else result
+
+    return re.sub(r"\$\{\{(.*?)\}\}", text, template)
 
 
 def cancels(setting: str, context: dict[str, str]) -> bool:
@@ -152,6 +154,17 @@ class RequiredCheckWorkflowsTest(unittest.TestCase):
                 self.assertEqual(render(group, old), render(group, new))
                 self.assertEqual(render(group, run("pull_request", "opened", head="a" * 40)), render(group, new))
 
+    def test_a_new_head_does_not_cancel_an_edit_run_of_the_same_head(self):
+        # `edited` (title, body or base) can start between a push and that push's `synchronize` run.
+        for path in required_workflows():
+            text = path.read_text(encoding="utf-8")
+            types = re.search(r"^  pull_request:\n    types: \[([^\]]*)\]", text, re.MULTILINE)
+            if not types or "edited" not in types.group(1):
+                continue  # without `types`, pull_request means opened, synchronize and reopened
+            group, _ = concurrency(text)
+            with self.subTest(workflow=path.name):
+                self.assertNotEqual(render(group, run("pull_request", "edited")), render(group, run("pull_request", "synchronize")))
+
     def test_groups_keep_pull_requests_and_queue_entries_apart(self):
         for path in required_workflows():
             group, _ = concurrency(path.read_text(encoding="utf-8"))
@@ -186,6 +199,15 @@ class RequiredCheckWorkflowsTest(unittest.TestCase):
 
 
 class ExpressionReaderTest(unittest.TestCase):
+    def test_the_fixture_tells_heads_apart(self):
+        # The group tests above would pass by construction if run() ignored the head.
+        group = "x-${{ github.event.pull_request.head.sha }}"
+        self.assertNotEqual(render(group, run("pull_request", "synchronize", head="a" * 40)), render(group, run("pull_request", "synchronize", head="b" * 40)))
+
+    def test_renders_a_comparison_as_github_does(self):
+        self.assertEqual(render("g-${{ github.event.action == 'edited' }}", run("pull_request", "edited")), "g-true")
+        self.assertEqual(render("g-${{ github.event.action == 'edited' }}", run("pull_request", "opened")), "g-false")
+
     def test_reads_or_with_a_fallback(self):
         self.assertEqual(evaluate("github.event.pull_request.number || github.ref", {"github.ref": "r"}), "r")
 

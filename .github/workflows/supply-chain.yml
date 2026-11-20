@@ -19,7 +19,8 @@
 # run it cancels belongs to an older head. A run cancelled in progress leaves a cancelled check run on its
 # head, which blocks the PR until someone re-runs it (#142: two review runs; #151: two re-runs). Re-runs
 # replay the original event, so `github.run_attempt` (1 on the first attempt) tells them apart. The events
-# have separate groups: a `pull_request` run must not wait behind a review run.
+# have separate groups: a `pull_request` run must not wait behind a review run. `edited` runs have their
+# own group too: an edit can start between a push and that push's `synchronize` run, on the new head.
 #
 # `merge_group` (CHB-219): the merge queue waits for this required check on its own event. The PR passed
 # it before entering the queue, so the job reports success without reading the PR.
@@ -40,7 +41,7 @@ on:
 permissions: {}
 
 concurrency:
-  group: supply-chain-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}
+  group: supply-chain-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}-edited-${{ github.event.action == 'edited' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' && github.run_attempt == '1' }}
 
 jobs:
