@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Claude Code PreToolUse hook: deny Bash commands that write to Jira around factory/bin/jira (CHB-108).
 
-`acli` is logged in as the owner, and a raw REST call skips the wrapper's checks (WIP limits,
+`acli` is logged in as the human, and a raw REST call skips the wrapper's checks (WIP limits,
 required sections, CHB keys only). Agents write to Jira only with factory/bin/jira.
 
 Denied:
@@ -85,7 +85,7 @@ def reason(command: str) -> str | None:
     """Why the command is denied, or None when it may run."""
     found = acli_write(command)
     if found:
-        return f"Blocked: `{found}` writes to Jira as the owner's acli login. {WRAPPER}"
+        return f"Blocked: `{found}` writes to Jira as the human's acli login. {WRAPPER}"
     if http_write(command):
         return f"Blocked: a direct write request to the Jira REST API skips the wrapper's checks. {WRAPPER}"
     return None

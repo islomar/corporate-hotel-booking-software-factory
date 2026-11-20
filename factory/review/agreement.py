@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Owner agreement with the review verdict (CHB-141, ADR-ea8c stage 1). Standard library only.
+"""Human agreement with the review verdict (CHB-141, ADR-ea8c stage 1). Standard library only.
 
 For every PR merged into `main` since --since, takes the last PR comment of the reviewer App
-that carries the review marker (written by gate.py), and reads the owner's reactions on it:
+that carries the review marker (written by gate.py), and reads the human's reactions on it:
 👍 agree, 👎 disagree (both count as disagree), none: no answer.
 A PR without such a comment was not reviewed by the model (docs-only, or merged before CHB-141).
 
 Stage 1 exit (ADR-ea8c, decision 8): 20 answered PRs with 2 or fewer disagreements, and no
-critical finding missed that the owner found. The script checks the first part. The owner
+critical finding missed that the human found. The script checks the first part. The human
 checks the second part in the 👎 replies it lists.
 
 Usage: agreement.py [--repo OWNER/NAME] [--since YYYY-MM-DD]
@@ -60,13 +60,13 @@ def review_comment(comments: Sequence[Mapping[str, object]]) -> Mapping[str, obj
     return own[-1] if own else None
 
 
-def answer(pr: Mapping[str, object], owner: str) -> str | None:
+def answer(pr: Mapping[str, object], human: str) -> str | None:
     """agree, disagree or no answer; None when the model did not review the PR."""
     comment = review_comment(pr.get("comments", []))  # type: ignore[arg-type]
     if comment is None:
         return None
     reactions = comment.get("reactions", [])
-    contents = {r.get("content") for r in reactions if _login(r) == owner}  # type: ignore[union-attr]
+    contents = {r.get("content") for r in reactions if _login(r) == human}  # type: ignore[union-attr]
     if "-1" in contents:
         return "disagree"
     if "+1" in contents:
@@ -74,10 +74,10 @@ def answer(pr: Mapping[str, object], owner: str) -> str | None:
     return "no answer"
 
 
-def tally(prs: Sequence[Mapping[str, object]], owner: str) -> Tally:
+def tally(prs: Sequence[Mapping[str, object]], human: str) -> Tally:
     result = Tally()
     for pr in prs:
-        verdict = answer(pr, owner)
+        verdict = answer(pr, human)
         if verdict == "agree":
             result.agree += 1
         elif verdict == "disagree":
@@ -93,7 +93,7 @@ def stage1_exit(counts: Tally) -> str:
         return f"no ({counts.disagree} disagree, at most {MAX_DISAGREE} allowed)"
     if counts.answered < NEEDED:
         return f"not yet (needs {NEEDED} answered PRs, has {counts.answered})"
-    status = "met on agreement; the owner checks that no 👎 reply names a missed critical finding"
+    status = "met on agreement; the human checks that no 👎 reply names a missed critical finding"
     if counts.disagree_prs:
         status += " (" + ", ".join(f"#{n}" for n in counts.disagree_prs) + ")"
     return status
@@ -147,13 +147,13 @@ def main(argv: list[str]) -> int:
         return 2
     try:
         repo = args.repo or _gh_text("repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner")
-        owner = _gh_text("repo", "view", repo, "--json", "owner", "--jq", ".owner.login")
+        human = _gh_text("repo", "view", repo, "--json", "owner", "--jq", ".owner.login")
         prs = fetch_prs(gh_api, repo, args.since)
     except (OSError, subprocess.CalledProcessError, ValueError) as error:
         print(f"cannot read GitHub: {error}", file=sys.stderr)
         return 1
-    print(f"Merged into main since {args.since} in {repo}; owner {owner}.")
-    print(report(tally(prs, owner)))
+    print(f"Merged into main since {args.since} in {repo}; human {human}.")
+    print(report(tally(prs, human)))
     return 0
 
 

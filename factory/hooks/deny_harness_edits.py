@@ -43,7 +43,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness_bash_writes import write_targets  # noqa: E402
 from private_folder import private_folder  # noqa: E402
 
-# The product epics (owner, CHB-30): Walking skeleton, Observability with OpenTelemetry,
+# The product epics (human, CHB-30): Walking skeleton, Observability with OpenTelemetry,
 # Security and authentication, Kata specification. Every other epic is factory work.
 PRODUCT_EPICS = frozenset({"CHB-4", "CHB-14", "CHB-19", "CHB-50"})
 HARNESS = {".claude", "factory", ".github"}

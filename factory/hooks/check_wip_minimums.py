@@ -2,7 +2,7 @@
 """Claude Code Stop hook: act on the WIP minimums before the turn ends (CHB-162).
 
 On 2026-11-10 the wrapper printed "Ready is below its minimum (0/3)" and "In Progress is below its
-minimum (0/1)" four times. The agent ended its turn each time, and the owner had to push it.
+minimum (0/1)" four times. The agent ended its turn each time, and the human had to push it.
 
 The hook reads the board through factory/jira.py (the column minimums from the board configuration,
 the open tickets from one search) and refuses to end the turn, exit 2 with the reason on stderr, when:
@@ -130,7 +130,7 @@ def validating_findings(
 ) -> list[str]:
     """One line per Validating ticket with a due item (CHB-140: validating_sweep.classify) and no agent comment today.
 
-    "Today" is the day in validating_sweep.DEFAULT_ZONE, the owner's time zone. A ticket's comments are read only
+    "Today" is the day in validating_sweep.DEFAULT_ZONE, the human's time zone. A ticket's comments are read only
     when it has a due item. Items not yet due, items without a date and tickets without the section never count.
     """
     column = next((c for c in columns if c.name == VALIDATING), None)

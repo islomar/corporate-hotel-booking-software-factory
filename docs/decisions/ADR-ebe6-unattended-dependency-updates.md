@@ -22,17 +22,17 @@
 - Date: 2026-11-06
 - Amended 2026-11-13 (CHB-181): the author App keeps `workflows: write` (CHB-86, amendment in ADR-d7b7). The next step under GitHub Actions bumps, "after CHB-86 removes `workflows: write`", does not apply.
 - Amended 2026-11-13 (CHB-181): Dependabot runs daily since CHB-135 (2026-11-08), so "one per group and week" under Consequences is out of date.
-- Amended 2026-11-19 (CHB-206): a minor update of a 0.x dependency is safe, like any other minor or patch update. The owner decided it on 2026-11-19.
-  The owner does not test these updates by hand, so the wait for a human added delay and no check.
+- Amended 2026-11-19 (CHB-206): a minor update of a 0.x dependency is safe, like any other minor or patch update. The human decided it on 2026-11-19.
+  The human does not test these updates by hand, so the wait for a human added delay and no check.
   Accepted risk: a 0.x minor can break the contract (semver allows breaking changes below 1.0). CI is the only gate until monitoring and smoke tests exist.
   Majors, Playwright updates and updates without a known type still need a human.
   `update_risks` and the "Classify the update" step changed together.
 - Amended 2026-11-19 (CHB-207): Terraform provider pins join the supply-chain set. `.terraform.lock.hcl` and `versions.tf` match in any folder.
   The CHB-90 change left them out, and `/infra/` in CODEOWNERS owns them.
-  Every Terraform provider PR from Dependabot waited for the owner, auto-merge or not (PR #134).
-  CODEOWNERS now has lines with no owner for `/infra/**/.terraform.lock.hcl` and `/infra/**/versions.tf`, below `/infra/`. The last matching pattern wins.
+  Every Terraform provider PR from Dependabot waited for the human, auto-merge or not (PR #134).
+  CODEOWNERS now has lines with no human for `/infra/**/.terraform.lock.hcl` and `/infra/**/versions.tf`, below `/infra/`. The last matching pattern wins.
   `scripts/tests/test_codeowners.py` fails if either file gets a code owner again.
-  `versions.tf` holds only version pins: `required_version` and `required_providers`. A change to it outside Dependabot still needs the owner's approval on the head commit, through `supply-chain`.
+  `versions.tf` holds only version pins: `required_version` and `required_providers`. A change to it outside Dependabot still needs the human's approval on the head commit, through `supply-chain`.
   The state backend moved to `infra/gcp/backend.tf` and the `google` provider block to `infra/gcp/providers.tf`. Both stay code-owned under `/infra/`.
   The same test fails if a `versions.tf` under `infra/` holds anything but one `terraform` block with `required_version` and `required_providers`.
   `.terraform-version` (the Terraform binary pin) stays owned under `/infra/` on purpose: Dependabot does not update it, so a change to it is always a person's or the agent's.
@@ -88,7 +88,7 @@ The CI script reads the same exemptions.
 
 ### Security fixes skip the 7-day wait (CHB-95, CHB-145)
 
-Owner decisions: npm on 2026-11-06 (CHB-95 slice 2), uv on 2026-11-10 (CHB-95 AC3, CHB-145).
+Human decisions: npm on 2026-11-06 (CHB-95 slice 2), uv on 2026-11-10 (CHB-95 AC3, CHB-145).
 
 - `scripts/check_release_age.py` lets a lockfile entry younger than the window pass when all of these hold:
   - the PR author is `dependabot[bot]`;
@@ -96,7 +96,7 @@ Owner decisions: npm on 2026-11-06 (CHB-95 slice 2), uv on 2026-11-10 (CHB-95 AC
   - the locked version is exactly the alert's first patched version.
     uv compares plain release numbers (`2.0` equals `2.0.0`) and PEP 503 names. Pre-, post- and dev releases never match.
 - It prints `::notice ... is a security fix: Dependabot alert #<n>`.
-  A new transitive entry still fails, and the PR waits for the owner.
+  A new transitive entry still fails, and the PR waits for the human.
 - The alerts come from the GitHub API, read only when an entry is too new.
   The `backend`, `frontend` and `e2e` jobs have `vulnerability-alerts: read`, and only Dependabot PRs get the token.
   Without a token there is no exemption. An API error prints a `::warning` and gives no exemption: the check fails closed.
@@ -105,7 +105,7 @@ Owner decisions: npm on 2026-11-06 (CHB-95 slice 2), uv on 2026-11-10 (CHB-95 AC
 - uv limit, found 2026-11-10: Dependabot runs `uv lock --upgrade-package <name>==<version>` and uv applies `exclude-newer` from `pyproject.toml`.
   uv 0.13.7 refuses a version younger than 7 days.
   Dependabot therefore opens no uv security PR for a fix younger than 7 days until `dependabot-core#13816` ships, and the exemption has nothing to act on.
-  An `exclude-newer-package` exemption would let it lock, but the supply-chain check sends that change to the owner.
+  An `exclude-newer-package` exemption would let it lock, but the supply-chain check sends that change to the human.
 
 ### Supply chain checks in CI
 
@@ -143,9 +143,9 @@ Until the App exists, safe PRs get `dependencies:safe` and a person merges them.
 
 ### Supply-chain check instead of code-owner review (CHB-90)
 
-CODEOWNERS made the owner the code owner of every manifest and lockfile.
+CODEOWNERS made the human the code owner of every manifest and lockfile.
 The `main` ruleset requires code-owner review, and a GitHub App cannot be a code owner.
-Every Dependabot PR therefore waited for the owner, auto-merge or not.
+Every Dependabot PR therefore waited for the human, auto-merge or not.
 
 - Manifests, lockfiles, `Dockerfile`, `compose.yaml`, `.nvmrc` and `.python-version` leave CODEOWNERS.
   `.npmrc` stays: it holds the release-age window and its exemptions.
@@ -158,18 +158,18 @@ Every Dependabot PR therefore waited for the owner, auto-merge or not.
 - Image build and compose files match in any case: `Dockerfile`, `Dockerfile.*`, `*.Dockerfile`, `Containerfile*`, `*.Containerfile`, and `compose` and `docker-compose` with `.yaml` or `.yml`.
   Docker and Podman accept any file name with `-f`, and macOS and Windows file systems ignore case.
   Other names match in exact case.
-- The check passes when no supply-chain file changed, or the owner's latest deciding review approves the head commit, or the PR is Dependabot's:
+- The check passes when no supply-chain file changed, or the human's latest deciding review approves the head commit, or the PR is Dependabot's:
   - the PR author is `dependabot[bot]`;
   - every commit has author `dependabot[bot]`, committer `web-flow` and a signature GitHub verified.
     GitHub records Dependabot commits this way (PRs #1 to #4). The committer is `web-flow`, not `dependabot[bot]`.
   - the API lists every commit of the PR (`pulls/{n}/commits` stops at 250);
   - the update is safe. `update_risks` classifies it from the `updated-dependencies` trailer Dependabot writes in each commit message.
     Every commit must carry the same trailer. Safe: patch, minor (0.x included, CHB-206), and GitHub Actions bumps without an update type (ecosystem from the `dependabot/<ecosystem>/` branch name).
-    Needs the owner: majors, Playwright, an unknown or missing update type, a trailer that does not parse.
+    Needs the human: majors, Playwright, an unknown or missing update type, a trailer that does not parse.
     The rules mirror `dependabot-auto-merge.yml`. Without this, a major would merge with one approval from anyone, because the label is advisory.
-    Dependabot omits `update-type` for requirement-range updates (PR #2), so those need the owner.
+    Dependabot omits `update-type` for requirement-range updates (PR #2), so those need the human.
     CHB-95 (security updates) reuses `update_risks`: a security fix merges unattended only if it is safe by these rules.
-- A change to release-age settings needs the owner even from Dependabot:
+- A change to release-age settings needs the human even from Dependabot:
   `min-release-age*` keys in any `.npmrc`, top-level `exclude-newer*` keys in any `uv.toml`, `exclude-newer*` keys under `[tool.uv]` in any `pyproject.toml`.
   The script compares parsed settings, so a dependency floor bump in `pyproject.toml` does not count.
   A file that does not parse, or where `tool` or `tool.uv` is not a table, counts as a change.
@@ -177,21 +177,21 @@ Every Dependabot PR therefore waited for the owner, auto-merge or not.
   These files can hold release-age settings: pnpm `minimumReleaseAge`, Yarn `npmMinimalAgeGate`, Bun `install.minimumReleaseAge`.
   The script does not parse them, so it fails closed. The repository uses none of these tools today.
 - Data comes from git and the GitHub API. PR title, body and labels are never read.
-- Triggers: `pull_request` and `pull_request_review` (`submitted`, `dismissed`), so an owner approval re-runs it.
+- Triggers: `pull_request` and `pull_request_review` (`submitted`, `dismissed`), so a human approval re-runs it.
   `pull_request` includes `edited`, so a change of base branch re-runs it: the diff and the release-age comparison depend on the base.
   `edited` also fires on title and body edits. Those runs evaluate in full. A job skipped with `if:` reports success to a required check, and the concurrency group would let it replace a failing run.
   Both report a check run named `supply-chain` on the head commit. A concurrency group per PR and event cancels the older run of the same event.
   A failed run stays red on the head commit and blocks the PR: GitHub does not replace it with the later passing run (seen on PR #103, CHB-184).
   A `pull_request_review` run that passes re-runs the failed runs of the same head (`scripts/rerun_failed_supply_chain.py`, job permission `actions: write`).
   The agent's App cannot re-run workflows; the workflow token can.
-  A re-run reads the live reviews, so it passes only while the owner's approval stands. A PR without that approval never reaches the re-run step.
+  A re-run reads the live reviews, so it passes only while the human's approval stands. A PR without that approval never reaches the re-run step.
   Every run that would pass reads the reviews once more as its last step, so a run that started before a dismissal fails if it finishes after it.
 - The trailer is trusted data: GitHub verified the commit, and only Dependabot can write to its branches (next bullet).
-- The workflow and the script run from the PR's merge commit. Their integrity rests on CODEOWNERS: both have their own owner lines.
+- The workflow and the script run from the PR's merge commit. Their integrity rests on CODEOWNERS: both have their own human lines.
 - A second ruleset, `dependabot-branches` (`infra/github/ruleset.tf`), restricts creation and update of `refs/heads/dependabot/**/*`.
   Its only bypass actor is Dependabot: `actor_type = "Integration"`, `actor_id = 29110` (`gh api /apps/dependabot`), mode `always`.
   GitHub lists Dependabot as an eligible bypass actor for rulesets.
-  Without this ruleset, any actor with contents write (the agent App, the owner) could push to a Dependabot branch.
+  Without this ruleset, any actor with contents write (the agent App, the human) could push to a Dependabot branch.
   Whether such a push could carry author `dependabot[bot]`, committer `web-flow` and a verified signature is unverified. The ruleset makes the question moot.
 
 Consequences:
@@ -199,14 +199,14 @@ Consequences:
 - Nobody but Dependabot can push to a Dependabot branch. "Update branch" fails there too.
   To refresh a Dependabot PR, comment `@dependabot rebase`. To change one, close it and open a new PR from another branch.
 - Deletion stays open: deleting a branch cannot forge a commit, and `delete_branch_on_merge` must still remove merged Dependabot branches.
-- GitHub Actions bumps change `.github/workflows/`, which stays in CODEOWNERS. They keep needing the owner.
+- GitHub Actions bumps change `.github/workflows/`, which stays in CODEOWNERS. They keep needing the human.
   Next step, after CHB-86 removes `workflows: write` from the agent App: move `/.github/workflows/` out of CODEOWNERS and add it to the script's supply-chain set.
   Without that second part, Actions pins lose all protection.
 - First real run, on PR #115 itself (2026-11-13): the re-run step failed with `ModuleNotFoundError: No module named 'check_supply_chain'`.
   `python3 -I` leaves the script's folder off `sys.path`. Fixed in the same PR, with a test that starts the script the way the workflow does.
 - Unverified: the re-run step on a real PR after that fix.
-  Test it on the first owner-approved supply-chain PR after CHB-184 merges: the merge box must turn green after the approval, without a manual re-run.
-- Owner-authored PRs cannot pass through owner approval, because GitHub blocks self-approval. The ruleset's required approval blocks them anyway.
+  Test it on the first human-approved supply-chain PR after CHB-184 merges: the merge box must turn green after the approval, without a manual re-run.
+- Human-authored PRs cannot pass through human approval, because GitHub blocks self-approval. The ruleset's required approval blocks them anyway.
 
 ## Consequences
 

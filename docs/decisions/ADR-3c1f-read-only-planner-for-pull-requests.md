@@ -16,7 +16,7 @@
 
 - Status: accepted
 - Date: 2026-11-10
-- Amended 2026-11-15 (CHB-13): the planner also holds `roles/serviceusage.serviceUsageConsumer`, with the owner's approval.
+- Amended 2026-11-15 (CHB-13): the planner also holds `roles/serviceusage.serviceUsageConsumer`, with the human's approval.
   The first real plan on PR #125 failed with a 403 on `serviceusage.services.use`, because the provider bills API calls to the project (`user_project_override`).
   The role holds `get`, `list` and `test` permissions plus `serviceusage.services.use`. It cannot enable or disable an API or change a resource.
 
@@ -77,6 +77,6 @@ The apply keeps the lock.
   The state can hold sensitive values, for example the alert email address and the billing account ID.
   CHB-13 must keep plan output out of public logs and run plans only for the `infra/gcp` folder.
 - `roles/viewer` may not cover every API the refresh calls. A plan can fail on a missing permission, for example the budget (read on the billing account) or `serviceusage.services.use`.
-  Add the narrowest read-only role to the allowlist in `guards.tf` and `planner.tf`, with the owner's approval.
+  Add the narrowest read-only role to the allowlist in `guards.tf` and `planner.tf`, with the human's approval.
 - The five `planner_*` and `deployer_ref` variables exist only so tests can break the guards. Any value but the default fails the plan.
 - Amends ADR-d7b7: Google Cloud trusts GitHub OIDC for `refs/heads/main` (deployer) and, read-only, for `pull_request` runs (planner).

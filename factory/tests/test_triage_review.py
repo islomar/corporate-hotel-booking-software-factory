@@ -42,7 +42,7 @@ def review_body(sha: str = SHA, findings: str = FINDINGS) -> str:
         "Reasons:\n\n- Merge Safety 8.07 is below 8.50\n\n"
         "| Dimension | Weight | Score | Claimed |\n|---|---|---|---|\n| Tests | 15% | 6.00 | 7 |\n\n"
         f"Summary: The PR adds two middlewares.\n\n{findings}\n"
-        "Owner: react 👍 if you agree with this verdict, 👎 if not.\n\n"
+        "Human: react 👍 if you agree with this verdict, 👎 if not.\n\n"
         f"<!-- chb-review reviewed:{sha} -->\n"
     )
 

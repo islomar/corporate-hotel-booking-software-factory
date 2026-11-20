@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Fail when a PR changes supply-chain files without Dependabot or the owner behind it.
+"""Fail when a PR changes supply-chain files without Dependabot or the human behind it.
 
 Supply-chain files (manifests, lockfiles, resolver settings, images, runtime pins) have
 no code owner, so Dependabot PRs can merge unattended. This check takes the code owner's
 place for them (ADR-ebe6). A PR passes when:
 
 - it changes no supply-chain file; or
-- the owner's latest review is an approval of the current head commit; or
+- the human's latest review is an approval of the current head commit; or
 - the PR author is `dependabot[bot]`, every commit is Dependabot's (author
   `dependabot[bot]`, committer `web-flow`, a signature GitHub verified: GitHub records
   Dependabot commits this way), and the update is safe: patch or minor, read from the
@@ -204,7 +204,7 @@ def is_dependabot_commit(commit: dict) -> bool:
 
 
 def owner_approved_head(reviews: list[dict], owner: str, head_sha: str) -> bool:
-    """The owner's latest deciding review approves the head commit.
+    """The human's latest deciding review approves the head commit.
 
     Comments do not change a decision. A dismissal or a change request cancels it.
     """
@@ -259,7 +259,7 @@ def update_risks(dependencies: list[dict[str, str]] | None, ecosystem: str) -> l
     """Reasons an update needs a human. An empty list means safe.
 
     Mirrors the `decide` step of .github/workflows/dependabot-auto-merge.yml: safe are
-    patch and minor updates, 0.x included (owner decision 2026-11-19, CHB-206), and
+    patch and minor updates, 0.x included (human decision 2026-11-19, CHB-206), and
     GitHub Actions bumps without an update type.
     """
     if not dependencies:
@@ -349,7 +349,7 @@ def decide(evidence: Evidence) -> Verdict:
         return Verdict(True, "No supply-chain file changed.")
     listing = "Supply-chain files changed:\n" + "\n".join(f"- {f}" for f in supply_chain)
     if owner_approved_head(evidence.reviews, evidence.owner, evidence.head_sha):
-        return Verdict(True, f"{listing}\nThe owner {evidence.owner} approved the head commit.")
+        return Verdict(True, f"{listing}\nThe human {evidence.owner} approved the head commit.")
     ask = f"Needs an approval from {evidence.owner} on the head commit."
     if evidence.release_age_files:
         files = ", ".join(evidence.release_age_files)

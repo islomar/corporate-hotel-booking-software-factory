@@ -6,8 +6,8 @@ commit messages. A promise in the chat did not hold, so this hook checks every f
 
 The hook reads the text of the agent's final reply outside fenced code blocks (``` or ~~~) and
 inline code, and names each line that uses "owner", "owners", "owner's" or "owners'" as a word.
-Technical terms pass: `CODEOWNERS` (one word), "repository owner", "repo owner", "organization
-owner", "org owner", `owner/repo`, "root-owned", and anything in code. To quote the old word,
+Technical terms pass: `CODEOWNERS` (one word), "code owner", "code-owner review", "repository owner",
+"repo owner", "organization owner", "org owner", `owner/repo`, `roles/owner`, "root-owned", and anything in code. To quote the old word,
 put it in backticks.
 
 It never loops. Like check_wip_minimums.py and check_untriaged_reviews.py it uses stop_refusal.py:
@@ -41,8 +41,8 @@ from stop_refusal import already_refused  # noqa: E402
 STATE_DIR_ENV = "CHB_HUMAN_WORD_STATE_DIR"
 FENCE = re.compile(r"^[ \t]*(```|~~~)")
 INLINE_CODE = re.compile(r"(`+)(?:(?!\1).)+?\1")
-WORD = re.compile(r"(?<![\w.-])owners?(?:'s?|’s?)?(?![\w/-])", re.IGNORECASE)
-TECHNICAL_BEFORE = re.compile(r"\b(?:repository|repo|organization|organisation|org)\s+$", re.IGNORECASE)
+WORD = re.compile(r"(?<![\w./$-])owners?(?:'s?|’s?)?(?![\w/-])", re.IGNORECASE)
+TECHNICAL_BEFORE = re.compile(r"\b(?:code|repository|repo|organization|organisation|org)\s+$", re.IGNORECASE)
 
 
 def _prose_lines(message: str) -> list[str]:

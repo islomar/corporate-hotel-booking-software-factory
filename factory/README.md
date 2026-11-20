@@ -14,7 +14,7 @@
     - [Board rules on transition](#board-rules-on-transition)
     - [Hook against raw Jira writes](#hook-against-raw-jira-writes)
   - [Hooks at a glance](#hooks-at-a-glance)
-  - [Hook: commands for the owner work from any folder](#hook-commands-for-the-owner-work-from-any-folder)
+  - [Hook: commands for the human work from any folder](#hook-commands-for-the-human-work-from-any-folder)
   - [Hook: act on the WIP minimums](#hook-act-on-the-wip-minimums)
   - [Hook: triage review findings of agent PRs](#hook-triage-review-findings-of-agent-prs)
   - [Hook: call the person "the human"](#hook-call-the-person-the-human)
@@ -40,14 +40,14 @@ Agent workflows, the orchestrator and the notifier live here. Built in phases 3 
 
 ## Identities at a glance
 
-The owner's logins carry full rights, and the agent and the workflows must not borrow them.
+The human's logins carry full rights, and the agent and the workflows must not borrow them.
 Each actor therefore has its own account, reached through one wrapper or one token exchange.
 The diagram shows who acts, through what, as which account and in which system.
 The sections below describe each path.
 
 ```mermaid
 flowchart TD
-    OWNER["Owner"] --> OWNLOGINS["Owner logins<br/>GitHub owner account<br/>Jira owner login used by acli<br/>1Password desktop app"]
+    HUMAN["Human"] --> OWNLOGINS["Human logins<br/>GitHub human account<br/>Jira human login used by acli<br/>1Password desktop app"]
     AGENT["Agent in a Claude Code session"] --> ASAGENT["factory/bin/as-agent"]
     AGENT --> JIRAWRAP["factory/bin/jira"]
     CIWF["CI workflows<br/>review.yml and deploy.yml"]
@@ -88,24 +88,24 @@ secret-tool lookup service chb-factory key op-service-account-token
 
 `factory/op_service_account.py` reads it on every call and passes it as `OP_SERVICE_ACCOUNT_TOKEN` in the environment of the one `op` subprocess.
 It never reaches the parent shell, the command that as-agent runs, a file or the output.
-`op` then never asks the owner's desktop app, so no approval pop-up appears and the owner's other vaults are out of reach.
+`op` then never asks the human's desktop app, so no approval pop-up appears and the human's other vaults are out of reach.
 
 Without the token (keyring locked, item absent, `secret-tool` missing) or when `op` fails (token expired or revoked), `jira` exits 3 and `as-agent` exits 3 and runs nothing.
-Neither falls back to the owner's desktop 1Password: that would bring back the pop-ups and the owner's full 1Password rights.
+Neither falls back to the human's desktop 1Password: that would bring back the pop-ups and the human's full 1Password rights.
 The agent stops and reports.
 `AGENT_APP_KEY_COMMAND` replaces the `op` call of as-agent with another command, as an explicit opt-in. That command never gets the service account token.
 
-The pop-up was also a human check on every read. Without it, any process that runs as the owner's user while the keyring is unlocked can read the two items in `chb-factory`, and nothing else.
+The pop-up was also a human check on every read. Without it, any process that runs as the human's user while the keyring is unlocked can read the two items in `chb-factory`, and nothing else.
 
 ### Rotating the token
 
-The token does not expire, on purpose: an expiry would stop every agent commit, push and Jira write on a fixed date (owner decision, 2026-11-07).
-The token is read-only and reaches only the vault `chb-factory`. The remaining risk is a leak, so the owner rotates the token:
+The token does not expire, on purpose: an expiry would stop every agent commit, push and Jira write on a fixed date (human decision, 2026-11-07).
+The token is read-only and reaches only the vault `chb-factory`. The remaining risk is a leak, so the human rotates the token:
 
 - once a year (next: by 2027-11-07), and
 - at once on a suspected leak (the token appeared in a chat, log, file, screenshot or commit).
 
-Owner steps, about 5 minutes:
+Human steps, about 5 minutes:
 
 1. Rotate the token. WHERE: <https://my.1password.com> > Developer > Service accounts > `chb-factory-agent` > Rotate token.
    HOW: for "Expire existing token" pick "in 3 days", or "now" if the token leaked.
@@ -157,7 +157,7 @@ as-agent skips auto-merge and prints why in these cases:
 ```sh
 # Open one PR without auto-merge.
 AGENT_NO_AUTO_MERGE=1 factory/bin/as-agent gh pr create --title "CHB-1: title" --body-file body.md
-# Turn auto-merge off on an open PR. The owner can also click "Disable auto-merge".
+# Turn auto-merge off on an open PR. The human can also click "Disable auto-merge".
 factory/bin/as-agent gh pr merge --disable-auto 61
 # Turn it on by hand, for example on a stacked PR retargeted to main.
 factory/bin/as-agent gh pr merge --auto --squash 61
@@ -173,7 +173,7 @@ Parallel agents that share one scratch folder overwrite each other's files (CHB-
 ### Keeping agent PRs up to date
 
 `.github/workflows/pr-updates.yml` runs on every push to `main` and on manual dispatch, as the agent App (CHB-172).
-Why: an owner "Update branch" click makes the owner the last pusher, and the ruleset's `require_last_push_approval` then ignores the owner's approval.
+Why: a human "Update branch" click makes the human the last pusher, and the ruleset's `require_last_push_approval` then ignores the human's approval.
 `docs/knowledge/conflicting-agent-prs-need-the-agent-not-the-owner.md` has the two cases that led to it.
 
 `factory/pr_updates.py` reads the open PRs and acts only on PRs opened by the App (a `Bot` author named `chb-factory-agent`) or by Dependabot, into `main`, from this repository.
@@ -182,7 +182,7 @@ Every merge to `main` makes each other open PR rebase and run its checks again (
 | PR state | Action |
 | --- | --- |
 | Behind `main`, mergeable | `updatePullRequestBranch` with `updateMethod: REBASE` and `expectedHeadOid` set to the head it read. A push in between makes GitHub refuse; the run logs "head moved" and goes on. |
-| Behind `main`, mergeable, approved | The same rebase. The `main` ruleset requires an up-to-date branch (`strict_required_status_checks_policy = true`, CHB-177), so an approved PR behind `main` cannot merge. The rebase dismisses the approval: the owner approves the new head, and auto-merge then goes on. |
+| Behind `main`, mergeable, approved | The same rebase. The `main` ruleset requires an up-to-date branch (`strict_required_status_checks_policy = true`, CHB-177), so an approved PR behind `main` cannot merge. The rebase dismisses the approval: the human approves the new head, and auto-merge then goes on. |
 | Conflicting | Adds the label `needs-rebase`. No update. |
 | Labelled `needs-rebase`, mergeable again | Removes the label. |
 | Dependabot PR, behind `main`, mergeable | Comments `@dependabot rebase`, unless the agent commented it after the head commit. The `dependabot-branches` ruleset lets only Dependabot push to its branches, so the agent never rebases one itself. A conflicting Dependabot PR rebases on its own. |
@@ -199,7 +199,7 @@ The label `needs-rebase` is a Terraform resource in `infra/github/labels.tf`.
 
 ## Subagent models
 
-The owner's Claude Code sets `CLAUDE_CODE_SUBAGENT_MODEL=sonnet` (2026-11-07), so subagents run on Sonnet by default.
+The human's Claude Code sets `CLAUDE_CODE_SUBAGENT_MODEL=sonnet` (2026-11-07), so subagents run on Sonnet by default.
 An agent that implements a CHB ticket, or does design or review work, runs on Opus: pass `model: "opus"` when spawning it.
 Lookups and mechanical briefs stay on the default.
 
@@ -208,7 +208,7 @@ Lookups and mechanical briefs stay on the default.
 `factory/bin/jira` calls the Jira REST API of `islomar.atlassian.net` as the Claude account ("Claude (CHB agent)"), CHB-107.
 Its email and API token are read from the 1Password item `chb-jira-claude.api-token` (fields `username` and `credential`, vault `chb-factory`) on every call, with one `op` call as the service account.
 The Jira token stays inside the Python process: never printed, written to a file or passed to another command.
-The owner's `acli` login is global state and is not touched.
+The human's `acli` login is global state and is not touched.
 
 ```sh
 factory/bin/jira view CHB-12
@@ -217,7 +217,7 @@ factory/bin/jira create --parent CHB-27 --summary "Short title" --description-fi
 factory/bin/jira transition CHB-12 "In Review"
 factory/bin/jira tick CHB-12 small   # one box of the Definition of Ready: why, trigger, decision or small
 factory/bin/jira tick CHB-12 2 --evidence-file FILE   # one acceptance criterion (number or unique text): posts the evidence, ticks it; `transition ... Done` exits 4 while one is open (CHB-185)
-factory/bin/jira ready CHB-12 --trigger "2. the owner asked for it on 2026-11-10"   # Backlog to Ready
+factory/bin/jira ready CHB-12 --trigger "2. the human asked for it on 2026-11-10"   # Backlog to Ready
 factory/bin/jira checklist CHB-12   # or --open: adds the Definition of Ready where it is missing
 factory/bin/jira comment CHB-12 --body-file comment.txt   # "-" reads stdin
 factory/bin/jira assign CHB-12 --me
@@ -279,8 +279,8 @@ Expedite (CHB-157). `create --expedite "<case>: <evidence>"` creates the ticket 
 The case is one of `production bug`, `pipeline broken` or `secret leak`; any other reason, or `--priority` next to `--expedite`, exits 2 before 1Password.
 It reads the open tickets first and exits 4, with no write, while another ticket with priority Highest is open.
 The move skips `before_transition`: it passes Backlog and Ready and every column limit, so a full column goes over its max by one.
-Then it comments `Expedite: <reason>`, assigns the ticket to the agent, and prints `CHB-<n> -> In Progress (expedite). Tell the owner now: <reason>`.
-A failed move after the create is a notice with exit 0: the owner moves the ticket in the Jira UI.
+Then it comments `Expedite: <reason>`, assigns the ticket to the agent, and prints `CHB-<n> -> In Progress (expedite). Tell the human now: <reason>`.
+A failed move after the create is a notice with exit 0: the human moves the ticket in the Jira UI.
 A failed comment or assign after the move is a notice that names the command to run; the ticket is already in the In Progress column.
 After the move it reads the open tickets again and prints `more than one open expedite ticket: ...` when two agents created one at the same moment.
 `priority CHB-<n> Highest` and `create --priority Highest` exit 2 and name `create --expedite`.
@@ -293,7 +293,7 @@ then the tickets from the first misplaced one, each chunk of up to 50 after the 
 `create` runs it after creating a ticket in the pull list, never for a ticket in Backlog.
 The search can miss a ticket created a moment ago, so the new ticket is then sorted as the last ticket of the pull list.
 A failed sort after `create` prints `could not sort Ready: ...` and exits 0: the ticket exists, so do not create it again; run `sort-todo`.
-The rule decides the order, with no owner exception. The owner moves a ticket by changing its priority, or by ranking it within its priority.
+The rule decides the order, with no human exception. The human moves a ticket by changing its priority, or by ranking it within its priority.
 A bad heading, an empty body, a "When:" line without "Speed up:", a duplicate key or more than 50 issues exit 2 before the wrapper reads 1Password.
 
 `view` shows a bullet list as lines that start with a dash, and each issue link as a line such as `Is blocked by: CHB-146 (To Do)` or `Blocks: CHB-88 (To Do)`.
@@ -304,7 +304,7 @@ A read of `CHB-<a>` then lists `CHB-<b>` as `inwardIssue` ("is blocked by"). A l
 It reads the links of `CHB-<a>` first and changes nothing when the link exists.
 It reads them again after the POST and exits 1 when `CHB-<b>` does not show as a blocker.
 A key outside CHB or a ticket linked to itself exits 2 before the wrapper reads 1Password.
-It never removes a link: the owner does that in the Jira UI.
+It never removes a link: the human does that in the Jira UI.
 
 Exit codes: 0 done, 1 Jira refused or failed, 2 usage error, 3 no credential (no service account token in the keyring, or `op` failed), 4 a board rule blocks the transition,
 5 a WIP limit blocks the move, 6 the move is done and Ready is below its minimum (CHB-164).
@@ -330,7 +330,7 @@ The 1Password service account narrows who can read it to processes that can read
 `before_transition` in `jira.py` runs before every transition (CHB-108). It exits 4 (exit 5 for the two full-column cases below) and does not move the ticket when:
 
 - the target status is Validating and the description has no section headed "Acceptance criteria (Validating)" with text under it;
-- the target status is Needs human and the description has no section headed "Needs human: owner steps" with text under it;
+- the target status is Needs human and the description has no section headed "Needs human: steps" (or the older `Needs human: owner steps`) with text under it;
 - the move starts work: the target is In Progress and the ticket comes from a column outside started work (Ready, Done, Discarded). A start from Backlog is refused.
   It is blocked while In Progress, In Review or Validating has a max on the board and holds that many other CHB tickets or more (CHB-127).
   The message names every full column, its count, its limit and its tickets;
@@ -373,7 +373,7 @@ The moved ticket is counted in its new column, never in its old one, and is neve
 It blocks the pull-list tickets it has "Blocks" links to unless it moved to Done or Discarded, whatever the search still shows (CHB-143).
 The start check and this line take the top tickets from one function, `top_queue`, through `todo_order`.
 If a count fails, `transition` prints a notice instead and still exits 0: the ticket has moved.
-Two agents that move tickets at the same moment can both pass the check. The owner overrides a limit in the Jira UI, with a comment.
+Two agents that move tickets at the same moment can both pass the check. The human overrides a limit in the Jira UI, with a comment.
 
 ### Hook against raw Jira writes
 
@@ -415,10 +415,10 @@ flowchart TD
         WE["warn_edit_loops.py<br/>matcher: Write, Edit, MultiEdit<br/>warns on the 5th and 8th edit of one file"]
     end
     subgraph STOP["Stop: refuses the end of the turn"]
-        CO["check_owner_commands.py<br/>matcher: none<br/>flags owner commands that depend on the current folder"]
+        CO["check_owner_commands.py<br/>matcher: none<br/>flags human commands that depend on the current folder"]
         CW["check_wip_minimums.py<br/>matcher: none<br/>refuses while a board column is below its minimum"]
         CT["check_untriaged_reviews.py<br/>matcher: none<br/>refuses while an agent PR has untriaged review findings"]
-        CH["check_human_word.py<br/>matcher: none<br/>refuses a reply that calls the person owner, not the human"]
+        CH["check_human_word.py<br/>matcher: none<br/>refuses a reply that does not call the person the human"]
     end
     SS --> PRE
     PRE --> POST
@@ -427,10 +427,10 @@ flowchart TD
 
 `shell_words.py`, `harness_bash_writes.py`, `private_folder.py` and `stop_refusal.py` are helpers that hooks import. They are not registered.
 
-## Hook: commands for the owner work from any folder
+## Hook: commands for the human work from any folder
 
 `.claude/settings.json` runs `factory/hooks/check_owner_commands.py` when the agent finishes a reply (Stop hook, CHB-126).
-On 2026-11-07 the agent gave the owner `cp <backup> .git/config`. The owner ran it from another repository's folder, and that repository's config was overwritten.
+On 2026-11-07 the agent gave the human `cp <backup> .git/config`. The human ran it from another repository's folder, and that repository's config was overwritten.
 
 The hook reads the shell code blocks of the reply (no language, or `sh`, `bash`, `shell`, `zsh`, `console`). It sends the agent back to rewrite a command that depends on the current folder:
 
@@ -446,7 +446,7 @@ The hook blocks once per reply and never on bad input, so it cannot loop. Like t
 ## Hook: act on the WIP minimums
 
 `.claude/settings.json` runs `factory/hooks/check_wip_minimums.py` when the agent finishes a reply (Stop hook, CHB-162).
-On 2026-11-10 the agent ended its turn four times with the wrapper's "below its minimum" line on screen, and the owner had to push it.
+On 2026-11-10 the agent ended its turn four times with the wrapper's "below its minimum" line on screen, and the human had to push it.
 
 The hook reads the column minimums from the board and the open tickets as the agent account (one 1Password read, two Jira reads). It exits 2 with a reason when:
 
@@ -474,7 +474,7 @@ and after 60 minutes it prints that the slot is still full and exits 1. The agen
 ## Hook: triage review findings of agent PRs
 
 `.claude/settings.json` runs `factory/hooks/check_untriaged_reviews.py` when the agent finishes a reply (Stop hook, CHB-209).
-On 2026-11-19 PRs #139 and #140 sat blocked after the owner's approval: the agent had not triaged the review, so the required `triage` check stayed red.
+On 2026-11-19 PRs #139 and #140 sat blocked after the human's approval: the agent had not triaged the review, so the required `triage` check stayed red.
 
 The hook lists the open PRs of `chb-factory-agent[bot]` and reads the comments of each with `gh` (read only, by repository path).
 It calls `triage_review.evaluate`, the function of the required `triage` check, so the hook and the check agree on what "untriaged" means.
@@ -494,12 +494,12 @@ On 2026-11-13 the human asked to be called "the human" everywhere: in the chat, 
 
 The hook reads the reply text in `last_assistant_message`, outside fenced code blocks and inline code.
 It exits 2 and names each line that uses `owner`, `owners` or `owner's` as a word, with "the human" as the word to use.
-Technical terms pass: `CODEOWNERS`, "repository owner", "repo owner", "organization owner", `owner/repo`, "root-owned".
+Technical terms pass: `CODEOWNERS`, "code owner", "repository owner", "repo owner", "organization owner", `owner/repo`, `roles/owner`, "root-owned".
 To quote the old word, put it in backticks.
 
 It fails open: bad input, an unusable state folder or any other error prints at most one line and lets the turn end.
 It refuses once per session for the same findings (state in `<temp dir>/chb-human-word-<uid>/`, folder override `CHB_HUMAN_WORD_STATE_DIR`).
-Tests: `factory/tests/test_check_human_word.py`.
+Tests: `factory/tests/test_check_human_word.py`. The repository check is `scripts/tests/test_human_word.py`.
 
 ## Hook: no personal agent memory
 
@@ -544,7 +544,7 @@ They split a command with unbalanced quotes, such as a heredoc with an apostroph
 ## Hook: third-party code runs in the sandbox container
 
 `.claude/settings.json` runs `factory/hooks/route_to_sandbox.py` before every Bash command (CHB-31).
-Package installs, linters and test runners run code from npm and PyPI. On the host that code could read the owner's keyring, 1Password and home folder.
+Package installs, linters and test runners run code from npm and PyPI. On the host that code could read the human's keyring, 1Password and home folder.
 The hook denies them on the host and names the sandbox form, `.devcontainer/run <command>`:
 
 - `uv`, `uvx`, `npm`, `npx`, `pnpm`, `yarn`, `pip`, `pip3`, `pytest`, `vitest`, `python -m pytest`, `python -m pip`;
@@ -578,7 +578,7 @@ The hook denies the edit when all of these hold:
 
 - the path's first folder, relative to the top of its own git worktree, is `.claude`, `factory` or `.github`;
 - that worktree's branch is `CHB-<n>-...`;
-- CHB-<n> is a product epic, or its Jira parent is one. The product epics are CHB-4, CHB-14, CHB-19 and CHB-50 (`PRODUCT_EPICS` in the hook, set by the owner).
+- CHB-<n> is a product epic, or its Jira parent is one. The product epics are CHB-4, CHB-14, CHB-19 and CHB-50 (`PRODUCT_EPICS` in the hook, set by the human).
 
 These pass: tickets of other epics, tickets without a parent, `main`, `worktree-agent-...` and any other branch (the branch name hook guards names), and paths outside a git repository.
 A file under `<repo>/.claude/worktrees/agent-x/` belongs to that worktree, so `backend/` files there pass.
@@ -646,7 +646,7 @@ Like the other Bash hooks, it reads the command text only, denies on unreadable 
 ## Hook: what to finish first, at session start
 
 `.claude/settings.json` runs `factory/hooks/validating_sweep.py` on every SessionStart event: start, resume, `/clear`, compaction and fork (CHB-140).
-On 2026-11-10 a 05:15 UTC Dependabot run unblocked two Validating tickets. The next session did not look at them until the owner asked.
+On 2026-11-10 a 05:15 UTC Dependabot run unblocked two Validating tickets. The next session did not look at them until the human asked.
 
 The hook adds this to the agent's context before the first prompt:
 
@@ -656,9 +656,9 @@ The hook adds this to the agent's context before the first prompt:
   `check`: the line has no absolute date, so it names an event.
   `no section`: the ticket has no such section.
 - Open agent PRs labelled `needs-rebase`, as "resolve first" (CHB-172).
-- The line of `make review-agreement`, and up to 5 merged PRs whose last review comment has no owner reaction, newest first, with links.
+- The line of `make review-agreement`, and up to 5 merged PRs whose last review comment has no human reaction, newest first, with links.
 
-It reads only: one Jira search as the agent account (credentials from 1Password, as `factory/bin/jira`) and two GitHub GraphQL queries with the owner's `gh` login.
+It reads only: one Jira search as the agent account (credentials from 1Password, as `factory/bin/jira`) and two GitHub GraphQL queries with the human's `gh` login.
 The review agreement query reads up to 3 pages of 100 PRs. The `needs-rebase` query reads one page.
 Each call has a 6 s timeout, the three parts run in parallel, and the hook stops waiting after 9 s. Claude Code kills it at 15 s.
 It fails open: a part that fails prints one line, `Validating sweep failed: <reason>`, `Review agreement failed: <reason>` or `Needs-rebase list failed: <reason>`, and the session starts.
@@ -670,7 +670,7 @@ Ticket summaries, "When:" lines and PR titles are quoted on one line of at most 
 `.claude/settings.json` runs `factory/hooks/rules_health_due.py` on SessionStart events with source `startup` (CHB-167).
 Resume, `/clear` and compaction do not run it.
 It reads one Jira search as the agent account: the newest ticket whose summary starts with `Rules health check`.
-When none exists or the newest is 7 or more days old, it adds one line to the context: follow `docs/process/rules-health.md` after the owner's request.
+When none exists or the newest is 7 or more days old, it adds one line to the context: follow `docs/process/rules-health.md` after the human's request.
 It writes nothing and runs no check itself. Cost: one 1Password read and one Jira search, under 15 s (Claude Code's limit), no tokens beyond the one line.
 It fails open: when Jira or 1Password is unreachable it prints `Rules health check skipped: <reason>` on stderr and adds nothing.
 
@@ -681,12 +681,12 @@ Duplicates and contradictions are judged by the agent in the procedure.
 ## Hook: agent labels start with the Jira key
 
 `.claude/settings.json` runs `factory/hooks/deny_unlabeled_agents.py` before every Agent tool call (CHB-190).
-The owner watches several agents at once and sees only each one's short label, the `description` of the launch.
+The human watches several agents at once and sees only each one's short label, the `description` of the launch.
 A label that does not start with the ticket key forces a question.
 
 The hook denies a launch whose `description` does not start with `CHB-<n>:` or `no-ticket:` followed by text, and names both forms.
 The match is case-sensitive and starts at the first character: the hook denies `Implement CHB-23`, an empty label, `chb-23:` and a bare `CHB-23:`.
-It applies to every session started in this repository: the owner's, forks and agents launched by agents.
+It applies to every session started in this repository: the human's, forks and agents launched by agents.
 
 Unlike the other PreToolUse hooks, it fails open: unreadable input, a missing `description` or an error inside the hook lets the launch run.
 A broken label check must not block every agent launch. A wrong label costs a question, not damage.
@@ -708,7 +708,7 @@ How it starts:
    - only docs changed since the last commit the App reviewed: that verdict is posted again on the new head, no Claude call;
    - otherwise Claude reviews: Opus for harness, supply-chain or governance paths, more than 400 changed lines or a binary file outside `docs/`; Sonnet for the rest.
 
-Claude authenticates with the owner's subscription token (`claude setup-token`), not an API key.
+Claude authenticates with the human's subscription token (`claude setup-token`), not an API key.
 `--bare` cannot read that token, so the job isolates Claude with `--safe-mode`, `--restricted`, an empty `HOME` and environment switches instead.
 A `CLAUDE.md`, `AGENTS.md`, rule, skill, hook or `.mcp.json` in the PR head never loads. ADR-ea8c decision 2 lists each switch and the canary test behind it.
 `--max-budget-usd 1` stops a runaway run.
@@ -716,7 +716,7 @@ A `CLAUDE.md`, `AGENTS.md`, rule, skill, hook or `.mcp.json` in the PR head neve
 A change to `review.yml` takes effect only after merge: the PR that changes it is reviewed by the copy on `main`.
 
 After a valid model review, the App also posts the summary as a PR comment (CHB-141).
-The comment asks the owner to react 👍 if the verdict is right and 👎 if not, and to reply with what it missed.
+The comment asks the human to react 👍 if the verdict is right and 👎 if not, and to reply with what it missed.
 `make review-agreement` counts those reactions on merged PRs and prints the stage 1 exit of ADR-ea8c:
 
 ```sh
@@ -731,7 +731,7 @@ make -C ~/workspace/corporate-hotel-booking-software-factory review-agreement
 | `review/resolve_pr.py` | Picks the PR to review from API data: open, not draft, into `main`, same repository, not Dependabot, head equal to the run's SHA. |
 | `review/plan.py` | Skip, carry forward or review, and which model. |
 | `review/docs_list.py` | The docs allowlist, shared by `plan.py` and `ci.yml` (CHB-117). |
-| `review/agreement.py` | Counts the owner's 👍 and 👎 on review comments of merged PRs. Prints the stage 1 exit. |
+| `review/agreement.py` | Counts the human's 👍 and 👎 on review comments of merged PRs. Prints the stage 1 exit. |
 
 The gate ignores every score the model claims. Each dimension starts at 10 and loses 3 per critical finding, 2 per improvement and 0.5 per cleanup.
 A critical finding caps its dimension at 7. Merge Safety is the weighted mean: code quality 30, security 25, business alignment 15, tests 15, architecture 15.

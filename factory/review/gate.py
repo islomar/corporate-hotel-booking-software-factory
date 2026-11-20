@@ -51,8 +51,8 @@ CARRIED = "carried:"  # + the SHA whose verdict was carried forward (factory/rev
 SKIPPED = "skipped"  # docs-only PR, no model review (factory/review/plan.py)
 SUMMARY_LIMIT = 60000  # GitHub caps a check run summary at 65535 characters.
 # CHB-141: the PR comment of a model review ends with this line and a marker.
-# factory/review/agreement.py counts the owner's reactions on it (ADR-ea8c stage 1).
-REACTION_LINE = "Owner: react 👍 if you agree with this verdict, 👎 if not. On 👎, reply with what it missed or got wrong."
+# factory/review/agreement.py counts the human's reactions on it (ADR-ea8c stage 1).
+REACTION_LINE = "Human: react 👍 if you agree with this verdict, 👎 if not. On 👎, reply with what it missed or got wrong."
 COMMENT_MARKER = "<!-- chb-review "  # + "reviewed:<sha> -->"
 
 ANNOTATIONS = {"$schema", "title", "description", "$defs"}

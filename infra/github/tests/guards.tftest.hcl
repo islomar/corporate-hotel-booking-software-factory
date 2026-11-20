@@ -119,6 +119,6 @@ run "repository_topics_fit_github_and_name_the_community" {
   }
   assert {
     condition     = !anytrue([for t in ["codurance", "corporate-hotel-booking", "kata"] : contains(github_repository.this.topics, t)])
-    error_message = "codurance, corporate-hotel-booking and kata were removed on the owner's request (CHB-186)."
+    error_message = "codurance, corporate-hotel-booking and kata were removed on the human's request (CHB-186)."
   }
 }

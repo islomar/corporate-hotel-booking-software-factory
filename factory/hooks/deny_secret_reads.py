@@ -60,7 +60,7 @@ OP_VALUE_OPTIONS = {"--account", "--config", "--session", "--encoding", "--forma
 
 ADVICE = (
     "Agents do not read secrets (CHB-30). `factory/bin/as-agent` and `factory/bin/jira` read their token themselves; "
-    "`.env.example` lists the variable names. Ask the owner if a secret value is really needed."
+    "`.env.example` lists the variable names. Ask the human if a secret value is really needed."
 )
 
 

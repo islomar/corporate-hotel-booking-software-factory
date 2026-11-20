@@ -2,9 +2,9 @@
 """Claude Code SessionStart hook: say when the rules health check is due (CHB-167).
 
 The rules agents follow (CLAUDE.md, docs/process, ADRs, factory/) grow every day and nobody checks
-them as a whole. The owner decided on 2026-11-10: no timer and no headless run; the first session
+them as a whole. The human decided on 2026-11-10: no timer and no headless run; the first session
 after 7 or more days since the last check runs it. This hook only informs. It adds one line to the
-agent's context, and the agent runs the procedure in docs/process/rules-health.md after the owner's
+agent's context, and the agent runs the procedure in docs/process/rules-health.md after the human's
 current request.
 
 Last run: the newest Jira ticket whose summary starts with "Rules health check" (any status). The
@@ -61,13 +61,13 @@ def last_run(issues: list[dict[str, Any]]) -> datetime | None:
 def due_line(last: datetime | None, now: datetime) -> str | None:
     """The context line when 7 or more days have passed since the last run (or there was none)."""
     if last is None:
-        return f"Rules health check is due: it never ran. After the owner's current request, follow {PROCEDURE}."
+        return f"Rules health check is due: it never ran. After the human's current request, follow {PROCEDURE}."
     days = (now - last).days
     if now - last < INTERVAL:
         return None
     return (
         f"Rules health check is due: last run {last.date().isoformat()}, {days} days ago (every 7 days). "
-        f"After the owner's current request, follow {PROCEDURE}."
+        f"After the human's current request, follow {PROCEDURE}."
     )
 
 

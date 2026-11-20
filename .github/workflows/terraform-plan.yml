@@ -2,7 +2,7 @@
 #
 # What: a pull request that changes infra/gcp/** gets one comment, updated on each push: the count
 # of resources to add, change and destroy, and the address and action of each. A reviewer sees the
-# effect of the change before merging. Nothing is applied: the owner applies locally (infra/README.md).
+# effect of the change before merging. Nothing is applied: the human applies locally (infra/README.md).
 #
 # Public repository: no plan text, attribute value or state content may reach the log, the job
 # summary or the comment. The plan goes to a file in $RUNNER_TEMP. Only scripts/plan_summary.py

@@ -424,7 +424,7 @@ class CheckRunPayloadTest(unittest.TestCase):
 
 
 class CommentBodyTest(unittest.TestCase):
-    """CHB-141: the PR comment the owner reacts to. Read by factory/review/agreement.py."""
+    """CHB-141: the PR comment the human reacts to. Read by factory/review/agreement.py."""
 
     def test_a_model_review_gets_the_summary_the_reaction_line_and_the_marker(self) -> None:
         verdict = evaluate(_envelope(_fixture("valid.json")), SCHEMA)
@@ -440,7 +440,7 @@ class CommentBodyTest(unittest.TestCase):
     def test_the_reaction_line_is_the_one_the_ticket_asks_for(self) -> None:
         self.assertEqual(
             REACTION_LINE,
-            "Owner: react 👍 if you agree with this verdict, 👎 if not. On 👎, reply with what it missed or got wrong.",
+            "Human: react 👍 if you agree with this verdict, 👎 if not. On 👎, reply with what it missed or got wrong.",
         )
 
     def test_a_failing_review_also_asks_for_a_reaction(self) -> None:

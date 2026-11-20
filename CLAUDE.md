@@ -17,13 +17,13 @@ All work is tracked in Jira space `CHB` (see `TODO.md`). Move tickets only as `d
 
 - Learnings go in this repository, never in personal agent memory. See `docs/decisions/ADR-eedb-learnings-live-in-the-repo.md`.
 - A correction becomes a hook or a check before it becomes prose.
-- At session start, if the context says "Rules health check is due", follow `docs/process/rules-health.md` after the owner's current request.
+- At session start, if the context says "Rules health check is due", follow `docs/process/rules-health.md` after the human's current request.
 - A dependency update that breaks something gets an automated test in the fix. See `docs/knowledge/dependency-update-breaks-get-a-test.md`.
 - Work outside-in: an acceptance test first, then unit tests, one public method at a time.
 - Start every agent label (the Agent tool's `description`) with `CHB-<n>:` or `no-ticket:`. A PreToolUse hook (`factory/hooks/deny_unlabeled_agents.py`) denies other labels.
 - Branch from `main`. Start dependent work after the parent PR merges.
   A PR that must build on an open PR uses `--base <parent-branch>`, never `--base main`. GitHub retargets it to `main` when the parent merges.
-- Push branches and open PRs through `factory/bin/as-agent` (for example `factory/bin/as-agent gh pr create`), never with the owner's login. See ADR-d7b7.
+- Push branches and open PRs through `factory/bin/as-agent` (for example `factory/bin/as-agent gh pr create`), never with the human's login. See ADR-d7b7.
   `as-agent gh pr create` also enables auto-merge (squash) on the new PR. Opt out for one PR with `AGENT_NO_AUTO_MERGE=1`. See `factory/README.md`.
 - Commit only through `factory/bin/as-agent` too. If it fails (for example no 1Password service account token in the keyring, exit code 3), stop and report.
   Never commit with another git identity, not even locally.
@@ -31,12 +31,12 @@ All work is tracked in Jira space `CHB` (see `TODO.md`). Move tickets only as `d
   It acts as the Atlassian account "Claude (CHB agent)".
   Write Jira text in Markdown. The wrapper renders headings, lists, `code` and bold, and links CHB keys and PR numbers.
   Every ticket gets High, Medium or Low as `docs/process/priorities.md` defines.
-  Never write to Jira with `acli`: its login is the owner's. Read with `factory/bin/jira view` and `factory/bin/jira search`.
+  Never write to Jira with `acli`: its login is the human's. Read with `factory/bin/jira view` and `factory/bin/jira search`.
   A PreToolUse hook (`.claude/settings.json`, `factory/hooks/deny_raw_jira_writes.py`) blocks `acli jira` writes and `curl`, `wget` or Python writes to the Jira REST API.
   It matches the whole command text: put a commit message or PR body that quotes such a command in a file.
   If `factory/bin/jira transition` exits 5, a WIP limit blocks the move: run the wait command it names in the background.
   If it exits 4, another board rule blocks it: a start out of order, a blocked ticket, or a missing required section.
-  Start only the top ticket of Ready; to start another, with the owner's go, raise its priority or rank it first within its priority.
+  Start only the top ticket of Ready; to start another, with the human's go, raise its priority or rank it first within its priority.
   If it lacks acceptance criteria, write them (`docs/process/kanban.md`, Ready).
   Every ticket opens with a non-empty "Why it matters" section: the pain, who feels it, the value of solving it, in plain words. `create` and a start refuse a ticket without it.
   Ready stays sorted: ready tickets High, Medium, Low, then blocked tickets. `create` and a start run `factory/bin/jira sort-todo`.
@@ -49,11 +49,11 @@ All work is tracked in Jira space `CHB` (see `TODO.md`). Move tickets only as `d
   Leave the ticket, comment, and report. Moves into In Review and Validating are never blocked by a limit. See `docs/process/kanban.md`.
   If `factory/bin/jira` fails (for example no 1Password service account token in the keyring, exit code 3), stop and report.
 - For any step that deletes or changes something, name the exact item, the system and location (URL or menu path), and the command or clicks. Say what must not be deleted when similar items exist.
-- The owner does not read PR bodies closely. Before a merge, state the PR's risks, side effects and merge order in the chat, in plain words.
+- The human does not read PR bodies closely. Before a merge, state the PR's risks, side effects and merge order in the chat, in plain words.
 - Report anything that will cost money (a trial ending, a paid plan, a free-tier limit about to be passed) with the date and amount, even when found during other work.
-- A command for the owner to paste works from any folder: absolute paths, `git -C <repo>`, `make -C <repo>`, or a leading `cd ~/workspace/<repo> &&`.
+- A command for the human to paste works from any folder: absolute paths, `git -C <repo>`, `make -C <repo>`, or a leading `cd ~/workspace/<repo> &&`.
   A Stop hook (`factory/hooks/check_owner_commands.py`) checks the shell blocks of every reply. See CHB-126.
-- When work waits on a schedule, a run, a person or a limit, tell the owner how to speed it up or unblock it, with the exact step.
+- When work waits on a schedule, a run, a person or a limit, tell the human how to speed it up or unblock it, with the exact step.
   In an "Acceptance criteria (Validating)" section this is the "Speed up:" line. `factory/bin/jira section` refuses a "When:" line without one.
 - Run `.devcontainer/run make check` before every commit. Gates read exit codes, not output text.
   Package installs, linters and tests run in the sandbox container (`.devcontainer/run <command>`); a hook denies them on the host. See README.md, "Sandbox container".

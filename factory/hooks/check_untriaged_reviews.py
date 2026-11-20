@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Claude Code Stop hook: triage the review findings of agent PRs before the turn ends (CHB-209).
 
-On 2026-11-19 PRs #139 and #140 sat blocked after the owner's approval: the required `triage` check
-stayed red because the agent never triaged the review. On #140 the agent then told the owner the PR
-waited for the owner's approval.
+On 2026-11-19 PRs #139 and #140 sat blocked after the human's approval: the required `triage` check
+stayed red because the agent never triaged the review. On #140 the agent then told the human the PR
+waited for the human's approval.
 
 The hook lists the open PRs of the agent's account (`triage_review.AGENT`) and reads the comments of
 each. It runs the same function as the required check, `triage_review.evaluate`, so both agree on what
@@ -19,7 +19,7 @@ It never loops. Like check_wip_minimums.py (both use stop_refusal.py) it remembe
 `<temp dir>/chb-untriaged-reviews-<uid>/<session id>.json` (CHB_UNTRIAGED_REVIEWS_STATE_DIR overrides the
 folder). A second stop with the same findings passes with one line; a new review refuses again.
 
-Reads use plain `gh` (the owner's login, read only) with the repository path, never the current folder.
+Reads use plain `gh` (the human's login, read only) with the repository path, never the current folder.
 
 Contract (https://code.claude.com/docs/en/hooks, Stop): the event arrives as JSON on stdin with
 `session_id`. Exit code 2 blocks the stop and feeds stderr to the agent.
@@ -137,7 +137,7 @@ def main(stdin: TextIO = sys.stdin, run_gh: triage_review.Gh | None = None, stat
         return 0
     print(
         "Agent PRs have untriaged review findings, and their required `triage` check stays red until you triage them "
-        "(CHB-209, factory/README.md, Triage of review findings). The PR does not wait for the owner:\n"
+        "(CHB-209, factory/README.md, Triage of review findings). The PR does not wait for the human:\n"
         + "\n".join(f"- {line}" for line in lines),
         file=sys.stderr,
     )

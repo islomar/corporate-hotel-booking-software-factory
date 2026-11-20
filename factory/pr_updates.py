@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Keep agent and Dependabot pull requests up to date with main without the owner (CHB-172, CHB-177). Standard library only.
+"""Keep agent and Dependabot pull requests up to date with main without the human (CHB-172, CHB-177). Standard library only.
 
-Why: when one agent PR merges, the others fall behind main. The owner's "Update branch" click makes
-the owner the last pusher, and the `main` ruleset requires approval of the last push by someone
-else, so the owner's own approval stops counting (PR #102, 2026-11-10). A push by the agent App
-leaves the owner free to approve.
+Why: when one agent PR merges, the others fall behind main. The human's "Update branch" click makes
+the human the last pusher, and the `main` ruleset requires approval of the last push by someone
+else, so the human's own approval stops counting (PR #102, 2026-11-10). A push by the agent App
+leaves the human free to approve.
 
 The `main` ruleset requires a branch to contain the latest main before it merges
 (`strict_required_status_checks_policy = true`, CHB-177), so a PR behind main cannot merge.
@@ -13,7 +13,7 @@ What: for each open PR opened by the agent App, into main, from this repository:
 - behind main, mergeable: rebase it with the GraphQL mutation `updatePullRequestBranch`
   (`expectedHeadOid` = the head this run read, so a push in between makes GitHub refuse).
   An approved PR is rebased too: the rebase dismisses the approval (`dismiss_stale_reviews_on_push`)
-  and the owner approves the new head. Leaving it would stop it from ever merging;
+  and the human approves the new head. Leaving it would stop it from ever merging;
 - conflicting: add the label `needs-rebase` (GitHub runs no `pull_request` workflow on a
   conflicting PR, so its checks page proves nothing). The agent resolves it in a session;
 - labelled `needs-rebase` but mergeable again: remove the label.

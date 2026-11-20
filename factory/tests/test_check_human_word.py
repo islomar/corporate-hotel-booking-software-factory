@@ -34,6 +34,9 @@ ALLOWED = [
     "The field `owner` holds the login.",
     "Read `.owner.login` from the payload.",
     "The organization owner pays.",
+    "This file has no code owner.",
+    "It needs code-owner review.",
+    "Never grant roles/owner to the planner.",
 ]
 
 

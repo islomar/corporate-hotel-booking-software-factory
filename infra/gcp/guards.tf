@@ -2,7 +2,7 @@
 # A failed guard stops `make infra-plan`. Fix the code, not the guard.
 
 locals {
-  # The only roles the planner may hold. All read-only. Widening this list needs an ADR and the owner.
+  # The only roles the planner may hold. All read-only. Widening this list needs an ADR and the human.
   planner_role_allowlist = toset([
     "roles/viewer",
     "roles/iam.securityReviewer",

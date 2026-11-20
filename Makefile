@@ -88,7 +88,7 @@ mutate: ## Mutation testing for the backend
 	cd backend && uv run --locked mutmut run
 
 # SINCE=YYYY-MM-DD changes the first merge date. See factory/review/agreement.py and ADR-ea8c, stage 1.
-review-agreement: ## Owner agreement with the review verdict on merged PRs (ADR-ea8c stage 1)
+review-agreement: ## Human agreement with the review verdict on merged PRs (ADR-ea8c stage 1)
 	python3 -I factory/review/agreement.py $(if $(SINCE),--since $(SINCE))
 
 TF_ENV = GOOGLE_OAUTH_ACCESS_TOKEN=$$(CLOUDSDK_ACTIVE_CONFIG_NAME=chb gcloud auth print-access-token) \

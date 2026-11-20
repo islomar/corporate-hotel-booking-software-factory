@@ -18,7 +18,7 @@
 ## Context
 
 The agent used `gh` logged in as the repository owner, who is admin.
-GitHub does not let a PR author approve their own PR, so the owner could not approve agent PRs.
+GitHub does not let a PR author approve their own PR, so the human could not approve agent PRs.
 An admin token bypasses rulesets and CODEOWNERS.
 Events created with the default `GITHUB_TOKEN` start no new workflow runs, so bot merges would skip CI and deploy on `main`.
 
@@ -28,8 +28,8 @@ Events created with the default `GITHUB_TOKEN` start no new workflow runs, so bo
 - Permissions: contents, pull requests and workflows read and write; checks, actions and metadata read. No administration.
 - Tokens are short-lived and minted per run. The private key stays in 1Password and in a GitHub Actions secret.
 - The `main` ruleset applies to everyone except the Admin repository role: pull request, required checks `backend`, `frontend`, `e2e`, code-owner review on harness paths.
-- Amended 2026-11-07 (CHB-119): the Admin role bypasses the `main` ruleset, so the owner can push directly to `main`.
-  Only the owner holds that role. The agent App has no administration permission and stays bound by the ruleset.
+- Amended 2026-11-07 (CHB-119): the Admin role bypasses the `main` ruleset, so the human can push directly to `main`.
+  Only the human holds that role. The agent App has no administration permission and stays bound by the ruleset.
 - Amended 2026-11-07 (CHB-86): the App keeps `workflows` write. The agent pushes workflow changes through pull requests like any other change.
   A workflow edited on an agent branch cannot reach secrets, because no secret depends on the App permission:
   - no repository-level Actions secrets exist;
@@ -45,11 +45,11 @@ Events created with the default `GITHUB_TOKEN` start no new workflow runs, so bo
 ## Alternatives rejected
 
 - A second GitHub account: a long-lived token, its own email and 2FA.
-- The owner's identity: protections become decoration.
+- The human's identity: protections become decoration.
 
 ## Consequences
 
-- The owner approves agent PRs as code owner.
+- The human approves agent PRs as code owner.
 - Merges done by the App trigger CI and deploy.
-- The owner's direct pushes to `main` skip the pull request, the required checks and code-owner review.
+- The human's direct pushes to `main` skip the pull request, the required checks and code-owner review.
   CI and deploy still run after the push, so an untested commit can reach production.

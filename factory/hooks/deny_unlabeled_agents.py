@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Claude Code PreToolUse hook: deny an agent launch whose label does not start with its Jira key (CHB-190).
 
-The owner watches several agents at once and sees only each one's short label. A label that does
+The human watches several agents at once and sees only each one's short label. A label that does
 not start with the ticket key forces a question. A prose rule to put the key first gets forgotten.
 
 Denied: an Agent tool call whose `description` does not start with `CHB-<n>:` or `no-ticket:` followed by text.

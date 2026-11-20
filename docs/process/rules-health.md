@@ -22,7 +22,7 @@ This procedure finds those three problems and proposes the fixes as one pull req
 
 The first session after 7 or more days since the last run.
 `factory/hooks/rules_health_due.py` adds the line "Rules health check is due" to the context at session start.
-No timer and no headless run exist. Finish the owner's current request first, then follow the steps below.
+No timer and no headless run exist. Finish the human's current request first, then follow the steps below.
 
 The last run is the newest Jira ticket whose summary starts with `Rules health check`.
 Step 1 creates it, so the hook stops asking as soon as a run starts, even if its PR waits for review.
@@ -40,9 +40,9 @@ Step 1 creates it, so the hook stops asking as soon as a run starts, even if its
      The script covers paths, commands and exit-code numbers. You cover meanings (for example what exit 5 means) and ticket states.
    - Contradictions: text against the code, or against a newer ADR or `kanban.md` rule.
 4. Keep at most 15 findings, ranked by how likely an agent is to act wrongly on the text. List them as F1..Fn in the ticket.
-5. Make one branch `CHB-<n>-rules-health-<YYYY-MM-DD>` and one commit per finding (`F3: ...`), so the owner can reject one and the agent drops that commit.
+5. Make one branch `CHB-<n>-rules-health-<YYYY-MM-DD>` and one commit per finding (`F3: ...`), so the human can reject one and the agent drops that commit.
 6. Open one PR through `factory/bin/as-agent gh pr create`. The body lists F1..Fn with file and line, evidence and fix. Never merge it.
-7. If the owner rejects a finding, drop its commit and say so in the ticket.
+7. If the human rejects a finding, drop its commit and say so in the ticket.
 
 ## What counts as a finding
 
@@ -56,7 +56,7 @@ Rules for the fix:
 
 - Do not edit the body of an ADR. Add an "Amended" note at its head with the date and the ticket, in the style of the existing notes.
   An ADR section named Context or Alternatives is history: it can be out of date by design and is not a finding.
-- `CODEOWNERS` keeps `/.github/workflows/` (owner decision, 2026-11-10).
+- `CODEOWNERS` keeps `/.github/workflows/` (human decision, 2026-11-10).
 - When the right side of a contradiction is unclear, make no edit. Put the question in the ticket.
 - A line that is history or an example (`until CHB-135`, `Blocks: CHB-88 (To Do)`) is not stale.
 - A one-line summary of a rule with a link to its source is not a duplicate.
@@ -65,7 +65,7 @@ Rules for the fix:
 
 - 15 findings and about 40k tokens per run (about 160 KB of text). Count the documents before you read them.
 - Skip `docs/sessions/` (data, not rules) and `docs/postmortems/`.
-- One PR across `CLAUDE.md`, ADRs and `factory/` (owner decision, 2026-11-10).
+- One PR across `CLAUDE.md`, ADRs and `factory/` (human decision, 2026-11-10).
 
 ## What the hook and the script do
 

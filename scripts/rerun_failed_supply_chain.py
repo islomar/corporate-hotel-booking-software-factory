@@ -2,12 +2,12 @@
 """Re-run the failed `supply-chain` runs of a PR head after a run passes (CHB-184). Stdlib only.
 
 The `supply-chain` check fails on `pull_request` when a PR changes a supply-chain file and the
-owner has not approved. The owner's approval starts a `pull_request_review` run that passes, but
+human has not approved. The human's approval starts a `pull_request_review` run that passes, but
 the earlier failed run stays on the head commit and keeps the required check red. The agent's
 GitHub App cannot re-run workflows, so the passing run does it with its own token.
 
 A re-run evaluates the live reviews again (check_supply_chain.py reads them from the API), so it
-passes only while the owner's latest deciding review approves the head. A PR without that approval
+passes only while the human's latest deciding review approves the head. A PR without that approval
 never reaches this script: its run fails first.
 
 Usage: rerun_failed_supply_chain.py --repo OWNER/NAME --head SHA --run-id ID

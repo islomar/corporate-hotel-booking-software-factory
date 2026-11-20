@@ -1,4 +1,4 @@
-"""CHB-172, CHB-177: agent and Dependabot PRs stay up to date with main without the owner.
+"""CHB-172, CHB-177: agent and Dependabot PRs stay up to date with main without the human.
 
 The decision table: which PRs the workflow updates, labels or leaves alone. The run: which GitHub
 calls it makes, with a fake `gh`.
@@ -44,7 +44,7 @@ class DecideTest(unittest.TestCase):
 
     def test_behind_mergeable_and_approved_is_updated_too(self) -> None:
         # CHB-177: strict_required_status_checks_policy is true, so an approved PR behind main cannot merge.
-        # The rebase drops the approval; the owner approves the new head.
+        # The rebase drops the approval; the human approves the new head.
         self.assertEqual(pu.decide(_pr(review_decision="APPROVED")), ("update",))
 
     def test_up_to_date_is_left_alone(self) -> None:

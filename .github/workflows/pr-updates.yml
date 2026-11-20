@@ -1,15 +1,15 @@
-# Agent PRs stay up to date with main without the owner (CHB-172).
+# Agent PRs stay up to date with main without the human (CHB-172).
 #
-# Why: every merge to main leaves the other agent PRs behind. The owner's "Update branch" click
-# makes the owner the last pusher, and the `main` ruleset requires approval of the last push by
-# someone else (require_last_push_approval), so the owner's own approval stops counting.
+# Why: every merge to main leaves the other agent PRs behind. The human's "Update branch" click
+# makes the human the last pusher, and the `main` ruleset requires approval of the last push by
+# someone else (require_last_push_approval), so the human's own approval stops counting.
 # A push by the agent App does not have that effect.
 #
 # What: on every push to main, factory/pr_updates.py reads the open PRs opened by the agent App
 # and, per PR (decision table in the script and in factory/tests/test_pr_updates.py):
 # - behind main, mergeable: rebases it with `updatePullRequestBranch`, approved or not (strict
 #   status checks are on, CHB-177, so a PR behind main cannot merge; the rebase dismisses an
-#   approval and the owner approves the new head);
+#   approval and the human approves the new head);
 # - Dependabot PR behind main, mergeable: comments `@dependabot rebase` (only Dependabot may push
 #   to its branches);
 # - conflicting: adds the label `needs-rebase`. GitHub runs no `pull_request` workflow on a
@@ -26,7 +26,7 @@ name: PR updates
 on:
   push:
     branches: [main]
-  # For a manual run from main, for example right after the owner adds the secrets.
+  # For a manual run from main, for example right after the human adds the secrets.
   workflow_dispatch:
 
 permissions: {}

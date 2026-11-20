@@ -3,11 +3,11 @@
 The service account chb-factory-agent can only read the vault chb-factory, which holds
 the GitHub App key and the Jira token. Its token lives in the GNOME keyring. as-agent
 and factory/bin/jira read it on every call and pass it to their own `op` subprocess
-only, as OP_SERVICE_ACCOUNT_TOKEN. `op` then never asks the owner's desktop app, so no
+only, as OP_SERVICE_ACCOUNT_TOKEN. `op` then never asks the human's desktop app, so no
 approval pop-up appears.
 
-There is no fallback to the owner's desktop 1Password: it would bring back the pop-ups
-and the owner's full 1Password rights.
+There is no fallback to the human's desktop 1Password: it would bring back the pop-ups
+and the human's full 1Password rights.
 """
 
 from __future__ import annotations

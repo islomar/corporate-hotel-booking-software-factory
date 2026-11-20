@@ -29,24 +29,24 @@ How work is picked and tracked:
 
 - Agents work only on what is needed now. New tickets go to Backlog.
   A ticket moves to Ready only with a named trigger and a Definition of Ready that holds ([kanban.md, Backlog](docs/process/kanban.md#backlog)).
-- Work follows the owner's priorities, not an agent's choice: agents start only the top ticket of Ready, and priority sets the order
+- Work follows the human's priorities, not an agent's choice: agents start only the top ticket of Ready, and priority sets the order
   ([`docs/process/priorities.md`](docs/process/priorities.md)).
 - Finishing comes before starting. WIP limits on the board refuse a new start while review or live checks pile up:
   exit 5 means a full column (run the wait command it prints in the background), exit 4 any other board rule
   ([kanban.md, WIP limits](docs/process/kanban.md#wip-limits)).
-- The owner finds every blocker in one place. A step only the owner can take (a decision, a payment, a console click) moves the ticket to Needs human,
-  with numbered owner steps in the ticket.
+- The human finds every blocker in one place. A step only the human can take (a decision, a payment, a console click) moves the ticket to Needs human,
+  with numbered human steps in the ticket.
 - Jira history must show who did what, and the board rules must not be bypassed.
-  Agents make every Jira write through `factory/bin/jira`, which acts as the agent's own account and enforces the rules, never with the owner's login.
+  Agents make every Jira write through `factory/bin/jira`, which acts as the agent's own account and enforces the rules, never with the human's login.
 
 ## How the pieces fit
 
 People and agents build the app on a laptop, ship it through GitHub, and run it on Google Cloud.
-The agent never uses the owner's logins: two wrappers act as the agent's own accounts.
+The agent never uses the human's logins: two wrappers act as the agent's own accounts.
 
 ```mermaid
 flowchart TD
-    owner(["Owner"])
+    human(["Human"])
     agent(["Claude Code agent"])
     users(["App users"])
 
@@ -70,8 +70,8 @@ flowchart TD
     jirawrap -- "reads the API token" --> onepass
     asagent -- "commits, pushes, PRs as the agent GitHub App" --> github
     jirawrap -- "writes as Claude (CHB agent)" --> jira
-    owner -- "reviews, approves, overrides" --> github
-    owner -- "decides, overrides" --> jira
+    human -- "reviews, approves, overrides" --> github
+    human -- "decides, overrides" --> jira
     github -- "deploy.yml, Workload Identity Federation" --> registry
     registry --> run
     users --> run
@@ -93,7 +93,7 @@ sequenceDiagram
     participant jira as Jira CHB
     participant pr as GitHub PR
     participant ci as CI and checks
-    actor owner as Owner
+    actor human as Human
     participant deploy as deploy.yml
     participant run as Cloud Run
 
@@ -102,7 +102,7 @@ sequenceDiagram
     agent->>pr: as-agent commit, push, gh pr create with auto-merge
     agent->>jira: In Review
     pr->>ci: backend, frontend, e2e, supply-chain, review
-    owner->>pr: code-owner review on harness paths
+    human->>pr: code-owner review on harness paths
     ci-->>pr: required checks pass
     pr->>pr: squash merge into main
     pr->>ci: push to main runs every CI job

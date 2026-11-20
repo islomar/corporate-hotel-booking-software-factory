@@ -39,7 +39,7 @@ Never write the address in a file that git tracks, dotfiles included.
 
 `make infra-plan` stops without it. `make infra-apply` reads it from the saved plan.
 
-CI plans and never applies (see [Plan on pull requests](#plan-on-pull-requests)). The owner applies locally, after the PR with the Terraform change merges:
+CI plans and never applies (see [Plan on pull requests](#plan-on-pull-requests)). The human applies locally, after the PR with the Terraform change merges:
 
 1. Update `main`: `git switch main && git pull --ff-only`.
 2. Run `make infra-plan`. It writes `infra/.plans/gcp.tfplan` and `infra/.plans/github.tfplan`, and prints a summary per folder: add, change, destroy, replace and forget counts.
@@ -94,7 +94,7 @@ python3 -I ~/workspace/corporate-hotel-booking-software-factory/scripts/check_gu
 ### Move the `github` state to the bucket
 
 `github/backend.tf` keeps the state in `gs://chb-factory-a92932-tfstate/github` (CHB-216).
-Before it, the state was the local file `infra/github/terraform.tfstate`, git-ignored, in the owner's main checkout only.
+Before it, the state was the local file `infra/github/terraform.tfstate`, git-ignored, in the human's main checkout only.
 Run these steps once, in that checkout, after the CHB-216 PR merges.
 Do not run `make infra-plan` or `make infra-apply` until step 4 passes: their `github` init cannot copy the local state.
 `make infra-apply` also refuses without a plan saved from the current `main`.
@@ -153,7 +153,7 @@ Pull request runs plan with a separate identity (CHB-81, ADR-3c1f), used by CHB-
 
 It reads and cannot write. It plans with `terraform plan -lock=false`, because the state lock is a write to the state bucket.
 Its pool is separate from the deployer's: the deployer binding trusts the whole `github` pool.
-Add a role only to `local.planner_role_allowlist` in `gcp/guards.tf` and `gcp/planner.tf`, with the owner's approval.
+Add a role only to `local.planner_role_allowlist` in `gcp/guards.tf` and `gcp/planner.tf`, with the human's approval.
 Bind planner roles only in `gcp/planner.tf`. See ADR-3c1f for what the planner can and cannot do.
 
 ### Plan on pull requests
@@ -180,7 +180,7 @@ It hides everything else, because the repository is public:
 A failed plan fails the job. The log shows the `Error:` lines of Terraform and nothing else, and the comment says the plan failed.
 The `Error:` lines appear as Terraform writes them, cut to 400 characters, in a public log.
 They can name resource IDs, for example a service account email or a bucket name. The job masks only `billing_account` and `alert_email`.
-The owner accepted this risk on 2026-11-15 (review of PR #125, finding 3): resource names are not secrets, and debugging a failure needs the full text.
+The human accepted this risk on 2026-11-15 (review of PR #125, finding 3): resource names are not secrets, and debugging a failure needs the full text.
 
 The plan needs `billing_account` and `alert_email`. The job reads both from the state, masks them in the log, and passes them as `TF_VAR_*`. No repository secret holds them.
 Limit: a pull request that changes one of the two values shows no change for it, because the plan compares against the applied value.
@@ -189,7 +189,7 @@ Limit: a pull request that changes one of the two values shows no change for it,
 
 ## Rules
 
-- IAM is additive only (`*_iam_member`). Never manage project IAM authoritatively: it would remove the owner and Google's service agents.
+- IAM is additive only (`*_iam_member`). Never manage project IAM authoritatively: it would remove the human and Google's service agents.
 - `prevent_destroy` protects the service accounts, the Workload Identity pool and provider, the registry, the state bucket and the Cloud Run service.
   Replacing a service account changes its ID and breaks Workload Identity.
 - Secrets never go into Terraform: their values would be stored in the state.

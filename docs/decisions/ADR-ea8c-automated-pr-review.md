@@ -15,7 +15,7 @@
     - [7. Model and cost](#7-model-and-cost)
     - [8. Staged rollout](#8-staged-rollout)
   - [Alternatives rejected](#alternatives-rejected)
-  - [Owner decisions](#owner-decisions)
+  - [Human decisions](#human-decisions)
   - [Consequences](#consequences)
   - [Unverified](#unverified)
   - [Sources](#sources)
@@ -27,12 +27,12 @@
 - Status: accepted (2026-11-06)
 - Date: 2026-11-06
 - Ticket: CHB-82
-- Amended 2026-11-13 (CHB-181): the author App keeps `workflows: write` (CHB-86, ADR-d7b7). The text that removes it no longer applies: decision 1, decision 8 stage 0, owner decision 2.
-- Amended by CHB-93 (decision 2), CHB-105 (decisions 2, 3 and 7, owner decision 4) and CHB-141 (decisions 3 and 8)
+- Amended 2026-11-13 (CHB-181): the author App keeps `workflows: write` (CHB-86, ADR-d7b7). The text that removes it no longer applies: decision 1, decision 8 stage 0, human decision 2.
+- Amended by CHB-93 (decision 2), CHB-105 (decisions 2, 3 and 7, human decision 4) and CHB-141 (decisions 3 and 8)
 
 ## Context
 
-Today the owner approves every agent PR.
+Today the human approves every agent PR.
 The 540 talk replaced diff reading with a scored review: five weighted dimensions, Merge Safety of at least 8.5, no critical finding, at most 3 rounds.
 eferro's rule applies to the reviewer too: a gate reads a typed result or an exit code, never prose.
 
@@ -75,7 +75,7 @@ What GitHub documents:
 - Installed on this repository only.
 - Permissions: contents read, pull requests write, checks write, metadata read. No contents write, so it cannot merge (merge needs contents write). No workflows, no administration.
 - The author App never holds a reviewer credential. The reviewer App never pushes.
-- The author App loses `workflows: write`. Without it, an agent branch cannot change a workflow. Workflow changes go through the owner. This amends ADR-d7b7.
+- The author App loses `workflows: write`. Without it, an agent branch cannot change a workflow. Workflow changes go through the human. This amends ADR-d7b7.
 
 ### 2. Where it runs: a `review` workflow on `workflow_run`
 
@@ -99,7 +99,7 @@ The first version (CHB-87) used `pull_request`, where a branch that edits `revie
 - The reviewer secrets are environment secrets of `reviewer`, which admits the `main` branch only (`infra/github/environments.tf`).
   Repository secrets would reach any `pull_request` workflow a branch adds. A `pull_request` job runs on `refs/pull/N/merge`, so the environment rejects it.
   A `workflow_run` job has `GITHUB_REF` set to `main`, so the environment admits it. `deploy.yml` already uses this with the `production` environment, which also admits `main` only.
-- A fork PR gets no review: `resolve` rejects it, so the required check stays missing and the owner reviews it.
+- A fork PR gets no review: `resolve` rejects it, so the required check stays missing and the human reviews it.
 - Workspace root: `main` at `GITHUB_SHA`, the commit the workflow file came from. Everything the job executes or reads as instructions comes from there:
   the gate script, schema, skill, rubric, settings and the current rollout stage.
 - The job uses no local `./` actions. A PR can change `factory/` on its branch, and CODEOWNERS blocks only the merge, not this run.
@@ -118,7 +118,7 @@ The first version (CHB-87) used `pull_request`, where a branch that edits `revie
     | `.mcp.json` | `--strict-mcp-config`, `--safe-mode` |
     | Auto memory | `--safe-mode`, `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, `autoMemoryEnabled: false` |
     | User settings, plugins, keychain or credentials files | Empty `HOME` and `CLAUDE_CONFIG_DIR` in the job; `--restricted` loads only `--settings` and managed settings |
-    | The owner's claude.ai connectors (Gmail, Drive, others), reachable with a subscription token | `--strict-mcp-config`, `ENABLE_CLAUDEAI_MCP_SERVERS=false`, `disableClaudeAiConnectors` |
+    | The human's claude.ai connectors (Gmail, Drive, others), reachable with a subscription token | `--strict-mcp-config`, `ENABLE_CLAUDEAI_MCP_SERVERS=false`, `disableClaudeAiConnectors` |
     | Background traffic | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` |
 
   - Tested on 2026-11-06 with the pinned CLI (2.1.311) and canary files in `head/`.
@@ -157,7 +157,7 @@ The first version (CHB-87) used `pull_request`, where a branch that edits `revie
 - Fail closed: schema error, timeout, budget cap, refusal or missing output give `failure`.
 - Findings go to the check summary and inline review comments as plain text. Mentions are escaped and length is capped.
 - After a valid model review, the reviewer App also posts the summary as a PR comment (CHB-141).
-  The comment ends with a line that asks the owner to react 👍 or 👎, and a marker `<!-- chb-review reviewed:<sha> -->`.
+  The comment ends with a line that asks the human to react 👍 or 👎, and a marker `<!-- chb-review reviewed:<sha> -->`.
   It uses its own token with pull requests write, after the check is posted. A failed comment never blocks the check.
   Skipped, carried and error runs post no comment.
 - The ruleset requires `review` with `integration_id` set to the reviewer App. A job named `review` in any workflow cannot satisfy it.
@@ -169,17 +169,17 @@ Without `--no-renames`, a file moved out of `factory/` shows only its new path. 
 
 | Class | Paths | Approver |
 |---|---|---|
-| Harness | `.github/`, `.claude/`, `factory/`, `infra/`, `scripts/`, `Makefile`, `CLAUDE.md`, `docs/decisions/`, `docs/knowledge/`, the review skill and schema | Owner, always (CODEOWNERS) |
-| Supply chain | Manifests and lockfiles, `.npmrc`, `pyproject.toml`, `Dockerfile`, `compose.yaml` | Owner, through the required `supply-chain` check; Dependabot-only PRs pass it. `.npmrc` stays in CODEOWNERS. See ADR-ebe6 (CHB-90). |
+| Harness | `.github/`, `.claude/`, `factory/`, `infra/`, `scripts/`, `Makefile`, `CLAUDE.md`, `docs/decisions/`, `docs/knowledge/`, the review skill and schema | Human, always (CODEOWNERS) |
+| Supply chain | Manifests and lockfiles, `.npmrc`, `pyproject.toml`, `Dockerfile`, `compose.yaml` | Human, through the required `supply-chain` check; Dependabot-only PRs pass it. `.npmrc` stays in CODEOWNERS. See ADR-ebe6 (CHB-90). |
 | Dependency | Dependabot PRs | ADR-ebe6 rules |
 | Docs | `docs/specs/`, `docs/postmortems/`, `docs/sessions/`, `README.md` | Reviewer App, from stage 2 |
-| Tests only | `**/tests/**`, `e2e/**` | Owner. A weakened test passes CI by construction. |
-| Feature | Everything else | Owner, until stage 3 |
+| Tests only | `**/tests/**`, `e2e/**` | Human. A weakened test passes CI by construction. |
+| Feature | Everything else | Human, until stage 3 |
 
 - A PR that spans classes takes the strictest one.
 - `docs/decisions/` and `docs/knowledge/` steer the agents, so they are harness. Otherwise an agent could rewrite its own rules unattended.
 - `.npmrc` and `pyproject.toml` hold the release-age exemptions of ADR-ebe6. A feature PR must not switch a supply-chain control off.
-- CODEOWNERS lists the harness paths with the owner. It has no `*` line, or every PR would need the owner.
+- CODEOWNERS lists the harness paths with the human. It has no `*` line, or every PR would need the human.
 - The reviewer App submits an `APPROVE` review only when the check passes and the class is unattended at the current stage. Otherwise it submits a `COMMENT` review.
 - `required_review_thread_resolution` is not a gate. The author can resolve threads.
 
@@ -190,8 +190,8 @@ Without `--no-renames`, a file moved out of `factory/` shows only its new path. 
 - After the third failing round, or on any blocking question, the ticket moves to Needs human and the notifier fires (CHB-48).
 - A cap on total reviews per PR stops repeated pushes from fishing for a passing verdict.
 - Findings are untrusted input for the author agent's triage step too.
-- Owner override: the owner runs the review workflow with an `override` input. The gate script rejects it unless `github.actor` is the owner.
-  The check then passes with "override by owner" in its summary. Overrides are counted.
+- Human override: the human runs the review workflow with an `override` input. The gate script rejects it unless `github.actor` is the human.
+  The check then passes with "override by human" in its summary. Overrides are counted.
 
 ### 6. Evidence and validation
 
@@ -204,11 +204,11 @@ Without `--no-renames`, a file moved out of `factory/` shows only its new path. 
 - Model, chosen by `plan.py` from paths and diff size only:
   - `claude-opus-5-5` when a changed path is harness, supply chain or governance (decision 3), when the diff has more than 400 added plus deleted lines, or when it changes a binary file outside `docs/`.
   - `claude-sonnet-5-5` otherwise.
-- Credential (CHB-105): the owner's Claude subscription token from `claude setup-token`, as the environment secret `CLAUDE_CODE_OAUTH_TOKEN` of `reviewer`.
+- Credential (CHB-105): the human's Claude subscription token from `claude setup-token`, as the environment secret `CLAUDE_CODE_OAUTH_TOKEN` of `reviewer`.
   The API key (CHB-89) ran on prepaid credits; 20 shadow runs cost USD 0.04 to 0.43 each.
-  - The token shares the subscription's usage limits with the owner's interactive work and the local agent. A review that hits a limit fails, so its check is `failure`.
+  - The token shares the subscription's usage limits with the human's interactive work and the local agent. A review that hits a limit fails, so its check is `failure`.
   - The token is valid for one year. Renewing it means running `claude setup-token` again and replacing the secret.
-  - It reaches the claude.ai connectors of the owner's account. Decision 2 switches them off for the review.
+  - It reaches the claude.ai connectors of the human's account. Decision 2 switches them off for the review.
 - `--max-budget-usd 1` stops a runaway run. On a subscription the CLI still computes `total_cost_usd`, and a test with a cap of USD 0.001 ended with `error_max_budget_usd`.
 - Docs-only PRs and docs-only pushes cost no model call (decision 3).
 - Later: workload identity federation through GitHub OIDC, so no long-lived secret exists.
@@ -216,23 +216,23 @@ Without `--no-renames`, a file moved out of `factory/` shows only its new path. 
 
 ### 8. Staged rollout
 
-Each stage starts when the owner reads the metrics and agrees. The thresholds below are proposals.
+Each stage starts when the human reads the metrics and agrees. The thresholds below are proposals.
 
 | Stage | Unattended | Stays human | Evidence to move on |
 |---|---|---|---|
 | 0. Prerequisites | Nothing | Everything | CODEOWNERS on main; author App without `workflows: write`; reviewer App created |
-| 1. Shadow | Nothing. The `review` check runs but is not required. | Every approval | 20 PRs: owner disagrees with the verdict on 2 or fewer; no critical finding missed that the owner found |
+| 1. Shadow | Nothing. The `review` check runs but is not required. | Every approval | 20 PRs: human disagrees with the verdict on 2 or fewer; no critical finding missed that the human found |
 | 2. Required check; docs unattended | Docs PRs: reviewer approves, auto-merge | Tests, feature, harness | 20 docs merges with no revert; App approval confirmed to count |
-| 3. Low-risk features | Feature PRs under a size limit, with AC evidence and no new dependency | Larger features, tests only, harness | Change failure rate of unattended merges no worse than owner-approved ones over 30 days |
+| 3. Low-risk features | Feature PRs under a size limit, with AC evidence and no new dependency | Larger features, tests only, harness | Change failure rate of unattended merges no worse than human-approved ones over 30 days |
 | 4. Feature default | Most feature PRs | Harness, security-tagged tickets, fork PRs | Postmortems show no review-caused incident |
 
 Harness paths stay human at every stage.
 
 Stage 1 data (CHB-141): `make review-agreement` runs `factory/review/agreement.py`.
-For each PR merged into `main` since 2026-11-10, it reads the last review comment of the reviewer App and the owner's reaction on it.
+For each PR merged into `main` since 2026-11-10, it reads the last review comment of the reviewer App and the human's reaction on it.
 👍 is agree, 👎 is disagree, both count as disagree, none is no answer. Reactions from anyone else are ignored.
 It prints the counts and the stage 1 exit: 20 answered PRs with 2 or fewer disagreements.
-It lists the 👎 PRs. The owner checks their replies for a missed critical finding; the script cannot judge that.
+It lists the 👎 PRs. The human checks their replies for a missed critical finding; the script cannot judge that.
 
 ## Alternatives rejected
 
@@ -250,7 +250,7 @@ It lists the 👎 PRs. The owner checks their replies for a missed critical find
 - ❌ `required_approving_review_count = 0`, gating only on `review`: one compromised workflow run would merge feature code with no approval at all.
 - ❌ Approval counted from a GitHub Actions job (`GITHUB_TOKEN`): any workflow can produce it, and merges by `GITHUB_TOKEN` start no CI.
 
-## Owner decisions
+## Human decisions
 
 Taken on 2026-11-06:
 
@@ -258,17 +258,17 @@ Taken on 2026-11-06:
 2. Remove `workflows: write` from `chb-factory-agent` after testing that Dependabot Actions bumps still merge. This amends ADR-d7b7.
 3. CODEOWNERS covers the harness and supply-chain paths in the risk table (CHB-29), before any reviewer approval counts.
 4. An Anthropic API key in its own Console workspace with a spend limit. Workload identity federation later, once verified for the CLI.
-   Replaced by CHB-105: the owner's subscription token, with docs-only skips and the model chosen per PR (decision 7).
+   Replaced by CHB-105: the human's subscription token, with docs-only skips and the model chosen per PR (decision 7).
 5. The stage thresholds in the rollout table, revisited with shadow-mode data.
 6. The reviewer does not run on Dependabot PRs. Their release-age, provenance and CI checks gate them. The ruleset must not block their auto-merge.
 
 ## Consequences
 
-- The owner still approves every PR until stage 2.
-- Every PR needs a `review` check from the reviewer App once it is required. Fork PRs and runs without secrets block until the owner acts.
-- Workflow changes by the agent need the owner's hands or a PR the owner pushes.
-- The rubric, schema and skill live on `main` and change only through owner-reviewed PRs.
-- Review spend comes out of the owner's subscription limits (CHB-105), tracked with CHB-56 and CHB-65.
+- The human still approves every PR until stage 2.
+- Every PR needs a `review` check from the reviewer App once it is required. Fork PRs and runs without secrets block until the human acts.
+- Workflow changes by the agent need the human's hands or a PR the human pushes.
+- The rubric, schema and skill live on `main` and change only through human-reviewed PRs.
+- Review spend comes out of the human's subscription limits (CHB-105), tracked with CHB-56 and CHB-65.
 - Once `review` is required, docs-only PRs pass it with a `neutral` check and no model review.
 - The review needs no Actions event policy: it uses `pull_request` and `workflow_run`, not `pull_request_target`.
 - A change to `review.yml` takes effect only after merge. Its own PR is reviewed by the version on `main`.
@@ -277,11 +277,11 @@ Taken on 2026-11-06:
 ## Unverified
 
 - That the job authenticates with `CLAUDE_CODE_OAUTH_TOKEN` in an empty `HOME`.
-  Local tests used the owner's logged-in session; a run with an empty `HOME` and no token failed closed (`loggedIn: false`, exit 1). AC7 of CHB-105 checks it after merge.
+  Local tests used the human's logged-in session; a run with an empty `HOME` and no token failed closed (`loggedIn: false`, exit 1). AC7 of CHB-105 checks it after merge.
 - Whether an App's `APPROVE` review counts toward `required_approving_review_count`. GitHub docs do not say. A community answer says it does. Test it before stage 2.
 - Which OIDC claims an Anthropic federation rule can match beyond the repository subject prefix, and whether the bare CLI accepts federation.
 - Whether an App token without `workflows` permission can merge a PR that changes workflow files, as Dependabot GitHub Actions bumps do.
-  The auto-merge token in `dependabot-auto-merge.yml` requests only contents and pull requests today. Owner decision 2 depends on this.
+  The auto-merge token in `dependabot-auto-merge.yml` requests only contents and pull requests today. Human decision 2 depends on this.
 
 ## Sources
 

@@ -8,7 +8,7 @@
 # agent-pr-updates holds the agent App key for .github/workflows/pr-updates.yml (CHB-172): the job
 # runs on `push` to main, so GITHUB_REF is main and the environment admits it.
 #
-# Secret values never go into Terraform. The owner sets environment secrets by hand.
+# Secret values never go into Terraform. The human sets environment secrets by hand.
 
 locals {
   environments = ["production", "reviewer", "agent-pr-updates"]
@@ -25,7 +25,7 @@ resource "github_repository_environment" "this" {
   repository  = github_repository.this.name
   environment = each.value
 
-  # Admins (the owner) cannot bypass the protection rules either (CHB-96).
+  # Admins (the human) cannot bypass the protection rules either (CHB-96).
   can_admins_bypass   = false
   prevent_self_review = false
 

@@ -29,7 +29,7 @@ COLUMNS = (
 )
 
 
-WHY = "## Why it matters\n\nThe owner waits for the thing."
+WHY = "## Why it matters\n\nThe human waits for the thing."
 CRITERIA = "## Acceptance criteria\n\n- A test shows the thing."
 ALL_BOXES = tuple(box.name for box in jira.DOR_BOXES)
 # A Ready ticket the start accepts (CHB-187): Why it matters, every judgment box ticked, acceptance criteria.
@@ -475,7 +475,7 @@ class AgentCommentTimes(unittest.TestCase):
             "/rest/api/3/issue/CHB-1/comment?orderBy=-created&maxResults=100": {
                 "comments": [
                     {"author": {"accountId": "me"}, "created": "2026-11-10T16:30:04.324+0100"},
-                    {"author": {"accountId": "owner"}, "created": "2026-11-10T17:00:00.000+0100"},
+                    {"author": {"accountId": "human"}, "created": "2026-11-10T17:00:00.000+0100"},
                 ]
             },
         }
