@@ -26,5 +26,31 @@ class RepositoryGuardTest(unittest.TestCase):
                 self.assertIsNone(re.search(r"github\.repository\s*==", (WORKFLOWS / name).read_text()))
 
 
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def _one(pattern: str, path: Path) -> str:
+    found = set(re.findall(pattern, path.read_text(), re.MULTILINE))
+    if len(found) != 1:
+        raise AssertionError(f"{path.relative_to(ROOT)}: expected one value for {pattern!r}, found {sorted(found)}")
+    return found.pop()
+
+
+class CopiesAgreeTest(unittest.TestCase):
+    """CHB-218 review: the human's login and the repository ID are copied across files; they must not drift."""
+
+    def test_the_human_login_is_the_same_everywhere(self):
+        workflow = _one(r"^\s*OWNER:\s*(\S+)\s*$", WORKFLOWS / "supply-chain.yml")
+        script = _one(r'^HUMAN_LOGIN = "([^"]+)"', ROOT / "factory/review/agreement.py")
+        codeowners = _one(r"@([A-Za-z0-9-]+)", ROOT / ".github/CODEOWNERS")
+
+        self.assertEqual({workflow, codeowners}, {script})
+
+    def test_the_repository_id_is_the_same_in_every_guard(self):
+        ids = {_one(r"github\.repository_id == '(\d+)'", WORKFLOWS / name) for name in GUARDED}
+
+        self.assertEqual(ids, {"1447565814"})
+
+
 if __name__ == "__main__":
     unittest.main()

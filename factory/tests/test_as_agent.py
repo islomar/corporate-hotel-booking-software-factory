@@ -1,6 +1,7 @@
 import base64
 import io
 import json
+import os
 import subprocess
 import sys
 import unittest
@@ -273,15 +274,6 @@ class InstallationTokenTest(unittest.TestCase):
         with mock.patch.object(as_agent, "_sign", lambda signing_input, key: "jwt"):
             return installation_token("Iv23client", b"key", api=api)
 
-    def test_the_organization_name_comes_first_then_the_personal_one(self) -> None:
-        self.assertEqual(
-            REPOSITORY_CANDIDATES,
-            (
-                "islomar-software-garden/corporate-hotel-booking-software-factory",
-                "islomar/corporate-hotel-booking-software-factory",
-            ),
-        )
-
     def test_a_404_on_the_first_name_tries_the_next(self) -> None:
         api = _api(
             {
@@ -319,6 +311,22 @@ class InstallationTokenTest(unittest.TestCase):
 
         with self.assertRaisesRegex(as_agent.NoInstallationError, "islomar-software-garden/.*islomar/"):
             self._token(api)
+
+    def test_main_stops_with_guidance_when_no_installation_answers(self) -> None:
+        error = as_agent.NoInstallationError("the App chb-factory-agent is not installed on a or b")
+        stderr = io.StringIO()
+        with (
+            mock.patch.dict(os.environ, {"AGENT_APP_KEY_COMMAND": "true"}),
+            mock.patch.object(as_agent, "read_private_key_with_override", lambda command, env: b"key"),
+            mock.patch.object(as_agent, "installation_token", mock.Mock(side_effect=error)),
+            mock.patch.object(as_agent, "run", mock.Mock(side_effect=AssertionError("must not run"))),
+            mock.patch("sys.stderr", stderr),
+        ):
+            code = as_agent.main(["gh", "pr", "list"])
+
+        self.assertEqual(code, as_agent.EXIT_NO_INSTALLATION)
+        self.assertIn("not installed on a or b", stderr.getvalue())
+        self.assertIn("STOP: do not use another identity", stderr.getvalue())
 
 
 class NoreplyEmailTest(unittest.TestCase):

@@ -13,7 +13,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "review"))
 
 import agreement
 from agreement import (
-    HUMAN_LOGIN,
     REVIEWER,
     Tally,
     answer,
@@ -139,9 +138,6 @@ class FetchTest(unittest.TestCase):
 
 class MainTest(unittest.TestCase):
     """CHB-218: the human's reactions count while an organization owns the repository."""
-
-    def test_the_human_login_is_a_constant(self) -> None:
-        self.assertEqual(HUMAN_LOGIN, "islomar")
 
     def test_counts_the_human_reactions_under_an_organization_owner(self) -> None:
         def gh_text(*args: str) -> str:

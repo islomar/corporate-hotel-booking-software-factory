@@ -7,7 +7,8 @@ Example: factory/bin/as-agent gh pr create --fill
 The App's private key is read at run time from the 1Password vault chb-factory, with the
 service account token from the GNOME keyring (op_service_account.py), and never written to
 the repository. The service account token goes only to that `op` call, never to the
-command. Without the token the script exits 3 and runs nothing. The script mints a one-hour installation token scoped to this repository,
+command. Without the token the script exits 3 and runs nothing. When the App is installed on no name in
+REPOSITORY_CANDIDATES (for example mid-transfer, CHB-204), it exits 4 and runs nothing. The script mints a one-hour installation token scoped to this repository,
 then runs the command with:
 - GH_TOKEN set, so `gh` acts as the App;
 - git author and committer set to the App's bot user;
@@ -57,16 +58,15 @@ import op_service_account  # noqa: E402
 
 CLIENT_ID = "Iv23li3OLZUlWY7ZMLdr"
 APP_SLUG = "chb-factory-agent"
-REPOSITORY = "islomar/corporate-hotel-booking-software-factory"
+REPOSITORY_NAME = "corporate-hotel-booking-software-factory"
+REPOSITORY = f"islomar/{REPOSITORY_NAME}"
 # CHB-204 moves the repository to the organization. The App installation is looked up under
 # each name in turn, so the agent works before and after the transfer (CHB-218).
-REPOSITORY_CANDIDATES = (
-    "islomar-software-garden/corporate-hotel-booking-software-factory",
-    "islomar/corporate-hotel-booking-software-factory",
-)
+REPOSITORY_CANDIDATES = (f"islomar-software-garden/{REPOSITORY_NAME}", REPOSITORY)
 KEY_COMMAND = f"op document get chb-factory-agent.2026-11-06.private-key --vault {op_service_account.VAULT}"
 KEY_TIMEOUT_SECONDS = 60
 EXIT_NO_KEY = 3
+EXIT_NO_INSTALLATION = 4
 EXIT_NO_AUTO_MERGE = 5
 OPT_OUT_VARIABLE = "AGENT_NO_AUTO_MERGE"
 PR_URL = re.compile(r"https://github\.com/[^/\s]+/[^/\s]+/pull/\d+")
@@ -309,7 +309,15 @@ def main(argv: list[str]) -> int:
     except AppKeyError as error:
         print(f"as-agent: no App key: {error}. STOP: do not use another identity. Report to the human.", file=sys.stderr)
         return EXIT_NO_KEY
-    token = installation_token(os.environ.get("AGENT_APP_CLIENT_ID", CLIENT_ID), private_key)
+    try:
+        token = installation_token(os.environ.get("AGENT_APP_CLIENT_ID", CLIENT_ID), private_key)
+    except NoInstallationError as error:
+        print(
+            f"as-agent: {error}. During the CHB-204 transfer, install the App on the new owner first."
+            " STOP: do not use another identity. Report to the human.",
+            file=sys.stderr,
+        )
+        return EXIT_NO_INSTALLATION
     bot_login = f"{APP_SLUG}[bot]"
     bot = _api("GET", f"/users/{urllib.request.quote(bot_login)}", f"token {token}")
     env = agent_env(os.environ, token, bot_login, int(str(bot["id"])))
