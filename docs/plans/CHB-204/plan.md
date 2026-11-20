@@ -24,7 +24,7 @@ Status: draft for the human's approval. Nothing in this plan has run. Written 20
 
 ## Facts read on 2026-11-20
 
-- Repository: `islomar/corporate-hotel-booking-software-factory`, id `1447565814`, human type `User`, public
+- Repository: `islomar/corporate-hotel-booking-software-factory`, id `1447565814`, account type `User`, public
   Source: `gh api repos/islomar/corporate-hotel-booking-software-factory`
 - Organization: `islomar-software-garden`, id `359214981`, plan `free`, 0 App installations, base permission `read`, 2FA requirement off
   Source: `gh api orgs/islomar-software-garden`, `.../installations`
@@ -89,7 +89,7 @@ Status: draft for the human's approval. Nothing in this plan has run. Written 20
 2. Split the ticket. CHB-204 says "one PR, about a day". This plan needs 7 PRs and 5 human sessions. ⭐ Split into child tickets:
    (1) prep code PR, (2) GCP expand, (3) post-transfer rename and provider account, (4) merge queue ruleset and CHB-177 close-out, (5) cleanup (GCP contract, `pr-updates`,
    ADRs). ❌ One ticket with seven PRs breaks "one ticket per branch".
-3. Acceptance criterion 5 reads "no tracked file outside `docs/sessions/` names the old repository human".
+3. Acceptance criterion 5 reads "no tracked file outside `docs/sessions/` names the old repository owner".
    `islomar` is also the human's login (CODEOWNERS, fixtures, the human approval of `supply-chain`), the Jira site `islomar.atlassian.net` and the contact email.
    ⭐ Reword it to "names `islomar/corporate-hotel-booking-software-factory`".
    ❌ Keeping it literal would force renaming the Jira site and dropping the human from CODEOWNERS.
@@ -155,11 +155,11 @@ Order: A1 to A5, B0 to B3, D1, B5, C1 (its merge is B6), C3 to C6, B7 last. C2 d
 
 ### (a) Preparation PRs: work before and after the transfer
 
-A1. Agent PR: the human human is a constant, not the repository human.
+A1. Agent PR: the human's login is a constant, not the repository owner.
 
 - Actor: agent. Branch `CHB-<n>-owner-login`. `factory/bin/as-agent gh pr create`.
 - Change: `supply-chain.yml` passes `--owner islomar` (or a repository variable `OWNER_LOGIN` managed in `infra/github/repository.tf`) instead of `${{ github.repository_owner }}`.
-  `factory/review/agreement.py` line 150 and `factory/hooks/validating_sweep.py` line 312 use the same constant instead of the repository human.
+  `factory/review/agreement.py` line 150 and `factory/hooks/validating_sweep.py` line 312 use the same constant instead of the repository owner.
   Unit tests in `scripts/tests/test_check_supply_chain.py`, `factory/tests/test_review_agreement.py`, `factory/tests/test_validating_sweep.py` cover an organization-owned answer.
 - Why: after the transfer, `github.repository_owner` is `islomar-software-garden`.
   The human-approval path of the required `supply-chain` check could never pass, and the review agreement report would count no reactions.
@@ -254,11 +254,11 @@ B3. Transfer the repository.
 - Before: no workflow run in progress on `main` (`gh run list -R islomar/corporate-hotel-booking-software-factory --branch main --limit 5`). Every A PR merged; A5 applied.
 - Click path: <https://github.com/islomar/corporate-hotel-booking-software-factory/settings>, General, Danger Zone, "Transfer", "Select one of my organizations",
   `islomar-software-garden`, type `islomar/corporate-hotel-booking-software-factory` to confirm, "I understand, transfer this repository".
-- Changes: repository human, full name, every URL. The repository ID stays `1447565814`.
+- Changes: repository owner, full name, every URL. The repository ID stays `1447565814`.
 - Verify: `gh api repositories/1447565814 --jq '.full_name, .owner.type'` prints `islomar-software-garden/corporate-hotel-booking-software-factory` and `Organization`.
   `curl -sI https://github.com/islomar/corporate-hotel-booking-software-factory | head -1` prints a 301.
 - Roll back: one-way for the name (U11). GitHub may retire `islomar/corporate-hotel-booking-software-factory` for good.
-  Fix forward in the organization instead: every A change already accepts the new repository human.
+  Fix forward in the organization instead: every A change already accepts the new repository owner.
   A transfer back to `islomar` is possible from the organization's repository Settings, Danger Zone, Transfer, but may not get the old name back.
 
 D1 (from group d, run right after B3): see below.
@@ -335,7 +335,7 @@ C4. Canary: one Dependabot PR and one agent PR merge through the queue.
 C5. Agent PR: retire the rebase logic.
 
 - Change: `factory/pr_updates.py` and `pr-updates.yml` keep only the `needs-rebase` label on conflicting agent PRs; the Dependabot rebase comment and agent rebases go.
-  `factory/README.md`, `docs/process/delivery-pipeline.md`, ADR-d7b7 (new repository human, Apps installed on the organization) and ADR-2ba2 amended.
+  `factory/README.md`, `docs/process/delivery-pipeline.md`, ADR-d7b7 (new repository owner, Apps installed on the organization) and ADR-2ba2 amended.
   CHB-177 and CHB-172 Validating sections close.
 - Verify: `make check`; next push to `main` logs only conflict checks.
 - Roll back: revert.
