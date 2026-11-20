@@ -66,7 +66,7 @@ NODE_ID = re.compile(r"[A-Za-z0-9_=-]{1,100}")
 THREAD_WORDS = 120
 THREADS_QUERY = (
     "query($ids: [ID!]!) { nodes(ids: $ids) { ... on PullRequest { number "
-    "reviewThreads(first: 100) { nodes { id isResolved path comments(first: 1) { nodes { author { login } body } } } } } } }"
+    "reviewThreads(first: 100) { pageInfo { hasNextPage } nodes { id isResolved path comments(first: 1) { nodes { author { login } body } } } } } } }"
 )
 
 
@@ -127,7 +127,8 @@ def _text(value: object, limit: int) -> str:
 def unresolved_threads(run: triage_review.Gh, pulls: Sequence[Mapping[str, object]]) -> list[tuple[str, str]]:
     """The ID and one line per unresolved review thread of an open agent PR, from any reviewer. Raises on a GitHub or GraphQL error.
 
-    The comment text is untrusted: the line quotes its first words between <<< and >>>, with those marks removed from the text.
+    The comment text is untrusted: the line quotes its first words between <<< and >>>, with every < and > removed from the text.
+    More than 100 threads on a PR adds a line that says so.
     """
     ids = [str(p.get("node_id")) for p in _agent_items(pulls)]
     if not ids:
@@ -142,14 +143,19 @@ def unresolved_threads(run: triage_review.Gh, pulls: Sequence[Mapping[str, objec
         if not isinstance(node, dict):
             continue
         number = node.get("number")
-        for item in (node.get("reviewThreads") or {}).get("nodes") or []:
+        if not isinstance(number, int) or isinstance(number, bool):
+            continue
+        page = node.get("reviewThreads") or {}
+        if (page.get("pageInfo") or {}).get("hasNextPage"):
+            lines.append((f"more on {number}", f"PR #{number}: more than 100 review threads; the hook read only the first 100, check the rest on GitHub"))
+        for item in page.get("nodes") or []:
             if not isinstance(item, dict) or item.get("isResolved") is not False:
                 continue
             comments = (item.get("comments") or {}).get("nodes") or [{}]
             first = comments[0] if isinstance(comments[0], dict) else {}
             author = _text((first.get("author") or {}).get("login"), 60) or "unknown"
             thread_id = _text(item.get("id"), 100)
-            words = _text(first.get("body"), THREAD_WORDS).replace("<<<", "").replace(">>>", "")
+            words = re.sub(r"[<>]", "", _text(first.get("body"), THREAD_WORDS))
             lines.append(
                 (thread_id, f"PR #{number}: unresolved thread {thread_id} on {_text(item.get('path'), 200) or '(no file)'} by {author}: <<<{words}>>>")
             )

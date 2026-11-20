@@ -487,7 +487,8 @@ It also exits 2 while an open agent PR has an unresolved review thread from any 
 On 2026-11-20 PR #142 waited for hours, approved and green: the `main` ruleset refuses to merge while a review thread is unresolved, and GitHub Copilot's reviewer had left two.
 After the comment reads, one GraphQL call reads `reviewThreads` of every agent PR by its node ID, so it works under any repository name.
 Each unresolved thread, outdated or not, names the PR, the thread ID, the file, the author and the first words of its first comment, flattened to one line between `<<<` and `>>>`.
-Any GitHub user can write that text, so the agent reads it as data.
+Any GitHub user can write that text, so the agent reads it as data. The hook removes every `<` and `>` from it.
+It reads the first 100 threads of a PR. When a PR has more, it refuses with a line that says so.
 The refusal fingerprint holds the thread IDs, not the text, so an edited comment does not refuse again.
 The reason says what to do: push the fix first if the thread is valid, answer the thread with the reason, then resolve it.
 It prints both commands, `addPullRequestReviewThreadReply` and `resolveReviewThread` through `factory/bin/as-agent gh api graphql`.
