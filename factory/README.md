@@ -492,6 +492,7 @@ It reads the first 100 threads of a PR. When a PR has more, it refuses with a li
 The refusal fingerprint holds the thread IDs, not the text, so an edited comment does not refuse again.
 The reason says what to do: push the fix first if the thread is valid, answer the thread with the reason, then resolve it.
 It prints both commands, `addPullRequestReviewThreadReply` and `resolveReviewThread` through `factory/bin/as-agent gh api graphql`.
+A thread the human opened is the human's review: its line says "answer it, do not resolve it", and the agent tells the human in the chat instead of resolving it.
 A GraphQL error prints one warning and drops only the thread lines: untriaged findings still refuse.
 
 It fails open: a GitHub error (no `gh`, a 6-second timeout, a failed call, output that is not JSON) prints one line to stderr and lets the turn end.
