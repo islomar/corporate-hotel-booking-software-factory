@@ -53,6 +53,7 @@ class CheckWorkflowsTest(unittest.TestCase):
         output = plain(result)
 
         self.assertEqual(result.returncode, 0, output)
+        self.assertNotRegex(output, r"(?m)^(error|warning)\[")
         self.assertIn("1 ignored", output)  # the low finding exists, below the threshold
 
     def test_a_workflows_variable_in_the_environment_does_not_move_the_scan(self) -> None:
