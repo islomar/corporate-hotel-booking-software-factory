@@ -18,12 +18,15 @@ Then the script
 2. posts the comment "Triage of review <sha>" with a table of finding, decision and reason.
 Both go through factory/bin/as-agent, so the agent's account writes them. The `triage` check
 accepts the comment only from that account.
+While a finding is `apply` and the PR head is still the reviewed commit, the script posts nothing
+and exits 1: push the fixes first (CHB-212).
 
 The comment and the findings are untrusted text: it is read as data, cut to a length, flattened
 to one line with Markdown and mentions escaped, and never executed. Reads use the REST API of the
 repository, not a PR file or script.
 
-Exit codes: 0 done, 1 no review comment or a failed check, 2 usage, bad file or GitHub error.
+Exit codes: 0 done, 1 no review comment, a failed check or `apply` fixes not pushed,
+2 usage, bad file or GitHub error.
 """
 
 from __future__ import annotations
@@ -283,8 +286,12 @@ def runs_to_rerun(runs: Sequence[Mapping[str, object]], head_sha: str) -> list[i
     ]
 
 
+def head_sha(gh: Gh, repo: str, pr: str) -> str:
+    return gh(["api", f"repos/{repo}/pulls/{pr}", "--jq", ".head.sha"]).strip()
+
+
 def rerun(gh: Gh, repo: str, pr: str) -> int:
-    head = gh(["api", f"repos/{repo}/pulls/{pr}", "--jq", ".head.sha"]).strip()
+    head = head_sha(gh, repo, pr)
     if not SHA_RE.fullmatch(head):
         print(f"::error::PR {pr} has no readable head sha.")
         return 2
@@ -370,6 +377,24 @@ def main(argv: Sequence[str], gh: Gh | None = None) -> int:
             for problem in problems:
                 print(f"- {problem}", file=sys.stderr)
             return 2
+        # The triage comment turns `triage` green, and auto-merge then merges at once (CHB-212):
+        # an `apply` fix must be on the PR first, so the head must differ from the reviewed commit.
+        # Equality only: a push without a fix also passes, and its own review follows.
+        applied = [d for d in decisions if d.decision == "apply"]
+        if applied:
+            head = head_sha(gh, args.repo, args.pr)
+            if not SHA_RE.fullmatch(head):
+                print(f"PR {args.pr} has no readable head sha. Nothing was posted.", file=sys.stderr)
+                return 2
+            if head == sha:
+                names = ", ".join(f"finding {d.number}" for d in applied)
+                print(
+                    f"Refused: marked apply: {names}. The PR head is still the reviewed commit {sha}. "
+                    "Nothing was posted. The triage comment turns `triage` green, and auto-merge would merge "
+                    "without the fixes. Push the fix commits first, then post the triage again.",
+                    file=sys.stderr,
+                )
+                return 1
         post_triage(gh, args.repo, args.pr, sha, found, decisions)
     except (OSError, subprocess.SubprocessError, ValueError) as error:
         detail = getattr(error, "stderr", None) or error
