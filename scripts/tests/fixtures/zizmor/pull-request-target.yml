@@ -1,0 +1,20 @@
+# UNSAFE ON PURPOSE. A fixture for scripts/tests/test_check_workflows.py (CHB-189), not a workflow.
+# GitHub runs only files in .github/workflows/, so this file never runs.
+# It is the "pwn request": `pull_request_target` runs with the base repository's token and
+# secrets, and this job checks out and runs the PR head. `make check-workflows` must fail on it.
+name: Pwn request fixture
+
+on:
+  pull_request_target:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - run: make check

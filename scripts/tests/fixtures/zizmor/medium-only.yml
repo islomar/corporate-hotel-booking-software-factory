@@ -1,0 +1,14 @@
+# A fixture for scripts/tests/test_check_workflows.py (CHB-189), not a workflow.
+# Its only finding is `artipacked` (medium): the checkout keeps the token in .git/config.
+# `make check-workflows` fails from medium severity, so it must fail on this file.
+name: Medium severity fixture
+
+on: push
+
+permissions: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

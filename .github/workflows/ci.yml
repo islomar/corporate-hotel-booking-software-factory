@@ -85,6 +85,11 @@ jobs:
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
         run: python3 -I ../scripts/check_release_age.py uv.lock
       - run: uv sync --locked
+      # CHB-189: zizmor on .github/workflows/, the same make target as `make check`. It runs in this
+      # required job so a finding blocks the merge. Docs-only PRs skip it: they cannot change .github/.
+      - name: zizmor (workflow scan)
+        working-directory: .
+        run: make check-workflows
       - name: Unit tests of the scripts and the factory
         working-directory: .
         run: |

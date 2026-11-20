@@ -1,0 +1,16 @@
+# A fixture for scripts/tests/test_check_workflows.py (CHB-189), not a workflow.
+# Its only finding is `obfuscation` (low): `actions/checkout/./` hides the action's path.
+# `make check-workflows` fails from medium severity, so it must pass on this file.
+name: Low severity fixture
+
+on: push
+
+permissions: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout/./@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false

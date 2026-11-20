@@ -65,6 +65,7 @@ make test-frontend  # only the frontend tests
 make test-scripts   # only the scripts and factory tests
 make lint-backend   # lint and typecheck the backend: ruff and pyright
 make lint-frontend  # lint and typecheck the frontend: prettier, oxlint and tsc
+make check-workflows  # scan .github/workflows with zizmor (see CI below)
 make format  # format all code
 make mutate  # mutation testing for the backend
 make check-npm  # fail if npm is too old to honour min-release-age (make setup runs it)
@@ -265,8 +266,8 @@ Pushes to `main` run CI. When CI passes, the deploy workflow builds the image, d
 
 ### CI
 
-Every pull request runs two security scans.
-Both show as checks on the pull request.
+Every pull request runs three security scans.
+CodeQL and dependency review show as checks on the pull request; zizmor runs inside the `backend` check.
 CodeQL alerts also appear in the repository's Security tab. Dependency review results appear in the check's job summary.
 
 - CodeQL: GitHub's default setup scans Actions, JavaScript/TypeScript and Python on every pull request, on every push to `main` and weekly.
@@ -275,3 +276,7 @@ CodeQL alerts also appear in the repository's Security tab. Dependency review re
 - Dependency review: `.github/workflows/dependency-review.yml` fails a pull request that adds or upgrades to a dependency with a known vulnerability of severity high or above.
   Check: `dependency-review`, with the vulnerable packages in its job summary. It blocks a merge only once `required_checks` in `infra/github/repository.tf` names it.
   Alerts for dependencies already on `main` come from Dependabot: Security > Dependabot.
+- zizmor scans `.github/workflows/` for weak workflow settings (CHB-189): `make check-workflows`, part of `make check` and of the `backend` job.
+  It fails on a finding of medium severity or above. Each finding names the audit, the file and line, and links the audit's page on <https://docs.zizmor.sh/audits/>.
+  Fix the workflow, or ignore one finding on its line with `# zizmor: ignore[<audit>]` and a one-line reason above it.
+  It runs offline: the audits that need the GitHub API (`known-vulnerable-actions`, `impostor-commit`, `ref-confusion`) do not run.
