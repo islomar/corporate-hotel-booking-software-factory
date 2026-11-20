@@ -1141,7 +1141,7 @@ class RequiredSectionTest(unittest.TestCase):
 
     def test_the_old_needs_human_heading_of_open_tickets_still_counts(self) -> None:
         """CHB-194: tickets written before the rename keep "Needs human: owner steps"."""
-        fake = transition_fake("In Progress", {"In Progress": ["CHB-1"]}, description=description_with("Needs human: steps"))
+        fake = transition_fake("In Progress", {"In Progress": ["CHB-1"]}, description=description_with("Needs human: owner steps"))
         code, out, _ = _run(["transition", "CHB-12", "Needs human"], fake)
 
         self.assertEqual(code, 0)
@@ -3104,6 +3104,15 @@ class TaskListTest(unittest.TestCase):
 
 class HumanWordTest(unittest.TestCase):
     """CHB-194: the wrapper writes "human" in the checklist and still reads the old box text of open tickets."""
+
+    def test_section_replaces_the_old_needs_human_heading(self) -> None:
+        before = _doc(_heading("Plan"), _para("Do it."), _heading("Needs human: owner steps"), _para("1. Old step."))
+
+        after = replace_section(before, "Needs human: steps", "1. New step.\n- Answer: in the chat")
+
+        headings = [_heading_of(node) for node in after["content"] if node["type"] == "heading"]
+        self.assertEqual(headings, ["Plan", "Needs human: steps"])
+        self.assertNotIn("Old step", json.dumps(after))
 
     def test_the_checklist_it_writes_says_human_not_owner(self) -> None:
         text = jira.checklist_markdown()

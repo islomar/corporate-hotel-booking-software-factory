@@ -147,13 +147,14 @@ def main(argv: list[str]) -> int:
         return 2
     try:
         repo = args.repo or _gh_text("repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner")
-        human = _gh_text("repo", "view", repo, "--json", "owner", "--jq", ".owner.login")
+        # The human is the GitHub account that owns the repository: count that login's reactions.
+        human_login = _gh_text("repo", "view", repo, "--json", "owner", "--jq", ".owner.login")
         prs = fetch_prs(gh_api, repo, args.since)
     except (OSError, subprocess.CalledProcessError, ValueError) as error:
         print(f"cannot read GitHub: {error}", file=sys.stderr)
         return 1
-    print(f"Merged into main since {args.since} in {repo}; human {human}.")
-    print(report(tally(prs, human)))
+    print(f"Merged into main since {args.since} in {repo}; human {human_login}.")
+    print(report(tally(prs, human_login)))
     return 0
 
 

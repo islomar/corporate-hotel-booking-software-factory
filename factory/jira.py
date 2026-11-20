@@ -166,11 +166,6 @@ REQUIRED_SECTIONS = {
 # Headings written before CHB-194 called the person "owner". Open tickets may still carry them, so the
 # checks read them too; the wrapper only asks for and writes the new ones.
 OLD_HEADINGS = {"Needs human: steps": ("Needs human: owner steps",)}
-
-
-def heading_names(heading: str) -> tuple[str, ...]:
-    """The heading and the older names an open ticket may still carry (CHB-194)."""
-    return (heading, *OLD_HEADINGS.get(heading, ()))
 # The top ticket of the pull list (CHB-125, docs/process/kanban.md, Ready) is the highest-ranked non-epic
 # ticket that no open ticket blocks (open_blockers). It starts once it has acceptance criteria: a
 # heading that starts with "Acceptance criteria" (not "Acceptance criteria (Validating)"), or a line
@@ -622,6 +617,11 @@ def check_key(key: str) -> str:
     return key
 
 
+def heading_names(heading: str) -> tuple[str, ...]:
+    """The heading and the older names an open ticket may still carry (CHB-194)."""
+    return (heading, *OLD_HEADINGS.get(heading, ()))
+
+
 def replace_section(description: dict[str, Any] | None, heading: str, body: str, *, first: bool = False) -> dict[str, Any]:
     """Return a copy of the description with the section under `heading` set to `body`.
 
@@ -629,6 +629,7 @@ def replace_section(description: dict[str, Any] | None, heading: str, body: str,
     heading of the same or a higher level, or at the end. It is replaced by a level-2 heading and
     the body. Without such a heading the section is appended. Other nodes are kept as they are.
     With `first`, the new section goes at the top instead, and the old one is removed wherever it was.
+    A section under an older name of the heading (OLD_HEADINGS) is replaced the same way.
     """
     heading = check_section_input(heading, body)
     doc = description if isinstance(description, dict) and description.get("type") == "doc" else None
@@ -637,7 +638,8 @@ def replace_section(description: dict[str, Any] | None, heading: str, body: str,
         {"type": "heading", "attrs": {"level": 2}, "content": [{"type": "text", "text": heading}]},
         *text_to_adf(acceptance_checkboxes(heading, body))["content"],
     ]
-    starts = [i for i, node in enumerate(content) if _is_heading(node) and _heading_text(node) == heading]
+    names = heading_names(heading)  # an old name of the heading is replaced by the new one (CHB-194)
+    starts = [i for i, node in enumerate(content) if _is_heading(node) and _heading_text(node) in names]
     if len(starts) > 1:
         raise JiraError(f"the description has {len(starts)} sections headed {heading!r}; fix it by hand")
     if starts:
