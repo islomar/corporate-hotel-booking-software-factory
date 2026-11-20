@@ -8,8 +8,10 @@ waited for the human's approval.
 The hook lists the open PRs of the agent's account (`triage_review.AGENT`) and reads the comments of
 each. It runs the same function as the required check, `triage_review.evaluate`, so both agree on what
 "untriaged" means: the latest review comment of the reviewer App has findings and no triage comment of
-the agent's account carries the marker of the reviewed sha. For each such PR it names the PR and the
-commands, and exits 2 with the list on stderr.
+the agent's account carries the marker of the reviewed sha, or the review is truncated. For each such PR
+it names the PR and the commands, and exits 2 with the list on stderr.
+It calls `evaluate` without the PR head, so a review older than the head does not refuse the stop (CHB-195):
+the check fails on it until the reviewer reviews the new head, and the agent can only wait for that.
 
 It fails open: a GitHub error (gh missing, a timeout, a failed call, output that is not JSON) or anything
 unexpected prints one line to stderr and exits 0. A network failure must not trap the session.

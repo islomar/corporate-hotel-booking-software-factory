@@ -50,6 +50,9 @@ ERROR = "error:"  # + the head SHA: no valid review (claude failed, usage limit,
 CARRIED = "carried:"  # + the SHA whose verdict was carried forward (factory/review/plan.py)
 SKIPPED = "skipped"  # docs-only PR, no model review (factory/review/plan.py)
 SUMMARY_LIMIT = 60000  # GitHub caps a check run summary at 65535 characters.
+# The last line of a summary cut at SUMMARY_LIMIT. factory/triage_review.py refuses such a review:
+# the cut findings cannot be triaged (CHB-195).
+TRUNCATED = "(truncated)"
 # CHB-141: the PR comment of a model review ends with this line and a marker.
 # factory/review/agreement.py counts the human's reactions on it (ADR-ea8c stage 1).
 REACTION_LINE = "Human: react 👍 if you agree with this verdict, 👎 if not. On 👎, reply with what it missed or got wrong."
@@ -360,7 +363,7 @@ def render_summary(verdict: Verdict, risk: str, round_number: int) -> str:
             )
     text = "\n".join(lines)
     if len(text) > SUMMARY_LIMIT:
-        text = text[: SUMMARY_LIMIT - 40] + "\n\n(truncated)"
+        text = text[: SUMMARY_LIMIT - 40] + "\n\n" + TRUNCATED
     return text
 
 

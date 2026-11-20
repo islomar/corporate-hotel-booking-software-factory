@@ -11,8 +11,10 @@ The review is the last PR comment of the reviewer App with the marker
 `<!-- chb-review reviewed:<sha> -->` (factory/review/gate.py). Its findings are the lines
 `- **<kind>** (<dimension>) <file>:<line>: <message> Fix: <fix>`.
 
-FILE has one line per finding: `<number> apply|discard|doubt <reason>`, for example
-`2 doubt the client may rewrite the header`. A missing finding or reason refuses the whole file.
+FILE starts with the line `review <sha>`, the full sha of the review it triages, then has one line
+per finding: `<number> apply|discard|doubt <reason>`, for example `2 doubt the client may rewrite
+the header`. A missing or other sha, a missing finding or a missing reason refuses the whole file
+(CHB-195: on 2026-11-13 a triage written for one review was posted against the next one).
 Then the script
 1. replaces the "Caveats" section of the PR body with the doubts,
 2. posts the comment "Triage of review <sha>" with a table of finding, decision and reason.
@@ -20,6 +22,13 @@ Both go through factory/bin/as-agent, so the agent's account writes them. The `t
 accepts the comment only from that account.
 While a finding is `apply` and the PR head is still the reviewed commit, the script posts nothing
 and exits 1: push the fixes first (CHB-212).
+
+The `triage` check (CHB-60, CHB-195) fails
+- on a review cut at its length limit (the line `(truncated)` of gate.py): its last findings are lost;
+- when the PR head is not the reviewed commit and the files changed since that commit are not all
+  docs, by the rule the reviewer uses to carry a verdict forward (factory/review/plan.py,
+  factory/review/docs_list.py). The review of the new head must arrive and be triaged first;
+- when the review has findings and no triage comment of the agent's account for its sha.
 
 The comment and the findings are untrusted text: it is read as data, cut to a length, flattened
 to one line with Markdown and mentions escaped, and never executed. Reads use the REST API of the
@@ -47,6 +56,8 @@ sys.path.insert(0, str(HERE / "review"))
 
 import as_agent  # noqa: E402
 import agreement  # noqa: E402
+import docs_list  # noqa: E402
+import gate  # noqa: E402
 
 REVIEWER = agreement.REVIEWER
 AGENT = f"{as_agent.APP_SLUG}[bot]"
@@ -55,6 +66,9 @@ AS_AGENT = HERE / "bin" / "as-agent"
 TRIAGE_WORKFLOW = "triage.yml"
 DECISIONS = ("apply", "discard", "doubt")
 SHA_RE = re.compile(r"[0-9a-f]{40}")
+REVIEW_LINE = re.compile(r"^review\s+(\S+)$")
+# GitHub's compare endpoint lists at most 300 files. A list that long may be cut: not known to be docs.
+COMPARE_FILE_CAP = 300
 REVIEW_SHA = re.compile(r"<!-- chb-review reviewed:([0-9a-f]{40}) -->")
 TRIAGE_MARKER = "<!-- chb-triage reviewed:{sha} -->"
 FINDING = re.compile(r"^- \*\*([A-Za-z]+)\*\* \(([^)]*)\) (.*)$")
@@ -128,10 +142,6 @@ def parse_review(body: str) -> tuple[str | None, list[Finding]]:
     return (marker.group(1) if marker else None), found
 
 
-def latest_review(comments: Sequence[Mapping[str, object]]) -> Mapping[str, object] | None:
-    return agreement.review_comment(comments)
-
-
 def _login(item: Mapping[str, object]) -> object:
     user = item.get("user")
     return user.get("login") if isinstance(user, Mapping) else None
@@ -147,14 +157,57 @@ def _count(n: int) -> str:
     return f"{n} finding" + ("" if n == 1 else "s")
 
 
-def evaluate(comments: Sequence[Mapping[str, object]]) -> Verdict:
-    """The `triage` check: the latest review needs a triage of its sha when it has findings."""
-    review = latest_review(comments)
+def truncated(body: str) -> bool:
+    """gate.py cut the summary at its length limit: a line that is only the marker. A finding line never is."""
+    return any(line.strip() == gate.TRUNCATED for line in body.splitlines())
+
+
+def _truncated_message(sha: str) -> str:
+    return (
+        f"Review {sha} is truncated: gate.py cut it at its length limit, so its last findings are missing "
+        "and cannot be triaged. Push a commit to get a new review, or the human decides."
+    )
+
+
+Changed = Callable[[str, str], "list[str] | None"]
+"""changed(reviewed, head): the paths changed from the reviewed commit to the head, None when unknown."""
+
+
+def _stale(sha: str, head: str, paths: Sequence[str] | None) -> Verdict:
+    if paths is None:
+        why = "the files changed since the review are unknown (a rebase, or GitHub could not compare)"
+    elif not paths:
+        why = "no file changed since the review, and the reviewer reviews such a head again"
+    else:
+        ordered = [p for p in paths if not docs_list.is_doc(p)] + [p for p in paths if docs_list.is_doc(p)]
+        shown = ", ".join(_flat(p, 200) for p in ordered[:5]) + (f" and {len(paths) - 5} more" if len(paths) > 5 else "")
+        why = f"the head changes more than docs: {shown}"
+    return Verdict(
+        False,
+        f"Review {sha} is older than the PR head {head}, and {why}. "
+        f"Wait for the review of {head}, then triage it. Speed up: if no review comes, re-run the "
+        "`Review trigger` run of that commit in the Actions tab of the PR.",
+    )
+
+
+def evaluate(comments: Sequence[Mapping[str, object]], head: str | None = None, changed: Changed | None = None) -> Verdict:
+    """The `triage` check: the latest review must cover the head and needs a triage of its sha when it has findings.
+
+    head None skips the head comparison (the Stop hook: the agent cannot hurry the reviewer).
+    """
+    review = agreement.review_comment(comments)
     if review is None:
         return Verdict(True, "No review comment on this PR: nothing to triage.")
-    sha, found = parse_review(str(review.get("body", "")))
+    body = str(review.get("body", ""))
+    sha, found = parse_review(body)
     if sha is None:
         return Verdict(False, "The latest review comment has no readable reviewed sha. Triage cannot be checked.")
+    if truncated(body):
+        return Verdict(False, _truncated_message(sha))
+    if head is not None and head != sha:
+        paths = changed(sha, head) if changed is not None else None
+        if paths is None or not docs_list.docs_only(paths):
+            return _stale(sha, head, paths)
     if not found:
         return Verdict(True, f"Review {sha} has no findings: nothing to triage.")
     if triage_present(comments, sha):
@@ -167,6 +220,26 @@ def evaluate(comments: Sequence[Mapping[str, object]]) -> Verdict:
 
 
 # --- the decision file -------------------------------------------------------------------
+
+
+def split_review_line(text: str, sha: str) -> tuple[str, str | None]:
+    """The file with the line `review <sha>` and the lines before it blanked, and the problem when that line is missing or names another sha.
+
+    Blank lines keep each decision line at its line number in the file, for the refusal messages.
+    """
+    lines = text.splitlines()
+    for index, raw in enumerate(lines):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = REVIEW_LINE.match(line)
+        if match is None:
+            return "", f"the first line must be `review {sha}`, the review this file triages."
+        if match.group(1) != sha:
+            named = _flat(match.group(1), 60)
+            return "", f"the file triages review {named}, but the latest review is {sha}. Write the file for review {sha}."
+        return "\n".join([""] * (index + 1) + lines[index + 1 :]), None
+    return "", f"the first line must be `review {sha}`, the review this file triages."
 
 
 def parse_decisions(text: str, found: Sequence[Finding]) -> tuple[list[Decision], list[str]]:
@@ -223,6 +296,16 @@ def render_comment(sha: str, found: Sequence[Finding], decisions: Sequence[Decis
         )
     lines += ["", TRIAGE_MARKER.format(sha=sha), ""]
     return "\n".join(lines)
+
+
+def doubt_lines(found: Sequence[Finding], decisions: Sequence[Decision]) -> list[str]:
+    """One line per doubt for the chat, each finding looked up by its number."""
+    by_number = {f.number: f for f in found}
+    return [
+        f"Doubt, finding {d.number}: {_flat(_describe(by_number[d.number], 1000), 1200)} Reason: {_flat(d.reason, CELL_LIMIT)}"
+        for d in decisions
+        if d.decision == "doubt"
+    ]
 
 
 def caveats_section(sha: str, found: Sequence[Finding], decisions: Sequence[Decision]) -> str:
@@ -290,6 +373,33 @@ def head_sha(gh: Gh, repo: str, pr: str) -> str:
     return gh(["api", f"repos/{repo}/pulls/{pr}", "--jq", ".head.sha"]).strip()
 
 
+def changed_paths(gh: Gh, repo: str, base: str, head: str) -> list[str] | None:
+    """Paths changed from base to head when base is an ancestor of head, else None. Both names of a rename count.
+
+    Like `git merge-base --is-ancestor` plus `git diff --no-renames` in factory/review/plan.py. GitHub's
+    status `ahead` means base is an ancestor; `diverged` (a rebase), `behind` or `identical` give None.
+    A malformed answer or a list at the cap gives None. A GitHub error raises.
+    """
+    try:
+        answer = json.loads(gh(["api", f"repos/{repo}/compare/{base}...{head}"]))
+    except ValueError:
+        return None
+    if not isinstance(answer, dict) or answer.get("status") != "ahead":
+        return None
+    files = answer.get("files")
+    if not isinstance(files, list) or len(files) >= COMPARE_FILE_CAP:
+        return None
+    paths: list[str] = []
+    for item in files:
+        if not isinstance(item, dict) or not isinstance(item.get("filename"), str):
+            return None
+        paths.append(item["filename"])
+        previous = item.get("previous_filename")
+        if isinstance(previous, str):
+            paths.append(previous)
+    return paths
+
+
 def rerun(gh: Gh, repo: str, pr: str) -> int:
     head = head_sha(gh, repo, pr)
     if not SHA_RE.fullmatch(head):
@@ -319,7 +429,10 @@ def _print_findings(sha: str, found: Sequence[Finding]) -> None:
     for f in found:
         print(f"{f.number}. {_flat(_describe(f, 1000), 1200)}")
     if found:
-        print("\nWrite one line per finding: `<number> apply|discard|doubt <reason>`, then run again with --file FILE.")
+        print(
+            f"\nWrite the first line `review {sha}`, then one line per finding: "
+            "`<number> apply|discard|doubt <reason>`. Run again with --file FILE."
+        )
 
 
 def post_triage(gh: Gh, repo: str, pr: str, sha: str, found: Sequence[Finding], decisions: Sequence[Decision]) -> None:
@@ -332,6 +445,17 @@ def post_triage(gh: Gh, repo: str, pr: str, sha: str, found: Sequence[Finding], 
         comment_file = Path(tmp) / "triage-comment.md"
         comment_file.write_text(render_comment(sha, found, decisions))
         gh(["pr", "comment", pr, "--repo", repo, "--body-file", str(comment_file)])
+
+
+def _check(gh: Gh, repo: str, pr: str, comments: Sequence[Mapping[str, object]]) -> int:
+    """The `triage` check against the live PR head. Exit 0 pass, 1 fail, 2 head unreadable."""
+    head = head_sha(gh, repo, pr)
+    if not SHA_RE.fullmatch(head):
+        print(f"::error::PR {pr} has no readable head sha. Triage cannot be checked.")
+        return 2
+    verdict = evaluate(comments, head, lambda base, new: changed_paths(gh, repo, base, new))
+    print(verdict.message if verdict.ok else f"::error::{verdict.message}")
+    return 0 if verdict.ok else 1
 
 
 def main(argv: Sequence[str], gh: Gh | None = None) -> int:
@@ -354,16 +478,18 @@ def main(argv: Sequence[str], gh: Gh | None = None) -> int:
             return rerun(gh, args.repo, args.pr)
         comments = read_comments(gh, args.repo, args.pr)
         if args.check:
-            verdict = evaluate(comments)
-            print(verdict.message if verdict.ok else f"::error::{verdict.message}")
-            return 0 if verdict.ok else 1
-        review = latest_review(comments)
+            return _check(gh, args.repo, args.pr, comments)
+        review = agreement.review_comment(comments)
         if review is None:
             print(f"PR {args.pr} has no review comment of {REVIEWER}.", file=sys.stderr)
             return 1
-        sha, found = parse_review(str(review.get("body", "")))
+        body = str(review.get("body", ""))
+        sha, found = parse_review(body)
         if sha is None:
             print("The latest review comment has no readable reviewed sha.", file=sys.stderr)
+            return 1
+        if truncated(body):
+            print(f"{_truncated_message(sha)} Nothing was posted.", file=sys.stderr)
             return 1
         if not found:
             print(f"Review {sha} has no findings: nothing to triage.")
@@ -371,7 +497,8 @@ def main(argv: Sequence[str], gh: Gh | None = None) -> int:
         if args.file is None:
             _print_findings(sha, found)
             return 0
-        decisions, problems = parse_decisions(Path(args.file).read_text(), found)
+        rest, problem = split_review_line(Path(args.file).read_text(), sha)
+        decisions, problems = parse_decisions(rest, found) if problem is None else ([], [problem])
         if problems:
             print(f"{args.file} is refused. Nothing was posted:", file=sys.stderr)
             for problem in problems:
@@ -395,15 +522,15 @@ def main(argv: Sequence[str], gh: Gh | None = None) -> int:
                     file=sys.stderr,
                 )
                 return 1
+        doubts = doubt_lines(found, decisions)  # before the post: a lookup error must not follow a posted triage
         post_triage(gh, args.repo, args.pr, sha, found, decisions)
-    except (OSError, subprocess.SubprocessError, ValueError) as error:
+        print(f"Posted the triage of review {sha} on PR {args.pr}.")
+        for line in doubts:
+            print(line)
+    except (OSError, subprocess.SubprocessError, ValueError, LookupError) as error:
         detail = getattr(error, "stderr", None) or error
         print(f"triage-review failed: {_flat(str(detail), 500)}", file=sys.stderr)
         return 2
-    print(f"Posted the triage of review {sha} on PR {args.pr}.")
-    for d in decisions:
-        if d.decision == "doubt":
-            print(f"Doubt, finding {d.number}: {_flat(_describe(found[d.number - 1], 1000), 1200)} Reason: {_flat(d.reason, CELL_LIMIT)}")
     return 0
 
 
