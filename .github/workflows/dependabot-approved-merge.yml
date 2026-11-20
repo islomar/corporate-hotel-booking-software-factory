@@ -73,7 +73,9 @@ jobs:
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           # The human, not github.repository_owner: an organization owns the repository after CHB-204.
           HUMAN: islomar
+        # The default shell has no pipefail: without it, an exit 2 of the script would hide behind `tee`.
         run: |
+          set -o pipefail
           python3 -I scripts/dependabot_approved_merge.py \
             --repo "$REPO" --head-sha "$HEAD_SHA" --human "$HUMAN" | tee "$RUNNER_TEMP/decision"
           grep -E '^number=[0-9]+$' "$RUNNER_TEMP/decision" >> "$GITHUB_OUTPUT" || true
