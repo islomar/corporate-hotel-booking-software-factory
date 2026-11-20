@@ -650,8 +650,8 @@ Duplicates and contradictions are judged by the agent in the procedure.
 The owner watches several agents at once and sees only each one's short label, the `description` of the launch.
 A label that does not start with the ticket key forces a question.
 
-The hook denies a launch whose `description` does not start with `CHB-<n>:` or `no-ticket:`, and names both forms.
-The match is case-sensitive and starts at the first character: the hook denies `Implement CHB-23`, an empty label and `chb-23:`.
+The hook denies a launch whose `description` does not start with `CHB-<n>:` or `no-ticket:` followed by text, and names both forms.
+The match is case-sensitive and starts at the first character: the hook denies `Implement CHB-23`, an empty label, `chb-23:` and a bare `CHB-23:`.
 It applies to every session started in this repository: the owner's, forks and agents launched by agents.
 
 Unlike the other PreToolUse hooks, it fails open: unreadable input, a missing `description` or an error inside the hook lets the launch run.

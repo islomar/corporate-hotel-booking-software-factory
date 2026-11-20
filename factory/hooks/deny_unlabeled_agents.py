@@ -4,9 +4,9 @@
 The owner watches several agents at once and sees only each one's short label. A label that does
 not start with the ticket key forces a question. A prose rule to put the key first gets forgotten.
 
-Denied: an Agent tool call whose `description` does not start with `CHB-<n>:` or `no-ticket:`.
+Denied: an Agent tool call whose `description` does not start with `CHB-<n>:` or `no-ticket:` followed by text.
 The match is case-sensitive and anchored at the first character: `Implement CHB-23`, an empty label
-and `chb-23:` are denied.
+`chb-23:` and a bare `CHB-23:` are denied.
 
 Unlike the other PreToolUse hooks, this one fails open: input that is not JSON, a `tool_input` that is
 not an object, a missing or non-string `description`, or an error inside the matcher lets the launch run,
@@ -24,11 +24,11 @@ import json
 import re
 import sys
 
-LABEL = re.compile(r"^(?:CHB-[0-9]+|no-ticket):")
+LABEL = re.compile(r"^(?:CHB-[0-9]+|no-ticket):\s*\S")
 
 
 def labelled(description: str) -> bool:
-    """True when the label starts with `CHB-<n>:` or `no-ticket:`."""
+    """True when the label starts with `CHB-<n>:` or `no-ticket:` and has text after it."""
     return bool(LABEL.match(description))
 
 
@@ -36,7 +36,7 @@ def reason(description: str) -> str:
     return (
         f"Blocked: the agent label {json.dumps(description)} does not start with the Jira key (CHB-190). "
         "Start the `description` with `CHB-<n>:` for ticket work, as `CHB-23: request limits`, "
-        "or with `no-ticket:` for work without a ticket, as `no-ticket: read a page`."
+        "or with `no-ticket:` for work without a ticket, as `no-ticket: read a page`. Name the task after the colon."
     )
 
 

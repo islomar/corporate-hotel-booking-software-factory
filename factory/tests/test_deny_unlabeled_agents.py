@@ -30,6 +30,9 @@ DENIED = [
     "no ticket: read a page",
     " CHB-23: request limits",
     "Explore codebase",
+    "CHB-23:",
+    "CHB-23:   ",
+    "no-ticket:",
 ]
 
 
@@ -105,7 +108,7 @@ class ContractTest(unittest.TestCase):
 
     def test_project_settings_register_the_hook_on_the_agent_tool(self) -> None:
         settings = json.loads((ROOT / ".claude" / "settings.json").read_text())
-        groups = [g for g in settings["hooks"]["PreToolUse"] if "deny_unlabeled_agents.py" in g["hooks"][0]["command"]]
+        groups = [g for g in settings["hooks"]["PreToolUse"] if any("deny_unlabeled_agents.py" in h["command"] for h in g["hooks"])]
 
         self.assertEqual(len(groups), 1)
         self.assertEqual(set(groups[0]["matcher"].split("|")), {"Agent"})
