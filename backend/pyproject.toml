@@ -44,7 +44,7 @@ addopts = "-q --strict-markers"
 
 [dependency-groups]
 dev = [
-    "httpx2>=2.16.0",
+    "httpx2>=2.16.2",
     "mutmut>=3.8.1",
     "pyright>=1.1.414",
     "pytest>=9.2.0",
