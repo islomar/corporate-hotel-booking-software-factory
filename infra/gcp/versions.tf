@@ -8,7 +8,7 @@ terraform {
     google = {
       source = "hashicorp/google"
       # 8.10.0 was younger than the 7-day release-age window on 2026-11-06 (ADR-ebe6).
-      version = "~> 8.11.0"
+      version = "~> 8.12.0"
     }
   }
 }
