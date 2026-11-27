@@ -102,7 +102,7 @@ jobs:
       # AGENT_APP_PRIVATE_KEY as Dependabot secrets (not Actions secrets).
       - id: app-token
         if: steps.ruleset.outputs.ready == 'true' && env.HAS_APP == 'true'
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ secrets.AGENT_APP_CLIENT_ID }}
           private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
@@ -124,7 +124,7 @@ jobs:
 
       - name: Turn auto-merge off for an unsafe update
         if: steps.decide.outputs.safe == 'false' && env.HAS_APP == 'true'
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         id: app-token-off
         with:
           client-id: ${{ secrets.AGENT_APP_CLIENT_ID }}
